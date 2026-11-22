@@ -1,0 +1,45 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/cspell.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*.swo
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Node / Next.js (apps/web)
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.vercel/
+apps/web/*.tsbuildinfo
+apps/web/next-env.d.ts
+
+# Java / Maven (services/biz-java)
+services/biz-java/target/
+services/biz-java/.mvn/timing.properties
+services/biz-java/*.log
+
+# Python / uv (services/agent-py)
+services/agent-py/.venv/
+services/agent-py/__pycache__/
+services/agent-py/.pytest_cache/
+services/agent-py/.ruff_cache/
+services/agent-py/.mypy_cache/
+*.py[cod]
+*.egg-info/
+
+# Logs & Temp
+logs/
+*.log
+tmp/

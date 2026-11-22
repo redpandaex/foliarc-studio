@@ -1,0 +1,51 @@
+import { ServiceStatus } from "@/components/service-status";
+
+const PHASES = [
+  { id: "Phase 0", title: "工程基座、基础设施与基础 CRUD", status: "进行中" },
+  { id: "Phase 1", title: "端到端 SSE 流式链路与 Redis Streams 断点续连", status: "待开始" },
+  { id: "Phase 2", title: "手写 Agent Loop + Tool / Skill / MCP + 上下文压缩", status: "待开始" },
+  { id: "Phase 3", title: "Milvus Hybrid RAG + 异步文档导入 + 结构化记忆", status: "待开始" },
+  { id: "Phase 4", title: "多 Agent 协同编排 + 路由 + HITL 中断恢复", status: "待开始" },
+  { id: "Phase 5", title: "企业级网关 + 分布式计费账本 + 安全护栏与硬化 Docker 沙箱", status: "待开始" },
+  { id: "Phase 6", title: "OpenTelemetry + Langfuse 可观测性与 Eval 评测", status: "待开始" },
+];
+
+export default function HomePage() {
+  return (
+    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-12">
+      <header className="space-y-2">
+        <div className="inline-flex items-center rounded-full border border-border px-3 py-1 font-mono text-xs text-muted-foreground">
+          InkFlow Studio · Phase 0 Foundation
+        </div>
+        <h1 className="text-3xl font-bold tracking-tight">墨流工坊 · InkFlow Studio</h1>
+        <p className="text-sm text-muted-foreground">
+          企业级长篇小说创作 AI Agent 平台 — Next.js + Java 21 Spring Boot + Python FastAPI + PostgreSQL 16 + Milvus
+        </p>
+      </header>
+
+      <ServiceStatus />
+
+      <section className="rounded-xl border border-border bg-card p-6 shadow-xs">
+        <h2 className="text-base font-semibold">垂直切片实战路线</h2>
+        <ol className="mt-4 space-y-2.5 text-sm">
+          {PHASES.map((phase) => (
+            <li
+              key={phase.id}
+              className="flex items-center justify-between gap-4 rounded-lg border border-border/60 px-3.5 py-2.5"
+            >
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-xs font-semibold text-muted-foreground">
+                  {phase.id}
+                </span>
+                <span>{phase.title}</span>
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">
+                {phase.status}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </section>
+    </main>
+  );
+}

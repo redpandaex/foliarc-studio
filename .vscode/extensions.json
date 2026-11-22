@@ -1,0 +1,30 @@
+{
+  "recommendations": [
+    // Spell Check & General Productivity
+    "streetsidesoftware.code-spell-checker",
+    "eamodio.gitlens",
+    "usernamehw.errorlens",
+    "mikestead.dotenv",
+    "yzhang.markdown-all-in-one",
+    "bierner.markdown-mermaid",
+
+    // Frontend (Next.js / TypeScript / Tailwind CSS)
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "bradlc.vscode-tailwindcss",
+
+    // Backend & AI Gateway (Java 21 / Spring Boot / Maven)
+    "vscjava.vscode-java-pack",
+    "vmware.vscode-boot-dev-pack",
+
+    // Agent Engine (Python 3.12 / FastAPI / uv)
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    "tamasfe.even-better-toml",
+
+    // Infrastructure (Docker Compose / YAML)
+    "ms-azuretools.vscode-containers",
+    "redhat.vscode-yaml"
+  ]
+}

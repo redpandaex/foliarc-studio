@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inkflow.studio/contracts/sse-events.schema.json",
+  "title": "InkFlow Studio Structured SSE Event Envelope v1",
+  "description": "Shared cross-service streaming event contract across Python Agent Engine, Java AI Gateway (Redis Streams bridge), and Next.js SSE Client.",
+  "type": "object",
+  "required": ["event_id", "run_id", "seq", "type", "timestamp", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Monotonic event ID backed by Redis Stream ID (e.g. '1732260000000-0'), echoed as SSE 'id:' field for Last-Event-ID resumable replay."
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier of an agent generation run."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "OpenTelemetry trace ID propagated across Next.js -> Spring Boot -> Python FastAPI."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based sequential event counter within a run for ordering & gap detection."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "run_started",
+        "thought_delta",
+        "tool_call",
+        "tool_result",
+        "text_delta",
+        "interrupt",
+        "usage",
+        "ping",
+        "error",
+        "done"
+      ]
+    },
+    "agent": {
+      "type": "string",
+      "description": "Optional active agent role (e.g. director, lorekeeper, writer, critic)."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-type-specific structured payload."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "text_delta" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["content"],
+            "properties": {
+              "content": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "thought_delta" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["content"],
+            "properties": {
+              "content": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "tool_call" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["call_id", "tool_name", "arguments"],
+            "properties": {
+              "call_id": { "type": "string" },
+              "tool_name": { "type": "string" },
+              "arguments": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "tool_result" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["call_id", "tool_name", "success"],
+            "properties": {
+              "call_id": { "type": "string" },
+              "tool_name": { "type": "string" },
+              "success": { "type": "boolean" },
+              "summary": { "type": "string" },
+              "latency_ms": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "interrupt" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["checkpoint_id", "reason"],
+            "properties": {
+              "checkpoint_id": { "type": "string" },
+              "reason": { "type": "string" },
+              "proposed_data": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "usage" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["model_alias", "input_tokens", "output_tokens"],
+            "properties": {
+              "model_alias": { "type": "string" },
+              "input_tokens": { "type": "integer", "minimum": 0 },
+              "cached_tokens": { "type": "integer", "minimum": 0 },
+              "output_tokens": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "error" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["code", "message", "retryable"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "retryable": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
