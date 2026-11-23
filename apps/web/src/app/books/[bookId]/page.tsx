@@ -11,6 +11,7 @@ import {
   type FormEvent,
 } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { AiCopilotPanel } from "@/components/ai-copilot-panel";
 import { Button } from "@/components/ui/button";
 import {
   ApiClientError,
@@ -55,7 +56,7 @@ export default function BookWorkbenchPage() {
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
 
-  const [rightTab, setRightTab] = useState<"ai" | "versions">("versions");
+  const [rightTab, setRightTab] = useState<"ai" | "versions">("ai");
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(
     null,
@@ -536,7 +537,7 @@ export default function BookWorkbenchPage() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              AI 助手 (Phase 1)
+              AI 写作助手
             </button>
           </div>
 
@@ -619,39 +620,21 @@ export default function BookWorkbenchPage() {
               </div>
             </div>
           ) : (
-            <div className="flex flex-1 flex-col justify-between p-4 text-xs">
-              <div className="space-y-3">
-                <div className="rounded-lg border border-dashed border-border bg-background p-3.5">
-                  <div className="font-mono text-[11px] font-semibold text-foreground">
-                    Phase 1 即将接入 · SSE Copilot
-                  </div>
-                  <p className="mt-1.5 leading-relaxed text-muted-foreground">
-                    这里预留给下一阶段的流式小说 Agent 面板：将打通{" "}
-                    <code className="rounded bg-muted px-1">Next.js → Spring Boot → FastAPI</code>{" "}
-                    全链路 SSE，支持 Redis Streams 断点续连（Last-Event-ID）、指数退避重连、暂停/恢复与取消。
-                  </p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <div className="font-medium text-muted-foreground">
-                    预留动作（Phase 1 激活）
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {["流式续写正文", "润色选中段落", "生成章纲节拍", "检查设定冲突"].map(
-                      (label) => (
-                        <Button key={label} size="xs" variant="outline" disabled>
-                          {label}
-                        </Button>
-                      ),
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-md bg-muted/60 p-2.5 font-mono text-[11px] text-muted-foreground">
-                Contract: contracts/sse-events.schema.json
-              </div>
-            </div>
+            <AiCopilotPanel
+              bookId={bookId}
+              chapterId={activeId}
+              chapterContent={draftContent}
+              onAppendText={(text) => {
+                setDraftContent((prev) =>
+                  prev.trim() ? `${prev.replace(/\s+$/, "")}\n\n${text}` : text,
+                );
+                if (saveState !== "conflict") setSaveState("dirty");
+              }}
+              onReplaceText={(text) => {
+                setDraftContent(text);
+                if (saveState !== "conflict") setSaveState("dirty");
+              }}
+            />
           )}
         </aside>
       </div>

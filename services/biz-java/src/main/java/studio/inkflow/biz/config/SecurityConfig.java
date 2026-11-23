@@ -21,6 +21,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import jakarta.servlet.DispatcherType;
 import studio.inkflow.biz.auth.JwtAuthenticationFilter;
 
 @Configuration
@@ -45,6 +46,7 @@ public class SecurityConfig {
                     response.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"请先登录或刷新访问令牌\"}");
                 }))
                 .authorizeHttpRequests(auth -> auth
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers(
                                 "/actuator/health/**",
                                 "/actuator/info",
@@ -52,7 +54,8 @@ public class SecurityConfig {
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/refresh",
-                                "/api/v1/auth/logout"
+                                "/api/v1/auth/logout",
+                                "/internal/v1/**"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

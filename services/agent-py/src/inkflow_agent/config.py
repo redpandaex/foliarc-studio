@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     redis_password: str = ""
 
     internal_service_token: str = "inkflow-internal-dev-token-change-me"
+    biz_java_base_url: str = "http://localhost:8080"
+    stream_ttl_seconds: int = 7200
 
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_api_key: str = ""

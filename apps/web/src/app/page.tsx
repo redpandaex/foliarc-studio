@@ -4,8 +4,8 @@ import { buttonVariants } from "@/components/ui/button";
 
 const PHASES = [
   { id: "Phase 0", title: "工程基座、JWT 轮换认证与小说/章节/版本 CRUD 闭环", status: "已完成" },
-  { id: "Phase 1", title: "端到端 SSE 流式链路与 Redis Streams 断点续连", status: "下一步" },
-  { id: "Phase 2", title: "手写 Agent Loop + Tool / Skill / MCP + 上下文压缩", status: "待开始" },
+  { id: "Phase 1", title: "端到端 SSE 流式链路与 Redis Streams 断点续连", status: "已完成" },
+  { id: "Phase 2", title: "手写 Agent Loop + Tool / Skill / MCP + 上下文压缩", status: "下一步" },
   { id: "Phase 3", title: "Milvus Hybrid RAG + 异步文档导入 + 结构化记忆", status: "待开始" },
   { id: "Phase 4", title: "多 Agent 协同编排 + 路由 + HITL 中断恢复", status: "待开始" },
   { id: "Phase 5", title: "企业级网关 + 分布式计费账本 + 安全护栏与硬化 Docker 沙箱", status: "待开始" },

@@ -51,6 +51,27 @@ export interface ChapterVersion {
   createdAt: string | null;
 }
 
+export type RunAction = "CONTINUE" | "REWRITE" | "OUTLINE";
+
+export interface AgentRunItem {
+  id: string;
+  bookId: string;
+  chapterId: string | null;
+  action: RunAction;
+  modelAlias: string;
+  instruction: string;
+  status: "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED" | "FAILED";
+  accumulatedText: string;
+  lastSeq: number;
+  lastEventId: string | null;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  errorMessage: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export class ApiClientError extends Error {
   status: number;
   code: string;
@@ -324,5 +345,51 @@ export const chaptersApi = {
         body: JSON.stringify({ version: currentVersion }),
       },
     );
+  },
+};
+
+export function getRunStreamUrl(runId: string): string {
+  return `${API_BASE}/api/v1/runs/${runId}/stream`;
+}
+
+export const runsApi = {
+  start(payload: {
+    bookId: string;
+    chapterId?: string;
+    action: RunAction;
+    modelAlias?: string;
+    instruction?: string;
+    chapterContext?: string;
+  }): Promise<AgentRunItem> {
+    return request<AgentRunItem>("/api/v1/runs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  get(runId: string): Promise<AgentRunItem> {
+    return request<AgentRunItem>(`/api/v1/runs/${runId}`);
+  },
+  list(bookId: string, chapterId?: string): Promise<AgentRunItem[]> {
+    const query = new URLSearchParams({ bookId });
+    if (chapterId) {
+      query.set("chapterId", chapterId);
+    }
+    return request<AgentRunItem[]>(`/api/v1/runs?${query.toString()}`);
+  },
+  pause(runId: string): Promise<AgentRunItem> {
+    return request<AgentRunItem>(`/api/v1/runs/${runId}/pause`, {
+      method: "POST",
+    });
+  },
+  resume(runId: string, revisedInstruction?: string): Promise<AgentRunItem> {
+    return request<AgentRunItem>(`/api/v1/runs/${runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ revisedInstruction }),
+    });
+  },
+  cancel(runId: string): Promise<AgentRunItem> {
+    return request<AgentRunItem>(`/api/v1/runs/${runId}/cancel`, {
+      method: "POST",
+    });
   },
 };

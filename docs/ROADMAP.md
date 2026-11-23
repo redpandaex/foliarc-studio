@@ -99,15 +99,15 @@ flowchart LR
 
 ### 模块 1：前端交互与流式工程（Next.js + TypeScript）
 
-- [ ] **1.1 自定义 SSE 客户端（弃用原生 `EventSource`）**
+- [x] **1.1 自定义 SSE 客户端（弃用原生 `EventSource`）**
   - 使用 `fetch` + `ReadableStream` + `TextDecoder` 实现支持 `POST`、`Authorization` Header 和自定义协议的 SSE 解析器（处理 TCP 拆包/粘包、跨 chunk 换行拼接）。
-- [ ] **1.2 结构化流式事件协议（Structured Stream Protocol）** `★`
+- [x] **1.2 结构化流式事件协议（Structured Stream Protocol）** `★`
   - 统一事件类型：`run_started`、`thought_delta`（思考过程）、`tool_call`、`tool_result`、`text_delta`（正文流）、`interrupt`（等待人工确认）、`usage`（Token 消耗）、`error`、`done`。
-- [ ] **1.3 SSE 断点续连（Resumable Stream）**
+- [x] **1.3 SSE 断点续连（Resumable Stream）**
   - 前端持久化当前 `run_id` 与最后收到的 `last_event_id`；页面刷新、切网或断线后携带 `Last-Event-ID` 请求后端，从 Redis Streams 补发缺失分片，无缝衔接不丢字、不重复生成。
-- [ ] **1.4 自动重连与心跳检测**
+- [x] **1.4 自动重连与心跳检测**
   - 指数退避 + 随机抖动（Exponential Backoff + Jitter）重连策略、最大重试上限、服务端 `ping` 心跳超时检测、浏览器 `online/offline` 事件感知。
-- [ ] **1.5 暂停、继续与取消（Pause / Resume / Cancel）**
+- [x] **1.5 暂停、继续与取消（Pause / Resume / Cancel）**
   - **前端取消**：`AbortController` 断开连接并发送 `POST /runs/{run_id}/cancel`。
   - **后端协作式暂停与恢复**：前端发送 `pause`，Agent 在安全检查点挂起并保存状态；用户修改指令或直接点 `resume` 后从检查点继续流式输出。
 - [ ] **1.6 小说编辑器与 AI 协作体验** `★`
