@@ -1,0 +1,50 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
+# Top-most EditorConfig file
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Python (services/agent-py, aligned with Ruff line-length = 100)
+[*.{py,pyi}]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# TOML (pyproject.toml uses 4-space indentation)
+[*.toml]
+indent_style = space
+indent_size = 4
+
+# Java (services/biz-java)
+[*.java]
+indent_style = space
+indent_size = 4
+max_line_length = 120
+
+# Frontend, Contracts & Configs (apps/web, contracts, infra)
+[*.{ts,tsx,js,jsx,mjs,cjs,css,scss,html,json,jsonc,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Makefiles require literal tabs for recipes
+[Makefile]
+indent_style = tab
+
+[*.mk]
+indent_style = tab
+
+# Markdown: preserve trailing spaces for line breaks and allow long lines
+[*.{md,mdx}]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Windows batch scripts (e.g. services/biz-java/mvnw.cmd)
+[*.{bat,cmd}]
+end_of_line = crlf

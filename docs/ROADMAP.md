@@ -13,7 +13,7 @@
 | :--- | :--- | :--- |
 | **项目名 & 仓库** | **InkFlow Studio** (`~/agent-project/inkflow-studio`) | 单仓 Monorepo（按目录路径独立触发 CI） |
 | **前端** | **Next.js (App Router + TS)** + `pnpm` (`fnm`) + Tailwind CSS + `shadcn/ui` | 富文本编辑（Tiptap）、Diff 审阅、自研 SSE 状态机 |
-| **业务与网关** | **Java 21 + Spring Boot 4.1 + Maven (`./mvnw`)** | 虚拟线程、统一 AI 网关、RPM/TPM 限流、幂等计费账本 |
+| **业务与网关** | **Java 21 + Spring Boot 4.1 + MyBatis-Plus + Maven (`./mvnw`)** | 虚拟线程、MyBatis-Plus `@Version` 乐观锁、统一 AI 网关、RPM/TPM 限流、幂等计费账本 |
 | **Agent 引擎** | **Python 3.12 + FastAPI + `uv`** | 手写 Agent Loop / Tool / Skill / MCP / 上下文压缩 / Hybrid RAG / 硬化 Docker 沙箱 |
 | **模型接入** | **统一 OpenAI 兼容网关 + 模型别名路由** | 主力 DeepSeek + Gemini Flash / 聚合网关（含 Embedding & Rerank） |
 | **数据存储** | **PostgreSQL 16** + **Milvus Standalone** + **Redis 7** + **MinIO** | PG 管强事务与状态；Milvus 专攻混合向量检索（复用 MinIO） |

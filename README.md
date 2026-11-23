@@ -13,7 +13,7 @@ inkflow-studio/
 ├── apps/
 │   └── web/                  # Next.js (App Router + TS + Tailwind + shadcn/ui) 前端编辑器与 SSE 状态机
 ├── services/
-│   ├── biz-java/             # Java 21 + Spring Boot 4.1 (Maven Wrapper)：业务中台、AI 网关、限流与计费账本
+│   ├── biz-java/             # Java 21 + Spring Boot 4.1 + MyBatis-Plus：业务中台、JWT 轮换认证、AI 网关与计费账本
 │   └── agent-py/             # Python 3.12 + FastAPI (uv)：Agent Loop、Tool/Skill/MCP、Hybrid RAG、硬化 Docker 沙箱
 ├── contracts/                # 跨服务共享契约（SSE 事件协议 Schema）
 ├── evals/                    # 小说 Agent & RAG 黄金评测集（Phase 6）

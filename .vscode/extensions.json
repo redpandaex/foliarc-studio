@@ -1,6 +1,7 @@
 {
   "recommendations": [
     // Spell Check & General Productivity
+    "editorconfig.editorconfig",
     "streetsidesoftware.code-spell-checker",
     "eamodio.gitlens",
     "usernamehw.errorlens",

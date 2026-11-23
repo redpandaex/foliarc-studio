@@ -3,6 +3,7 @@
 Thumbs.db
 *:Zone.Identifier
 .idea/
+.VSCodeCounter/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
