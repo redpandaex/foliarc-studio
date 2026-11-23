@@ -7,6 +7,7 @@ COMPOSE_FILE := infra/docker-compose.yml
 ENV_FILE := .env
 
 .PHONY: help env infra-core-up infra-core-down infra-rag-up infra-rag-down infra-ps \
+        app-up app-down app-logs \
         dev-py dev-java dev-web test-py test-java test-web test-all
 
 help:
@@ -16,7 +17,10 @@ help:
 	@echo "  make infra-core-down Stop core containers"
 	@echo "  make infra-rag-up    Start MinIO + etcd + Milvus Standalone (profile: rag)"
 	@echo "  make infra-rag-down  Stop RAG containers"
-	@echo "  make infra-ps        Show running infra containers"
+	@echo "  make infra-ps        Show running containers"
+	@echo "  make app-up          Build & start full containerized stack (core + agent-py + biz-java + web)"
+	@echo "  make app-down        Stop containerized app + core stack"
+	@echo "  make app-logs        Follow logs for containerized web, biz-java, agent-py"
 	@echo "  make dev-py          Start Python FastAPI Agent Engine (:8000)"
 	@echo "  make dev-java        Start Java 21 Spring Boot Biz/Gateway (:8080)"
 	@echo "  make dev-web         Start Next.js Frontend (:3000)"
@@ -42,6 +46,15 @@ infra-rag-down:
 
 infra-ps:
 	docker compose -f $(COMPOSE_FILE) --profile all ps
+
+app-up: env
+	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) --profile app up -d --build
+
+app-down:
+	docker compose -f $(COMPOSE_FILE) --profile app down
+
+app-logs:
+	docker compose -f $(COMPOSE_FILE) --profile app logs -f agent-py biz-java web
 
 dev-py: env
 	uv --directory services/agent-py run uvicorn inkflow_agent.main:app --reload --host 0.0.0.0 --port 8000
