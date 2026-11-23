@@ -31,6 +31,7 @@ import studio.inkflow.biz.run.mapper.AgentRunMapper;
 public class AgentRunService {
 
     private static final Set<String> VALID_ACTIONS = Set.of("CONTINUE", "REWRITE", "OUTLINE");
+    private static final Set<String> VALID_MODES = Set.of("AGENT", "DIRECT");
     private static final Duration STREAM_TTL = Duration.ofHours(2);
 
     private final AgentRunMapper runMapper;
@@ -65,6 +66,13 @@ public class AgentRunService {
             }
         }
 
+        String mode = (req.mode() == null || req.mode().isBlank())
+                ? "AGENT"
+                : req.mode().trim().toUpperCase();
+        if (!VALID_MODES.contains(mode)) {
+            throw BizException.badRequest("INVALID_RUN_MODE", "不支持的运行模式: " + mode);
+        }
+
         String action = (req.action() == null || req.action().isBlank())
                 ? "CONTINUE"
                 : req.action().trim().toUpperCase();
@@ -85,6 +93,7 @@ public class AgentRunService {
         run.setBookId(book.getId());
         run.setChapterId(chapter != null ? chapter.getId() : null);
         run.setOwnerId(ownerId);
+        run.setMode(mode);
         run.setAction(action);
         run.setModelAlias(modelAlias);
         run.setInstruction(instruction);
@@ -99,6 +108,10 @@ public class AgentRunService {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
+        body.put("owner_id", ownerId.toString());
+        body.put("book_id", book.getId().toString());
+        body.put("chapter_no", chapter != null ? chapter.getChapterNo() : null);
+        body.put("mode", mode);
         body.put("action", action);
         body.put("model_alias", modelAlias);
         body.put("book_title", book.getTitle());
@@ -175,6 +188,10 @@ public class AgentRunService {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
+        body.put("owner_id", ownerId.toString());
+        body.put("book_id", book.getId().toString());
+        body.put("chapter_no", chapter != null ? chapter.getChapterNo() : null);
+        body.put("mode", run.getMode() == null ? "AGENT" : run.getMode());
         body.put("action", run.getAction());
         body.put("model_alias", run.getModelAlias());
         body.put("book_title", book.getTitle());
@@ -301,6 +318,7 @@ public class AgentRunService {
                 r.getId(),
                 r.getBookId(),
                 r.getChapterId(),
+                r.getMode() == null ? "AGENT" : r.getMode(),
                 r.getAction(),
                 r.getModelAlias(),
                 r.getInstruction(),

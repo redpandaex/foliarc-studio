@@ -19,6 +19,9 @@ public final class RunDtos {
 
             UUID chapterId,
 
+            @Size(max = 16)
+            String mode,
+
             @Size(max = 32)
             String action,
 
@@ -42,6 +45,7 @@ public final class RunDtos {
             UUID id,
             UUID bookId,
             UUID chapterId,
+            String mode,
             String action,
             String modelAlias,
             String instruction,

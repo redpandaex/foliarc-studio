@@ -3,14 +3,25 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_REPO_ROOT_ENV = Path(__file__).resolve().parents[4] / ".env"
+
+def _resolve_env_files() -> tuple[Path, ...]:
+    """Locate .env in monorepo root or current working directory safely (also container-safe)."""
+    candidates: list[Path] = []
+    here = Path(__file__).resolve()
+    for parent in here.parents[:6]:
+        env_path = parent / ".env"
+        if env_path.is_file():
+            candidates.append(env_path)
+            break
+    candidates.append(Path(".env"))
+    return tuple(candidates)
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables or repo-root .env."""
 
     model_config = SettingsConfigDict(
-        env_file=(_REPO_ROOT_ENV, ".env"),
+        env_file=_resolve_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )

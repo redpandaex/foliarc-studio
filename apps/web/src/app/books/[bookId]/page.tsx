@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -12,6 +13,7 @@ import {
 } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel } from "@/components/ai-copilot-panel";
+import { LorePanel } from "@/components/lore-panel";
 import { Button } from "@/components/ui/button";
 import {
   ApiClientError,
@@ -33,7 +35,7 @@ function countWords(text: string): number {
   return text.replace(/\s+/g, "").length;
 }
 
-export default function BookWorkbenchPage() {
+function BookWorkbenchContent() {
   const params = useParams<{ bookId: string }>();
   const bookId = params.bookId;
   const router = useRouter();
@@ -56,7 +58,7 @@ export default function BookWorkbenchPage() {
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
 
-  const [rightTab, setRightTab] = useState<"ai" | "versions">("ai");
+  const [rightTab, setRightTab] = useState<"ai" | "lore" | "versions">("ai");
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(
     null,
@@ -514,20 +516,9 @@ export default function BookWorkbenchPage() {
           )}
         </section>
 
-        {/* Right Pane: Versions & Phase 1 AI Copilot Placeholder */}
+        {/* Right Pane: AI Agent Copilot, MCP Lore Bible & Versions */}
         <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-card/40">
-          <div className="grid grid-cols-2 border-b border-border text-xs font-medium">
-            <button
-              type="button"
-              onClick={() => setRightTab("versions")}
-              className={`py-2.5 transition-colors ${
-                rightTab === "versions"
-                  ? "border-b-2 border-primary text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              历史版本 ({versions.length})
-            </button>
+          <div className="grid grid-cols-3 border-b border-border text-xs font-medium">
             <button
               type="button"
               onClick={() => setRightTab("ai")}
@@ -537,11 +528,35 @@ export default function BookWorkbenchPage() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              AI 写作助手
+              AI 助手
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("lore")}
+              className={`py-2.5 transition-colors ${
+                rightTab === "lore"
+                  ? "border-b-2 border-primary text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              设定库
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("versions")}
+              className={`py-2.5 transition-colors ${
+                rightTab === "versions"
+                  ? "border-b-2 border-primary text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              版本 ({versions.length})
             </button>
           </div>
 
-          {rightTab === "versions" ? (
+          {rightTab === "lore" ? (
+            <LorePanel bookId={bookId} />
+          ) : rightTab === "versions" ? (
             <div className="flex min-h-0 flex-1 flex-col">
               {activeChapter && (
                 <form
@@ -639,5 +654,19 @@ export default function BookWorkbenchPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+export default function BookWorkbenchPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+          加载创作工作台中...
+        </div>
+      }
+    >
+      <BookWorkbenchContent />
+    </Suspense>
   );
 }

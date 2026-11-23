@@ -52,11 +52,13 @@ export interface ChapterVersion {
 }
 
 export type RunAction = "CONTINUE" | "REWRITE" | "OUTLINE";
+export type RunMode = "AGENT" | "DIRECT";
 
 export interface AgentRunItem {
   id: string;
   bookId: string;
   chapterId: string | null;
+  mode: RunMode;
   action: RunAction;
   modelAlias: string;
   instruction: string;
@@ -70,6 +72,50 @@ export interface AgentRunItem {
   errorMessage: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+export interface CharacterItem {
+  id: string;
+  bookId: string;
+  name: string;
+  roleType: string;
+  personality: string;
+  realmOrLevel: string;
+  currentLocation: string;
+  statusNotes: string;
+  inventory: string;
+  updatedAt: string | null;
+}
+
+export interface WorldEntryItem {
+  id: string;
+  bookId: string;
+  category: string;
+  title: string;
+  content: string;
+  tags: string;
+  updatedAt: string | null;
+}
+
+export interface ForeshadowingItem {
+  id: string;
+  bookId: string;
+  title: string;
+  description: string;
+  plantedChapterNo: number | null;
+  resolvedChapterNo: number | null;
+  status: string;
+  updatedAt: string | null;
+}
+
+export interface NovelBible {
+  bookId: string;
+  bookTitle: string;
+  genre: string | null;
+  synopsis: string | null;
+  characters: CharacterItem[];
+  worldEntries: WorldEntryItem[];
+  openForeshadowings: ForeshadowingItem[];
 }
 
 export class ApiClientError extends Error {
@@ -356,6 +402,7 @@ export const runsApi = {
   start(payload: {
     bookId: string;
     chapterId?: string;
+    mode?: RunMode;
     action: RunAction;
     modelAlias?: string;
     instruction?: string;
@@ -391,5 +438,73 @@ export const runsApi = {
     return request<AgentRunItem>(`/api/v1/runs/${runId}/cancel`, {
       method: "POST",
     });
+  },
+};
+
+export const loreApi = {
+  listCharacters(bookId: string): Promise<CharacterItem[]> {
+    return request<CharacterItem[]>(`/api/v1/books/${bookId}/characters`);
+  },
+  upsertCharacter(
+    bookId: string,
+    payload: {
+      name: string;
+      roleType?: string;
+      personality?: string;
+      realmOrLevel?: string;
+      currentLocation?: string;
+      statusNotes?: string;
+      inventory?: string;
+    },
+  ): Promise<CharacterItem> {
+    return request<CharacterItem>(`/api/v1/books/${bookId}/characters`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteCharacter(bookId: string, characterId: string): Promise<void> {
+    return request<void>(`/api/v1/books/${bookId}/characters/${characterId}`, {
+      method: "DELETE",
+    });
+  },
+  listWorldbook(bookId: string): Promise<WorldEntryItem[]> {
+    return request<WorldEntryItem[]>(`/api/v1/books/${bookId}/worldbook`);
+  },
+  createWorldEntry(
+    bookId: string,
+    payload: { category?: string; title: string; content?: string; tags?: string },
+  ): Promise<WorldEntryItem> {
+    return request<WorldEntryItem>(`/api/v1/books/${bookId}/worldbook`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteWorldEntry(bookId: string, entryId: string): Promise<void> {
+    return request<void>(`/api/v1/books/${bookId}/worldbook/${entryId}`, {
+      method: "DELETE",
+    });
+  },
+  listForeshadowings(bookId: string): Promise<ForeshadowingItem[]> {
+    return request<ForeshadowingItem[]>(`/api/v1/books/${bookId}/foreshadowings`);
+  },
+  upsertForeshadowing(
+    bookId: string,
+    payload: {
+      title: string;
+      description?: string;
+      plantedChapterNo?: number;
+      status?: string;
+    },
+  ): Promise<ForeshadowingItem> {
+    return request<ForeshadowingItem>(`/api/v1/books/${bookId}/foreshadowings`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteForeshadowing(bookId: string, foreshadowingId: string): Promise<void> {
+    return request<void>(
+      `/api/v1/books/${bookId}/foreshadowings/${foreshadowingId}`,
+      { method: "DELETE" },
+    );
   },
 };

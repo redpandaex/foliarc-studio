@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -23,9 +23,18 @@ class LlmUpstreamError(RuntimeError):
 
 
 @dataclass(slots=True)
+class ToolCallDelta:
+    index: int
+    id: str = ""
+    name: str = ""
+    arguments_delta: str = ""
+
+
+@dataclass(slots=True)
 class LlmStreamChunk:
     reasoning_delta: str = ""
     content_delta: str = ""
+    tool_call_deltas: list[ToolCallDelta] = field(default_factory=list)
     input_tokens: int | None = None
     cached_tokens: int | None = None
     output_tokens: int | None = None
@@ -107,7 +116,7 @@ def build_novel_messages(
 
 
 class OpenAICompatibleStreamClient:
-    """Streams tokens from any OpenAI-compatible /chat/completions endpoint (DeepSeek/proxy)."""
+    """Streams tokens and function tool_calls from any OpenAI-compatible /chat/completions API."""
 
     def __init__(self, settings: Settings, http_client: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
@@ -117,7 +126,8 @@ class OpenAICompatibleStreamClient:
         self,
         *,
         model_alias: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.8,
         max_tokens: int = 2048,
     ) -> AsyncIterator[LlmStreamChunk]:
@@ -138,6 +148,10 @@ class OpenAICompatibleStreamClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
         headers = {
             "Authorization": f"Bearer {self._settings.llm_api_key}",
             "Content-Type": "application/json",
@@ -192,6 +206,7 @@ def _parse_openai_chunk(data_str: str) -> LlmStreamChunk | None:
 
     reasoning_delta = ""
     content_delta = ""
+    tool_deltas: list[ToolCallDelta] = []
     finish_reason = None
 
     choices = obj.get("choices") or []
@@ -201,6 +216,17 @@ def _parse_openai_chunk(data_str: str) -> LlmStreamChunk | None:
         reasoning_delta = delta.get("reasoning_content") or ""
         content_delta = delta.get("content") or ""
         finish_reason = choice.get("finish_reason")
+
+        for tc in delta.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            tool_deltas.append(
+                ToolCallDelta(
+                    index=int(tc.get("index", 0)),
+                    id=str(tc.get("id") or ""),
+                    name=str(fn.get("name") or ""),
+                    arguments_delta=str(fn.get("arguments") or ""),
+                )
+            )
 
     usage = obj.get("usage") or {}
     input_tokens = usage.get("prompt_tokens")
@@ -215,6 +241,7 @@ def _parse_openai_chunk(data_str: str) -> LlmStreamChunk | None:
     if (
         not reasoning_delta
         and not content_delta
+        and not tool_deltas
         and finish_reason is None
         and input_tokens is None
         and output_tokens is None
@@ -224,6 +251,7 @@ def _parse_openai_chunk(data_str: str) -> LlmStreamChunk | None:
     return LlmStreamChunk(
         reasoning_delta=reasoning_delta,
         content_delta=content_delta,
+        tool_call_deltas=tool_deltas,
         input_tokens=input_tokens,
         cached_tokens=cached_tokens,
         output_tokens=output_tokens,

@@ -6,6 +6,7 @@ import {
   getRunStreamUrl,
   runsApi,
   type RunAction,
+  type RunMode,
 } from "@/lib/api";
 import {
   connectResumableSse,
@@ -22,8 +23,19 @@ interface AiCopilotPanelProps {
   onReplaceText: (text: string) => void;
 }
 
+interface ToolStepItem {
+  callId: string;
+  toolName: string;
+  source: string;
+  argumentsPreview: string;
+  status: "running" | "ok" | "error";
+  summary?: string;
+  latencyMs?: number;
+}
+
 interface PersistedRunSnapshot {
   runId: string;
+  mode: RunMode;
   action: RunAction;
   modelAlias: string;
   instruction: string;
@@ -31,6 +43,7 @@ interface PersistedRunSnapshot {
   lastSeq: number;
   text: string;
   thought: string;
+  toolSteps: ToolStepItem[];
   state: StreamConnectionState;
 }
 
@@ -55,12 +68,19 @@ const MODEL_OPTIONS = [
 const STATE_BADGE: Record<StreamConnectionState, { label: string; dot: string }> = {
   idle: { label: "就绪", dot: "bg-muted-foreground/50" },
   connecting: { label: "连接中", dot: "bg-amber-400 animate-pulse" },
-  streaming: { label: "流式生成中", dot: "bg-emerald-500 animate-pulse" },
+  streaming: { label: "流式执行中", dot: "bg-emerald-500 animate-pulse" },
   reconnecting: { label: "断线续连中", dot: "bg-amber-500 animate-pulse" },
   paused: { label: "已暂停（可改指令）", dot: "bg-sky-500" },
   completed: { label: "生成完成", dot: "bg-emerald-500" },
   cancelled: { label: "已取消", dot: "bg-muted-foreground" },
   error: { label: "异常中断", dot: "bg-rose-500" },
+};
+
+const SOURCE_STYLE: Record<string, string> = {
+  mcp: "bg-emerald-500/15 text-emerald-600",
+  skill: "bg-violet-500/15 text-violet-600",
+  sandbox: "bg-amber-500/15 text-amber-600",
+  builtin: "bg-sky-500/15 text-sky-600",
 };
 
 function storageKey(bookId: string, chapterId: string | null): string {
@@ -74,6 +94,7 @@ export function AiCopilotPanel({
   onAppendText,
   onReplaceText,
 }: AiCopilotPanelProps) {
+  const [mode, setMode] = useState<RunMode>("AGENT");
   const [action, setAction] = useState<RunAction>("CONTINUE");
   const [modelAlias, setModelAlias] = useState("writer-main");
   const [instruction, setInstruction] = useState("");
@@ -87,17 +108,17 @@ export function AiCopilotPanel({
 
   const [generatedText, setGeneratedText] = useState("");
   const [thoughtText, setThoughtText] = useState("");
+  const [toolSteps, setToolSteps] = useState<ToolStepItem[]>([]);
+  const [discoveredTools, setDiscoveredTools] = useState<string[]>([]);
   const [showThought, setShowThought] = useState(true);
   const [usage, setUsage] = useState<TokenUsage | null>(null);
   const [busyControl, setBusyControl] = useState(false);
 
   const sseHandleRef = useRef<ResumableSseHandle | null>(null);
   const seenSeqRef = useRef(0);
-  const stateRef = useRef<PersistedRunSnapshot | null>(null);
 
   const persistSnapshot = useCallback(
     (snapshot: PersistedRunSnapshot | null) => {
-      stateRef.current = snapshot;
       if (typeof window === "undefined") return;
       const key = storageKey(bookId, chapterId);
       if (!snapshot) {
@@ -114,11 +135,13 @@ export function AiCopilotPanel({
       targetRunId: string,
       cursor: string | null,
       seed: {
+        mode: RunMode;
         action: RunAction;
         modelAlias: string;
         instruction: string;
         text: string;
         thought: string;
+        toolSteps: ToolStepItem[];
         seq: number;
       },
     ) => {
@@ -127,12 +150,14 @@ export function AiCopilotPanel({
 
       let accText = seed.text;
       let accThought = seed.thought;
+      let accTools = [...seed.toolSteps];
       let accLastEventId = cursor;
       let accSeq = seed.seq;
 
       const saveCurrent = (nextState: StreamConnectionState) => {
         persistSnapshot({
           runId: targetRunId,
+          mode: seed.mode,
           action: seed.action,
           modelAlias: seed.modelAlias,
           instruction: seed.instruction,
@@ -140,6 +165,7 @@ export function AiCopilotPanel({
           lastSeq: accSeq,
           text: accText,
           thought: accThought,
+          toolSteps: accTools,
           state: nextState,
         });
       };
@@ -169,10 +195,44 @@ export function AiCopilotPanel({
             setLastSeq(envelope.seq);
           }
 
-          if (envelope.type === "thought_delta") {
+          if (envelope.type === "run_started") {
+            const tools = envelope.payload.tools;
+            if (Array.isArray(tools)) {
+              setDiscoveredTools(tools.map(String));
+            }
+          } else if (envelope.type === "thought_delta") {
             const delta = String(envelope.payload.content ?? "");
             accThought += delta;
             setThoughtText(accThought);
+          } else if (envelope.type === "tool_call") {
+            const callId = String(envelope.payload.call_id ?? `step-${accSeq}`);
+            const toolName = String(envelope.payload.tool_name ?? "tool");
+            const source = String(envelope.payload.source ?? "builtin");
+            const argsPreview = JSON.stringify(envelope.payload.arguments ?? {});
+            accTools = [
+              ...accTools,
+              {
+                callId,
+                toolName,
+                source,
+                argumentsPreview: argsPreview,
+                status: "running",
+              },
+            ];
+            setToolSteps(accTools);
+            saveCurrent("streaming");
+          } else if (envelope.type === "tool_result") {
+            const callId = String(envelope.payload.call_id ?? "");
+            const ok = Boolean(envelope.payload.success);
+            const summary = String(envelope.payload.summary ?? "");
+            const latencyMs = Number(envelope.payload.latency_ms ?? 0);
+            accTools = accTools.map((step) =>
+              step.callId === callId
+                ? { ...step, status: ok ? "ok" : "error", summary, latencyMs }
+                : step,
+            );
+            setToolSteps(accTools);
+            saveCurrent("streaming");
           } else if (envelope.type === "text_delta") {
             const delta = String(envelope.payload.content ?? "");
             accText += delta;
@@ -200,7 +260,6 @@ export function AiCopilotPanel({
     [persistSnapshot],
   );
 
-  // Restore active or paused run after page refresh or chapter switch
   useEffect(() => {
     sseHandleRef.current?.disconnect();
     sseHandleRef.current = null;
@@ -215,6 +274,7 @@ export function AiCopilotPanel({
           const saved = JSON.parse(raw) as PersistedRunSnapshot;
           if (!active) return;
           setRunId(saved.runId);
+          setMode(saved.mode ?? "AGENT");
           setAction(saved.action);
           setModelAlias(saved.modelAlias);
           setInstruction(saved.instruction);
@@ -222,6 +282,7 @@ export function AiCopilotPanel({
           setLastSeq(saved.lastSeq);
           setGeneratedText(saved.text);
           setThoughtText(saved.thought);
+          setToolSteps(saved.toolSteps ?? []);
           setConnState(saved.state);
           setStatusDetail(null);
           setUsage(null);
@@ -233,11 +294,13 @@ export function AiCopilotPanel({
           ) {
             setStatusDetail("检测到页面刷新，正在携带 Last-Event-ID 自动断点续连...");
             attachStream(saved.runId, saved.lastEventId, {
+              mode: saved.mode ?? "AGENT",
               action: saved.action,
               modelAlias: saved.modelAlias,
               instruction: saved.instruction,
               text: saved.text,
               thought: saved.thought,
+              toolSteps: saved.toolSteps ?? [],
               seq: saved.lastSeq,
             });
           }
@@ -247,7 +310,6 @@ export function AiCopilotPanel({
         }
       }
 
-      // Fallback: inspect latest server run for this chapter
       try {
         const recent = await runsApi.list(bookId, chapterId ?? undefined);
         if (!active) return;
@@ -256,6 +318,7 @@ export function AiCopilotPanel({
         );
         if (resumable) {
           setRunId(resumable.id);
+          setMode(resumable.mode ?? "AGENT");
           setAction(resumable.action);
           setModelAlias(resumable.modelAlias);
           setInstruction(resumable.instruction);
@@ -263,23 +326,26 @@ export function AiCopilotPanel({
           setLastSeq(resumable.lastSeq);
           setGeneratedText(resumable.accumulatedText);
           setThoughtText("");
+          setToolSteps([]);
           if (resumable.status === "PAUSED") {
             setConnState("paused");
             setStatusDetail("已恢复上次暂停的检查点，可修改指令后继续生成");
           } else {
             attachStream(resumable.id, null, {
+              mode: resumable.mode ?? "AGENT",
               action: resumable.action,
               modelAlias: resumable.modelAlias,
               instruction: resumable.instruction,
               text: "",
               thought: "",
+              toolSteps: [],
               seq: 0,
             });
           }
           return;
         }
       } catch {
-        // Ignore silent recovery errors when backend is unavailable
+        // Ignore silent recovery errors
       }
 
       if (!active) return;
@@ -288,6 +354,8 @@ export function AiCopilotPanel({
       setLastSeq(0);
       setGeneratedText("");
       setThoughtText("");
+      setToolSteps([]);
+      setDiscoveredTools([]);
       setUsage(null);
       setConnState("idle");
       setStatusDetail(null);
@@ -307,6 +375,8 @@ export function AiCopilotPanel({
     setStatusDetail(null);
     setGeneratedText("");
     setThoughtText("");
+    setToolSteps([]);
+    setDiscoveredTools([]);
     setUsage(null);
     setLastEventId(null);
     setLastSeq(0);
@@ -316,6 +386,7 @@ export function AiCopilotPanel({
       const created = await runsApi.start({
         bookId,
         chapterId: chapterId ?? undefined,
+        mode,
         action,
         modelAlias,
         instruction,
@@ -323,11 +394,13 @@ export function AiCopilotPanel({
       });
       setRunId(created.id);
       attachStream(created.id, null, {
+        mode,
         action,
         modelAlias,
         instruction,
         text: "",
         thought: "",
+        toolSteps: [],
         seq: 0,
       });
     } catch (err) {
@@ -361,11 +434,13 @@ export function AiCopilotPanel({
       setInstruction(resumed.instruction);
       setRevisedInstruction("");
       attachStream(runId, lastEventId, {
+        mode,
         action,
         modelAlias,
         instruction: nextInstruction,
         text: generatedText,
         thought: thoughtText,
+        toolSteps,
         seq: lastSeq,
       });
     } catch (err) {
@@ -401,6 +476,8 @@ export function AiCopilotPanel({
     setLastSeq(0);
     setGeneratedText("");
     setThoughtText("");
+    setToolSteps([]);
+    setDiscoveredTools([]);
     setUsage(null);
     setConnState("idle");
     setStatusDetail(null);
@@ -414,7 +491,6 @@ export function AiCopilotPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
-      {/* Control Form */}
       <div className="space-y-2.5 border-b border-border p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
@@ -426,6 +502,34 @@ export function AiCopilotPanel({
               seq:{lastSeq}
             </span>
           )}
+        </div>
+
+        {/* Agent vs Direct Mode Toggle */}
+        <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/60 p-0.5">
+          <button
+            type="button"
+            disabled={isRunning || connState === "paused"}
+            onClick={() => setMode("AGENT")}
+            className={`rounded py-1 text-[11px] font-medium transition-colors ${
+              mode === "AGENT"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Agent 模式 (MCP+Skill)
+          </button>
+          <button
+            type="button"
+            disabled={isRunning || connState === "paused"}
+            onClick={() => setMode("DIRECT")}
+            className={`rounded py-1 text-[11px] font-medium transition-colors ${
+              mode === "DIRECT"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            直连流式 (Direct)
+          </button>
         </div>
 
         <div className="grid grid-cols-3 gap-1">
@@ -494,7 +598,7 @@ export function AiCopilotPanel({
               value={instruction}
               disabled={isRunning}
               onChange={(e) => setInstruction(e.target.value)}
-              placeholder="输入写作要求，如：描写雨夜神秘剑客现身，制造悬念..."
+              placeholder="输入写作要求，如：先查林青的伤势与伏笔，再写一场雨夜剑斗..."
               className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
             />
 
@@ -534,9 +638,9 @@ export function AiCopilotPanel({
                   disabled={busyControl}
                   onClick={() => void handleStart()}
                 >
-                  开始流式生成
+                  {mode === "AGENT" ? "启动 Agent 创作" : "开始流式生成"}
                 </Button>
-                {(generatedText || connState !== "idle") && (
+                {(generatedText || toolSteps.length > 0 || connState !== "idle") && (
                   <Button size="xs" variant="outline" onClick={handleClear}>
                     清空
                   </Button>
@@ -559,8 +663,60 @@ export function AiCopilotPanel({
         )}
       </div>
 
-      {/* Streaming Output Area */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 space-y-3">
+      {/* Trajectory Timeline + Thought + Streaming Prose */}
+      <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto p-3">
+        {discoveredTools.length > 0 && (
+          <div className="rounded-md bg-muted/40 px-2.5 py-1.5 font-mono text-[10px] text-muted-foreground">
+            已挂载 {discoveredTools.length} 个工具：{discoveredTools.join(", ")}
+          </div>
+        )}
+
+        {toolSteps.length > 0 && (
+          <div className="space-y-1.5 rounded-lg border border-border bg-card p-2.5">
+            <div className="font-mono text-[10px] font-semibold text-muted-foreground">
+              Agent 执行轨迹 ({toolSteps.length} 步)
+            </div>
+            <ol className="space-y-1.5">
+              {toolSteps.map((step) => (
+                <li
+                  key={step.callId}
+                  className="rounded border border-border/70 bg-background p-2 text-[11px]"
+                >
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        className={`rounded px-1 py-0.5 font-mono text-[9px] uppercase ${
+                          SOURCE_STYLE[step.source] ?? SOURCE_STYLE.builtin
+                        }`}
+                      >
+                        {step.source}
+                      </span>
+                      <span className="truncate font-mono font-medium">
+                        {step.toolName}
+                      </span>
+                    </div>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {step.status === "running"
+                        ? "执行中..."
+                        : step.status === "ok"
+                          ? `✓ ${step.latencyMs ?? 0}ms`
+                          : "✕ 失败"}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                    args: {step.argumentsPreview}
+                  </div>
+                  {step.summary && (
+                    <div className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">
+                      {step.summary}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
         {thoughtText && (
           <div className="rounded-lg border border-border bg-muted/40 p-2.5">
             <button
@@ -589,15 +745,14 @@ export function AiCopilotPanel({
             </div>
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-border p-4 text-center text-[11px] leading-relaxed text-muted-foreground">
-            <p className="font-medium text-foreground">Phase 1 企业级 SSE 流式引擎</p>
-            <p className="mt-1">
-              链路：Next.js (fetch Stream) → Java WebFlux (Redis Streams XREAD) → Python FastAPI → OpenAI 兼容大模型
-            </p>
-            <p className="mt-1">
-              生成过程中可随时点击「模拟断线续连」、直接刷新页面（F5）或「暂停改指令后继续」。
-            </p>
-          </div>
+          toolSteps.length === 0 && (
+            <div className="rounded-lg border border-dashed border-border p-4 text-center text-[11px] leading-relaxed text-muted-foreground">
+              <p className="font-medium text-foreground">Phase 2 手写 ReAct Agent Core</p>
+              <p className="mt-1">
+                在「设定库」录入人物/世界观/伏笔后，启动 Agent 模式即可观察实时 MCP 查设定、渐进式加载写作 Skill 与流式正文输出。
+              </p>
+            </div>
+          )
         )}
       </div>
 

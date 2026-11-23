@@ -9,6 +9,12 @@ from typing import Any, Protocol
 import httpx
 from redis.asyncio import Redis
 
+from inkflow_agent.agent.context import ContextManager
+from inkflow_agent.agent.loop import AgentLoopConfig, ReActAgentLoop
+from inkflow_agent.agent.mcp_client import McpLoreClient
+from inkflow_agent.agent.prompts import PromptRegistry
+from inkflow_agent.agent.skills import SkillRegistry
+from inkflow_agent.agent.tools import ToolRegistry, register_builtin_novel_tools
 from inkflow_agent.config import Settings
 from inkflow_agent.streaming.llm_client import (
     LlmConfigurationError,
@@ -19,6 +25,7 @@ from inkflow_agent.streaming.llm_client import (
 )
 from inkflow_agent.streaming.protocol import (
     ControlSignal,
+    RunMode,
     RunResumeRequest,
     RunStartRequest,
     RunStateCallback,
@@ -72,7 +79,7 @@ class _ActiveRun:
 
 
 class RunManager:
-    """Manages active streaming generations, writing structured events to Redis Streams."""
+    """Manages active streaming generations (both DIRECT and AGENT ReAct modes) over Redis Streams."""
 
     def __init__(
         self,
@@ -81,12 +88,21 @@ class RunManager:
         redis: Redis,
         llm_client: OpenAICompatibleStreamClient | None = None,
         state_reporter: StateReporter | None = None,
+        skill_registry: SkillRegistry | None = None,
+        enable_mcp: bool = True,
     ) -> None:
         self._settings = settings
         self._redis = redis
         self._llm = llm_client or OpenAICompatibleStreamClient(settings)
         self._reporter = state_reporter or HttpBizStateReporter(settings)
+        self._skills = skill_registry or SkillRegistry()
+        self._prompts = PromptRegistry(settings)
+        self._enable_mcp = enable_mcp
         self._active: dict[str, _ActiveRun] = {}
+
+    @property
+    def skill_registry(self) -> SkillRegistry:
+        return self._skills
 
     async def start_run(self, req: RunStartRequest) -> None:
         await self._redis.delete(control_key(req.run_id))
@@ -96,6 +112,10 @@ class RunManager:
             self._execute_segment(
                 active=active,
                 run_id=req.run_id,
+                owner_id=req.owner_id,
+                book_id=req.book_id,
+                chapter_no=req.chapter_no,
+                mode=req.mode,
                 trace_id=req.trace_id,
                 action=req.action,
                 model_alias=req.model_alias,
@@ -123,6 +143,10 @@ class RunManager:
             self._execute_segment(
                 active=active,
                 run_id=req.run_id,
+                owner_id=req.owner_id,
+                book_id=req.book_id,
+                chapter_no=req.chapter_no,
+                mode=req.mode,
                 trace_id=req.trace_id,
                 action=req.action,
                 model_alias=req.model_alias,
@@ -198,6 +222,10 @@ class RunManager:
         *,
         active: _ActiveRun,
         run_id: str,
+        owner_id: str,
+        book_id: str,
+        chapter_no: int | None,
+        mode: RunMode,
         trace_id: str | None,
         action: Any,
         model_alias: str,
@@ -216,133 +244,193 @@ class RunManager:
     ) -> None:
         seq = start_seq
         last_event_id: str | None = None
-        parts = [accumulated_text] if accumulated_text else []
+        full_text = accumulated_text
         seg_input = 0
         seg_cached = 0
         seg_output = 0
 
-        try:
+        async def emit_next(event_type: str, payload: dict[str, Any]) -> str:
+            nonlocal seq, last_event_id
             seq += 1
             last_event_id = await self._emit(
                 run_id=run_id,
                 trace_id=trace_id,
                 seq=seq,
-                event_type="run_started",
-                payload={
-                    "action": action,
-                    "model_alias": model_alias,
-                    "resumed": resumed,
-                },
+                event_type=event_type,
+                payload=payload,
             )
-            await self._reporter.report(
-                run_id,
-                RunStateCallback(
-                    status="RUNNING",
-                    accumulated_text="".join(parts),
-                    last_seq=seq,
-                    last_event_id=last_event_id,
-                    input_tokens=prior_input_tokens,
-                    cached_tokens=prior_cached_tokens,
-                    output_tokens=prior_output_tokens,
-                ),
-            )
+            return last_event_id
 
-            messages = build_novel_messages(
-                action=action,
-                book_title=book_title,
-                genre=genre,
-                synopsis=synopsis,
-                chapter_title=chapter_title,
-                chapter_context=chapter_context,
-                instruction=instruction,
-                accumulated_text=accumulated_text,
-            )
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                tool_registry = ToolRegistry()
+                mcp_tool_names: list[str] = []
 
-            stream_iter = self._llm.stream_chat(model_alias=model_alias, messages=messages)
-            try:
-                while True:
-                    ctrl = await self._check_control(active)
-                    if ctrl is not None:
-                        break
-
-                    next_chunk_task = asyncio.create_task(anext(stream_iter))
-                    ctrl_wait_task = asyncio.create_task(active.control_event.wait())
-                    done, pending = await asyncio.wait(
-                        {next_chunk_task, ctrl_wait_task},
-                        return_when=asyncio.FIRST_COMPLETED,
+                if mode == "AGENT":
+                    register_builtin_novel_tools(
+                        tool_registry,
+                        skill_registry=self._skills,
+                        biz_java_url=self._settings.biz_java_base_url,
+                        internal_token=self._settings.internal_service_token,
+                        owner_id=owner_id,
+                        book_id=book_id,
+                        run_id=run_id,
                     )
-                    for task in pending:
-                        task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await task
+                    if self._enable_mcp and owner_id and book_id:
+                        try:
+                            mcp_client = await stack.enter_async_context(
+                                McpLoreClient(
+                                    biz_java_url=self._settings.biz_java_base_url,
+                                    internal_token=self._settings.internal_service_token,
+                                    owner_id=owner_id,
+                                    book_id=book_id,
+                                )
+                            )
+                            mcp_tool_names = await tool_registry.register_mcp_tools(mcp_client)
+                        except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+                            logger.warning("MCP stdio client unavailable for run %s: %s", run_id, exc)
 
-                    if ctrl_wait_task in done and active.control_event.is_set():
-                        break
+                await emit_next(
+                    "run_started",
+                    {
+                        "mode": mode,
+                        "action": action,
+                        "model_alias": model_alias,
+                        "resumed": resumed,
+                        "tools": tool_registry.tool_names() if mode == "AGENT" else [],
+                        "mcp_tools": mcp_tool_names,
+                    },
+                )
+                await self._reporter.report(
+                    run_id,
+                    RunStateCallback(
+                        status="RUNNING",
+                        accumulated_text=full_text,
+                        last_seq=seq,
+                        last_event_id=last_event_id,
+                        input_tokens=prior_input_tokens,
+                        cached_tokens=prior_cached_tokens,
+                        output_tokens=prior_output_tokens,
+                    ),
+                )
 
+                if mode == "AGENT":
+                    rendered = await self._prompts.render_writer_system(
+                        action=action,
+                        book_title=book_title,
+                        genre=genre,
+                        synopsis=synopsis,
+                        skill_catalog=self._skills.render_catalog_prompt(),
+                    )
+                    user_parts = []
+                    if chapter_no is not None or chapter_title:
+                        ch_label = f"第 {chapter_no} 章 " if chapter_no else ""
+                        user_parts.append(f"当前章节：{ch_label}{chapter_title}".strip())
+                    if chapter_context.strip():
+                        user_parts.append(f"【已有正文参考】\n{chapter_context[-4000:]}")
+                    if instruction.strip():
+                        user_parts.append(f"【作者指令】\n{instruction.strip()}")
+                    else:
+                        user_parts.append("【作者指令】\n请结合小说设定库与前文自然推进剧情，输出高质量正文。")
+
+                    context_manager = ContextManager()
+                    loop = ReActAgentLoop(
+                        llm_client=self._llm,
+                        tool_registry=tool_registry,
+                        context_manager=context_manager,
+                        config=AgentLoopConfig(),
+                    )
+                    result = await loop.run(
+                        model_alias=model_alias,
+                        static_system_prompt=rendered.system_prompt,
+                        initial_user_prompt="\n\n".join(user_parts),
+                        emit=emit_next,
+                        control_event=active.control_event,
+                        check_control=lambda: self._check_control(active),
+                        accumulated_text=accumulated_text,
+                        revised_instruction=instruction if resumed else "",
+                    )
+                    full_text = result.accumulated_text
+                    seg_input = result.input_tokens
+                    seg_cached = result.cached_tokens
+                    seg_output = result.output_tokens
+                    final_outcome = result.status
+                else:
+                    parts = [accumulated_text] if accumulated_text else []
+                    messages = build_novel_messages(
+                        action=action,
+                        book_title=book_title,
+                        genre=genre,
+                        synopsis=synopsis,
+                        chapter_title=chapter_title,
+                        chapter_context=chapter_context,
+                        instruction=instruction,
+                        accumulated_text=accumulated_text,
+                    )
+                    stream_iter = self._llm.stream_chat(model_alias=model_alias, messages=messages)
                     try:
-                        chunk: LlmStreamChunk = next_chunk_task.result()
-                    except StopAsyncIteration:
-                        break
+                        while True:
+                            ctrl = await self._check_control(active)
+                            if ctrl is not None:
+                                break
+                            next_chunk_task = asyncio.create_task(anext(stream_iter))
+                            ctrl_wait_task = asyncio.create_task(active.control_event.wait())
+                            done, pending = await asyncio.wait(
+                                {next_chunk_task, ctrl_wait_task},
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            for task in pending:
+                                task.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await task
+                            if ctrl_wait_task in done and active.control_event.is_set():
+                                break
+                            try:
+                                chunk: LlmStreamChunk = next_chunk_task.result()
+                            except StopAsyncIteration:
+                                break
 
-                    if chunk.reasoning_delta:
-                        seq += 1
-                        last_event_id = await self._emit(
-                            run_id=run_id,
-                            trace_id=trace_id,
-                            seq=seq,
-                            event_type="thought_delta",
-                            payload={"content": chunk.reasoning_delta},
-                        )
+                            if chunk.reasoning_delta:
+                                await emit_next("thought_delta", {"content": chunk.reasoning_delta})
+                            if chunk.content_delta:
+                                parts.append(chunk.content_delta)
+                                await emit_next("text_delta", {"content": chunk.content_delta})
+                            if chunk.input_tokens is not None:
+                                seg_input = chunk.input_tokens
+                            if chunk.cached_tokens is not None:
+                                seg_cached = chunk.cached_tokens
+                            if chunk.output_tokens is not None:
+                                seg_output = chunk.output_tokens
+                    finally:
+                        with contextlib.suppress(Exception):
+                            await stream_iter.aclose()
 
-                    if chunk.content_delta:
-                        parts.append(chunk.content_delta)
-                        seq += 1
-                        last_event_id = await self._emit(
-                            run_id=run_id,
-                            trace_id=trace_id,
-                            seq=seq,
-                            event_type="text_delta",
-                            payload={"content": chunk.content_delta},
-                        )
-
-                    if chunk.input_tokens is not None:
-                        seg_input = chunk.input_tokens
-                    if chunk.cached_tokens is not None:
-                        seg_cached = chunk.cached_tokens
-                    if chunk.output_tokens is not None:
-                        seg_output = chunk.output_tokens
-            finally:
-                with contextlib.suppress(Exception):
-                    await stream_iter.aclose()
+                    full_text = "".join(parts)
+                    ctrl = await self._check_control(active)
+                    final_outcome = "PAUSED" if ctrl == "PAUSE" else ("CANCELLED" if ctrl == "CANCEL" else "COMPLETED")
 
             total_in = prior_input_tokens + seg_input
             total_cached = prior_cached_tokens + seg_cached
             total_out = prior_output_tokens + seg_output
-            full_text = "".join(parts)
 
-            ctrl = await self._check_control(active)
-            if ctrl == "PAUSE":
+            if final_outcome == "PAUSED":
                 checkpoint_id = f"ckpt-{seq}"
-                seq += 1
-                # Report PAUSED checkpoint to PG BEFORE emitting interrupt so immediate Resume sees PAUSED.
+                next_seq = seq + 1
                 await self._reporter.report(
                     run_id,
                     RunStateCallback(
                         status="PAUSED",
                         accumulated_text=full_text,
-                        last_seq=seq,
+                        last_seq=next_seq,
                         last_event_id=last_event_id,
                         input_tokens=total_in,
                         cached_tokens=total_cached,
                         output_tokens=total_out,
                     ),
                 )
-                last_event_id = await self._emit(
-                    run_id=run_id,
-                    trace_id=trace_id,
-                    seq=seq,
-                    event_type="interrupt",
-                    payload={
+                await emit_next(
+                    "interrupt",
+                    {
                         "checkpoint_id": checkpoint_id,
                         "reason": "USER_PAUSED",
                         "proposed_data": {
@@ -365,62 +453,49 @@ class RunManager:
                 )
                 return
 
-            if ctrl == "CANCEL":
-                seq += 1
+            if final_outcome == "CANCELLED":
                 await self._reporter.report(
                     run_id,
                     RunStateCallback(
                         status="CANCELLED",
                         accumulated_text=full_text,
-                        last_seq=seq,
+                        last_seq=seq + 1,
                         last_event_id=last_event_id,
                         input_tokens=total_in,
                         cached_tokens=total_cached,
                         output_tokens=total_out,
                     ),
                 )
-                last_event_id = await self._emit(
-                    run_id=run_id,
-                    trace_id=trace_id,
-                    seq=seq,
-                    event_type="done",
-                    payload={"status": "cancelled", "accumulated_chars": len(full_text)},
+                await emit_next(
+                    "done",
+                    {"status": "cancelled", "accumulated_chars": len(full_text)},
                 )
                 return
 
-            # Normal completion: emit usage then report PG COMPLETED then emit done
-            seq += 1
-            last_event_id = await self._emit(
-                run_id=run_id,
-                trace_id=trace_id,
-                seq=seq,
-                event_type="usage",
-                payload={
+            await emit_next(
+                "usage",
+                {
                     "model_alias": model_alias,
                     "input_tokens": total_in,
                     "cached_tokens": total_cached,
                     "output_tokens": total_out,
                 },
             )
-            seq += 1
             await self._reporter.report(
                 run_id,
                 RunStateCallback(
                     status="COMPLETED",
                     accumulated_text=full_text,
-                    last_seq=seq,
+                    last_seq=seq + 1,
                     last_event_id=last_event_id,
                     input_tokens=total_in,
                     cached_tokens=total_cached,
                     output_tokens=total_out,
                 ),
             )
-            last_event_id = await self._emit(
-                run_id=run_id,
-                trace_id=trace_id,
-                seq=seq,
-                event_type="done",
-                payload={"status": "completed", "accumulated_chars": len(full_text)},
+            await emit_next(
+                "done",
+                {"status": "completed", "accumulated_chars": len(full_text)},
             )
 
         except LlmConfigurationError as exc:
@@ -428,7 +503,7 @@ class RunManager:
                 run_id=run_id,
                 trace_id=trace_id,
                 seq=seq,
-                accumulated_text="".join(parts),
+                accumulated_text=full_text,
                 code="LLM_API_KEY_NOT_CONFIGURED",
                 message=str(exc),
                 retryable=False,
@@ -441,7 +516,7 @@ class RunManager:
                 run_id=run_id,
                 trace_id=trace_id,
                 seq=seq,
-                accumulated_text="".join(parts),
+                accumulated_text=full_text,
                 code=exc.code,
                 message=str(exc),
                 retryable=exc.retryable,
@@ -455,7 +530,7 @@ class RunManager:
                 run_id=run_id,
                 trace_id=trace_id,
                 seq=seq,
-                accumulated_text="".join(parts),
+                accumulated_text=full_text,
                 code="AGENT_INTERNAL_ERROR",
                 message=f"Agent 执行异常: {exc}",
                 retryable=False,

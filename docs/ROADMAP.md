@@ -112,7 +112,7 @@ flowchart LR
   - **后端协作式暂停与恢复**：前端发送 `pause`，Agent 在安全检查点挂起并保存状态；用户修改指令或直接点 `resume` 后从检查点继续流式输出。
 - [ ] **1.6 小说编辑器与 AI 协作体验** `★`
   - 集成富文本编辑器（Tiptap / Lexical），支持划词改写/扩写、AI 生成内容 **Git 式 Diff 审阅（逐段 Accept / Reject）**、防抖自动保存 + 乐观锁版本冲突提示。
-- [ ] **1.7 Agent 执行轨迹可视化面板** `★`
+- [x] **1.7 Agent 执行轨迹可视化面板** `★`
   - 类似 Cursor/Manus 的实时步骤时间轴：展示当前是哪个 Agent 在工作、调用了哪些 Tool/MCP/Sandbox、命中了哪些设定文档、本次消耗了多少 Token 与耗时。
 
 ---
@@ -122,22 +122,22 @@ flowchart LR
 > [!IMPORTANT]
 > **学习策略**：核心机制（Agent Loop、Tool Calling、上下文压缩、状态机）**务必先用纯 Python + OpenAI 兼容 SDK 手写一遍**，彻底吃透底层后再引入或对比 LangGraph 等框架，这样面试被问底层原理时才能对答如流。
 
-- [ ] **2.1 Agent Loop（从零手写执行循环）**
+- [x] **2.1 Agent Loop（从零手写执行循环）**
   - 实现 ReAct 循环（Thought -> Action -> Observation -> Final Answer）与 Plan-and-Execute 模式。
   - **防失控机制** `★`：最大步数限制（`max_steps`）、Token 预算熔断、死循环检测（连续调用相同 Tool + 相同参数时强制干预）、优雅降级输出。
-- [ ] **2.2 Tool 体系（工具注册与健壮执行）**
+- [x] **2.2 Tool 体系（工具注册与健壮执行）**
   - Pydantic 强类型定义 Tool Schema，支持并行 Tool Calls、超时控制、自动重试、幂等键。
   - **工具错误自愈** `★`：参数校验失败或执行报错时，返回结构化错误提示让 LLM 自我修正而非直接崩溃。
   - 小说专属工具示例：`get_character_state`、`update_foreshadowing`、`search_worldbook`、`read_prev_chapter_summary`、`check_timeline_conflict`、`run_analysis_script`（走沙箱）。
-- [ ] **2.3 Skill 系统（模块化写作技能包）**
+- [x] **2.3 Skill 系统（模块化写作技能包）**
   - 设计**渐进式披露（Progressive Disclosure）**机制：System Prompt 仅放轻量 Skill 目录（名称+触发场景），Agent 按需加载完整 Skill 规范、示例及受控 `scripts/`（例如：`打斗场景描写 Skill`、`悬疑伏笔埋设 Skill`、`古风对话润色 Skill`、`卡文破局 Skill`、`全书节奏统计 Skill`），节省大量上下文 Token。
-- [ ] **2.4 MCP（Model Context Protocol）实战**
+- [x] **2.4 MCP（Model Context Protocol）实战**
   - 实现 **MCP Client/Host** 接入 Agent Runtime，动态发现工具（`tools/list`）与资源（`resources/read`）。
   - 手写 1~2 个专属 **MCP Server**（如 `novel-lore-mcp` 暴露人物/世界观库，支持 `stdio` 和 `Streamable HTTP` 两种传输协议），并在服务端实现租户/用户权限透传。
-- [ ] **2.5 Prompt 编排与版本管理**
+- [x] **2.5 Prompt 编排与版本管理**
   - 基于 Jinja2 的模板化 Prompt 组合（角色设定 + 写作禁忌 + 风格样本 + 动态记忆 + 结构化输出约束）。
   - **Prompt 注册中心** `★`：支持版本号、灰度/A-B 测试、回滚（存数据库而非写死在代码里）。
-- [ ] **2.6 上下文管理与压缩（Context Engineering）**
+- [x] **2.6 上下文管理与压缩（Context Engineering）**
   - **Token 预算分配器**：精确计算（`tiktoken`）各区域配额（System + Skill + 长期记忆 + RAG 片段 + 近期对话 + 输出预留）。
   - **分层压缩策略**：滑动窗口 + 滚动摘要（Rolling Summary）+ 大工具输出截断与外置（Tool Output Offloading，只给摘要和引用 ID）。
   - **KV Cache 前缀优化（Prompt Caching）** `★`：将静态 System Prompt、固定世界观设定放在前缀最前面，动态指令放尾部，显著降低 TTFT 延迟与 50%~80% 的输入成本。

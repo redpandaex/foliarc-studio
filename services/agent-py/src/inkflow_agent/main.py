@@ -91,6 +91,7 @@ async def meta() -> dict[str, Any]:
         "version": APP_VERSION,
         "llm_base_url": settings.llm_base_url,
         "llm_configured": settings.llm_configured,
+        "skills": app.state.run_manager.skill_registry.list_catalog(),
         "model_aliases": {
             "writer-main": settings.llm_model_writer_main,
             "critic-reasoner": settings.llm_model_critic_reasoner,

@@ -3,11 +3,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 RunAction = Literal["CONTINUE", "REWRITE", "OUTLINE"]
+RunMode = Literal["AGENT", "DIRECT"]
 ControlSignal = Literal["PAUSE", "CANCEL"]
 
 
 class RunStartRequest(BaseModel):
     run_id: str
+    owner_id: str = ""
+    book_id: str = ""
+    chapter_no: int | None = None
+    mode: RunMode = "AGENT"
     trace_id: str | None = None
     action: RunAction = "CONTINUE"
     model_alias: str = "writer-main"
@@ -21,6 +26,10 @@ class RunStartRequest(BaseModel):
 
 class RunResumeRequest(BaseModel):
     run_id: str
+    owner_id: str = ""
+    book_id: str = ""
+    chapter_no: int | None = None
+    mode: RunMode = "AGENT"
     trace_id: str | None = None
     action: RunAction = "CONTINUE"
     model_alias: str = "writer-main"

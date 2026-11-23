@@ -18,6 +18,7 @@ public class AgentRunEntity {
     private UUID bookId;
     private UUID chapterId;
     private UUID ownerId;
+    private String mode;
     private String action;
     private String modelAlias;
     private String instruction;
@@ -45,6 +46,8 @@ public class AgentRunEntity {
     public void setChapterId(UUID chapterId) { this.chapterId = chapterId; }
     public UUID getOwnerId() { return ownerId; }
     public void setOwnerId(UUID ownerId) { this.ownerId = ownerId; }
+    public String getMode() { return mode; }
+    public void setMode(String mode) { this.mode = mode; }
     public String getAction() { return action; }
     public void setAction(String action) { this.action = action; }
     public String getModelAlias() { return modelAlias; }

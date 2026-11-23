@@ -1,0 +1,440 @@
+"use client";
+
+import { useEffect, useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  loreApi,
+  type CharacterItem,
+  type ForeshadowingItem,
+  type WorldEntryItem,
+} from "@/lib/api";
+
+interface LorePanelProps {
+  bookId: string;
+}
+
+export function LorePanel({ bookId }: LorePanelProps) {
+  const [subTab, setSubTab] = useState<"characters" | "world" | "foreshadowing">(
+    "characters",
+  );
+  const [characters, setCharacters] = useState<CharacterItem[]>([]);
+  const [worldEntries, setWorldEntries] = useState<WorldEntryItem[]>([]);
+  const [foreshadowings, setForeshadowings] = useState<ForeshadowingItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Character form
+  const [cName, setCName] = useState("");
+  const [cRole, setCRole] = useState("PROTAGONIST");
+  const [cRealm, setCRealm] = useState("");
+  const [cLocation, setCLocation] = useState("");
+  const [cNotes, setCNotes] = useState("");
+  const [cInventory, setCInventory] = useState("");
+
+  // World entry form
+  const [wCat, setWCat] = useState("WORLD");
+  const [wTitle, setWTitle] = useState("");
+  const [wContent, setWContent] = useState("");
+
+  // Foreshadowing form
+  const [fTitle, setFTitle] = useState("");
+  const [fDesc, setFDesc] = useState("");
+  const [fChapter, setFChapter] = useState("1");
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      loreApi.listCharacters(bookId),
+      loreApi.listWorldbook(bookId),
+      loreApi.listForeshadowings(bookId),
+    ])
+      .then(([chars, worlds, clues]) => {
+        if (!active) return;
+        setCharacters(chars);
+        setWorldEntries(worlds);
+        setForeshadowings(clues);
+        setError(null);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : "加载设定库失败");
+      });
+    return () => {
+      active = false;
+    };
+  }, [bookId]);
+
+  async function handleAddCharacter(e: FormEvent) {
+    e.preventDefault();
+    if (!cName.trim()) return;
+    setError(null);
+    try {
+      const saved = await loreApi.upsertCharacter(bookId, {
+        name: cName.trim(),
+        roleType: cRole,
+        realmOrLevel: cRealm.trim(),
+        currentLocation: cLocation.trim(),
+        statusNotes: cNotes.trim(),
+        inventory: cInventory.trim(),
+      });
+      setCharacters((prev) => {
+        const rest = prev.filter((item) => item.id !== saved.id);
+        return [saved, ...rest];
+      });
+      setCName("");
+      setCRealm("");
+      setCLocation("");
+      setCNotes("");
+      setCInventory("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存人物失败");
+    }
+  }
+
+  async function handleAddWorld(e: FormEvent) {
+    e.preventDefault();
+    if (!wTitle.trim()) return;
+    setError(null);
+    try {
+      const saved = await loreApi.createWorldEntry(bookId, {
+        category: wCat,
+        title: wTitle.trim(),
+        content: wContent.trim(),
+      });
+      setWorldEntries((prev) => [saved, ...prev]);
+      setWTitle("");
+      setWContent("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存世界观失败");
+    }
+  }
+
+  async function handleAddForeshadowing(e: FormEvent) {
+    e.preventDefault();
+    if (!fTitle.trim()) return;
+    setError(null);
+    try {
+      const chapterNo = Number.parseInt(fChapter, 10);
+      const saved = await loreApi.upsertForeshadowing(bookId, {
+        title: fTitle.trim(),
+        description: fDesc.trim(),
+        plantedChapterNo: Number.isNaN(chapterNo) ? undefined : chapterNo,
+        status: "OPEN",
+      });
+      setForeshadowings((prev) => {
+        const rest = prev.filter((item) => item.id !== saved.id);
+        return [saved, ...rest];
+      });
+      setFTitle("");
+      setFDesc("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存伏笔失败");
+    }
+  }
+
+  async function handleToggleForeshadowing(item: ForeshadowingItem) {
+    const nextStatus = item.status === "OPEN" ? "RESOLVED" : "OPEN";
+    const saved = await loreApi.upsertForeshadowing(bookId, {
+      title: item.title,
+      description: item.description,
+      plantedChapterNo: item.plantedChapterNo ?? undefined,
+      status: nextStatus,
+    });
+    setForeshadowings((prev) => prev.map((f) => (f.id === saved.id ? saved : f)));
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
+      <div className="border-b border-border bg-muted/40 px-3 py-2 font-mono text-[10px] text-muted-foreground">
+        MCP: novel-lore-mcp · Agent 创作时自动检索
+      </div>
+
+      <div className="grid grid-cols-3 border-b border-border text-[11px] font-medium">
+        <button
+          type="button"
+          onClick={() => setSubTab("characters")}
+          className={`py-2 ${
+            subTab === "characters"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground"
+          }`}
+        >
+          人物 ({characters.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab("world")}
+          className={`py-2 ${
+            subTab === "world"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground"
+          }`}
+        >
+          世界观 ({worldEntries.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab("foreshadowing")}
+          className={`py-2 ${
+            subTab === "foreshadowing"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground"
+          }`}
+        >
+          伏笔 ({foreshadowings.length})
+        </button>
+      </div>
+
+      {error && (
+        <div className="border-b border-destructive/40 bg-destructive/10 px-3 py-1.5 text-[11px] text-destructive">
+          {error}
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {subTab === "characters" && (
+          <>
+            <form onSubmit={handleAddCharacter} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
+              <div className="flex gap-1.5">
+                <input
+                  required
+                  value={cName}
+                  onChange={(e) => setCName(e.target.value)}
+                  placeholder="角色姓名（如：林青）"
+                  className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+                <select
+                  value={cRole}
+                  onChange={(e) => setCRole(e.target.value)}
+                  className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                >
+                  <option value="PROTAGONIST">主角</option>
+                  <option value="SUPPORTING">配角</option>
+                  <option value="ANTAGONIST">反派</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <input
+                  value={cRealm}
+                  onChange={(e) => setCRealm(e.target.value)}
+                  placeholder="境界/实力"
+                  className="rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+                <input
+                  value={cLocation}
+                  onChange={(e) => setCLocation(e.target.value)}
+                  placeholder="当前位置"
+                  className="rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              </div>
+              <input
+                value={cInventory}
+                onChange={(e) => setCInventory(e.target.value)}
+                placeholder="持有法宝/物品（如：玄铁剑）"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <input
+                value={cNotes}
+                onChange={(e) => setCNotes(e.target.value)}
+                placeholder="当前状态/伤势/性格备注"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <Button type="submit" size="xs" className="w-full">
+                保存 / 更新人物设定
+              </Button>
+            </form>
+
+            <ul className="space-y-2">
+              {characters.map((ch) => (
+                <li key={ch.id} className="rounded-lg border border-border bg-background p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">{ch.name}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+                        {ch.realmOrLevel || ch.roleType}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void loreApi
+                            .deleteCharacter(bookId, ch.id)
+                            .then(() =>
+                              setCharacters((prev) => prev.filter((x) => x.id !== ch.id)),
+                            )
+                        }
+                        className="text-destructive hover:underline"
+                      >
+                        删
+                      </button>
+                    </div>
+                  </div>
+                  {ch.currentLocation && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      位置：{ch.currentLocation}
+                    </div>
+                  )}
+                  {ch.inventory && (
+                    <div className="text-[11px] text-muted-foreground">
+                      物品：{ch.inventory}
+                    </div>
+                  )}
+                  {ch.statusNotes && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      状态：{ch.statusNotes}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {subTab === "world" && (
+          <>
+            <form onSubmit={handleAddWorld} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
+              <div className="flex gap-1.5">
+                <select
+                  value={wCat}
+                  onChange={(e) => setWCat(e.target.value)}
+                  className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                >
+                  <option value="WORLD">世界观</option>
+                  <option value="POWER_SYSTEM">力量体系</option>
+                  <option value="FACTION">宗门势力</option>
+                  <option value="ITEM">器物法宝</option>
+                  <option value="LOCATION">地标秘境</option>
+                  <option value="RULE">铁律禁忌</option>
+                </select>
+                <input
+                  required
+                  value={wTitle}
+                  onChange={(e) => setWTitle(e.target.value)}
+                  placeholder="词条标题（如：星渊禁地）"
+                  className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              </div>
+              <textarea
+                rows={3}
+                value={wContent}
+                onChange={(e) => setWContent(e.target.value)}
+                placeholder="详细规则与背景描述..."
+                className="w-full resize-none rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <Button type="submit" size="xs" className="w-full">
+                添加世界观词条
+              </Button>
+            </form>
+
+            <ul className="space-y-2">
+              {worldEntries.map((w) => (
+                <li key={w.id} className="rounded-lg border border-border bg-background p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">{w.title}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+                        {w.category}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void loreApi
+                            .deleteWorldEntry(bookId, w.id)
+                            .then(() =>
+                              setWorldEntries((prev) => prev.filter((x) => x.id !== w.id)),
+                            )
+                        }
+                        className="text-destructive hover:underline"
+                      >
+                        删
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                    {w.content}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {subTab === "foreshadowing" && (
+          <>
+            <form onSubmit={handleAddForeshadowing} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
+              <div className="flex gap-1.5">
+                <input
+                  required
+                  value={fTitle}
+                  onChange={(e) => setFTitle(e.target.value)}
+                  placeholder="伏笔标题（如：残缺玉佩）"
+                  className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={fChapter}
+                  onChange={(e) => setFChapter(e.target.value)}
+                  placeholder="章节"
+                  className="w-16 rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              </div>
+              <textarea
+                rows={2}
+                value={fDesc}
+                onChange={(e) => setFDesc(e.target.value)}
+                placeholder="埋设细节与预计回收时机..."
+                className="w-full resize-none rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <Button type="submit" size="xs" className="w-full">
+                登记伏笔
+              </Button>
+            </form>
+
+            <ul className="space-y-2">
+              {foreshadowings.map((f) => (
+                <li key={f.id} className="rounded-lg border border-border bg-background p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">{f.title}</span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleForeshadowing(f)}
+                        className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                          f.status === "OPEN"
+                            ? "bg-amber-500/15 text-amber-600"
+                            : "bg-emerald-500/15 text-emerald-600"
+                        }`}
+                      >
+                        {f.status === "OPEN" ? "未回收" : "已回收"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void loreApi
+                            .deleteForeshadowing(bookId, f.id)
+                            .then(() =>
+                              setForeshadowings((prev) => prev.filter((x) => x.id !== f.id)),
+                            )
+                        }
+                        className="text-destructive hover:underline"
+                      >
+                        删
+                      </button>
+                    </div>
+                  </div>
+                  {f.plantedChapterNo && (
+                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                      埋设于第 {f.plantedChapterNo} 章
+                    </div>
+                  )}
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {f.description}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
