@@ -18,7 +18,14 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import studio.foliarc.biz.billing.ModelPricing;
+import studio.foliarc.biz.billing.service.BillingService;
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.gateway.RedisRateLimiterService;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
@@ -42,6 +49,10 @@ public class AgentRunService {
     private final ChapterMapper chapterMapper;
     private final WebClient agentWebClient;
     private final StringRedisTemplate redis;
+    private final RedisRateLimiterService rateLimiter;
+    private final BillingService billingService;
+    private final CircuitBreaker agentCircuitBreaker;
+    private final Bulkhead agentBulkhead;
 
     public AgentRunService(
             AgentRunMapper runMapper,
@@ -49,7 +60,11 @@ public class AgentRunService {
             BookService bookService,
             ChapterMapper chapterMapper,
             WebClient agentWebClient,
-            StringRedisTemplate redis
+            StringRedisTemplate redis,
+            RedisRateLimiterService rateLimiter,
+            BillingService billingService,
+            CircuitBreaker agentCircuitBreaker,
+            Bulkhead agentBulkhead
     ) {
         this.runMapper = runMapper;
         this.checkpointMapper = checkpointMapper;
@@ -57,9 +72,12 @@ public class AgentRunService {
         this.chapterMapper = chapterMapper;
         this.agentWebClient = agentWebClient;
         this.redis = redis;
+        this.rateLimiter = rateLimiter;
+        this.billingService = billingService;
+        this.agentCircuitBreaker = agentCircuitBreaker;
+        this.agentBulkhead = agentBulkhead;
     }
 
-    @Transactional
     public RunDtos.RunResponse startRun(UUID ownerId, RunDtos.StartRunRequest req) {
         BookEntity book = bookService.requireOwnedBook(ownerId, req.bookId());
 
@@ -96,6 +114,10 @@ public class AgentRunService {
                 ? "MULTI_AGENT".equals(mode)
                 : Boolean.TRUE.equals(req.requireOutlineApproval());
 
+        // Phase 5 Gateway Guard 1: Atomic Redis + Lua RPM & TPM Dual-Dimension Rate Limit
+        long estTokens = ModelPricing.estimatePromptTokens(mode, chapterContext, instruction);
+        rateLimiter.acquireOrThrow(ownerId, estTokens);
+
         AgentRunEntity run = new AgentRunEntity();
         run.setId(UUID.randomUUID());
         run.setBookId(book.getId());
@@ -113,7 +135,23 @@ public class AgentRunService {
         run.setCachedTokens(0);
         run.setOutputTokens(0);
         run.setRevisionCount(0);
+        run.setFrozenMicros(0L);
+        run.setSettledMicros(0L);
+        run.setBillingStatus("NONE");
         runMapper.insert(run);
+
+        // Phase 5 Gateway Guard 2: Distributed Two-Phase Pre-Freeze (Balance + Monthly Budget Hard-Stop)
+        try {
+            long frozen = billingService.freezeForRun(ownerId, run.getId(), mode, modelAlias);
+            run.setFrozenMicros(frozen);
+            run.setBillingStatus("FROZEN");
+            runMapper.updateById(run);
+        } catch (RuntimeException ex) {
+            run.setStatus("FAILED");
+            run.setErrorMessage(ex.getMessage());
+            runMapper.updateById(run);
+            throw ex;
+        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
@@ -131,7 +169,7 @@ public class AgentRunService {
         body.put("instruction", instruction);
         body.put("require_outline_approval", requireOutlineApproval);
 
-        dispatchToAgent("/internal/v1/runs/start", body, run);
+        dispatchToAgent("/internal/v1/runs/start", body, run, true);
         return toResponse(run);
     }
 
@@ -185,7 +223,6 @@ public class AgentRunService {
         return toResponse(run);
     }
 
-    @Transactional
     public RunDtos.RunResponse resumeRun(UUID ownerId, UUID runId, RunDtos.ResumeRunRequest req) {
         AgentRunEntity run = requireOwnedRun(ownerId, runId);
         if (!"PAUSED".equals(run.getStatus())) {
@@ -197,7 +234,6 @@ public class AgentRunService {
         return dispatchResumeInternal(ownerId, run, null);
     }
 
-    @Transactional
     public RunDtos.RunResponse approveRun(UUID ownerId, UUID runId, RunDtos.ApproveRunRequest req) {
         AgentRunEntity run = requireOwnedRun(ownerId, runId);
         if (!"PAUSED".equals(run.getStatus())) {
@@ -251,11 +287,10 @@ public class AgentRunService {
             body.put("approval_payload", approvalPayload);
         }
 
-        dispatchToAgent("/internal/v1/runs/" + run.getId() + "/resume", body, run);
+        dispatchToAgent("/internal/v1/runs/" + run.getId() + "/resume", body, run, false);
         return toResponse(run);
     }
 
-    @Transactional
     public RunDtos.RunResponse cancelRun(UUID ownerId, UUID runId) {
         AgentRunEntity run = requireOwnedRun(ownerId, runId);
         if ("COMPLETED".equals(run.getStatus()) || "CANCELLED".equals(run.getStatus()) || "FAILED".equals(run.getStatus())) {
@@ -272,6 +307,7 @@ public class AgentRunService {
             if (recordId != null) {
                 run.setLastEventId(recordId.getValue());
             }
+            settleRunIfFrozen(run, 0, "CANCELLED");
             runMapper.updateById(run);
             return toResponse(run);
         }
@@ -281,7 +317,6 @@ public class AgentRunService {
         return toResponse(run);
     }
 
-    @Transactional
     public void updateInternalState(UUID runId, RunDtos.InternalStateUpdateRequest req) {
         AgentRunEntity run = runMapper.selectById(runId);
         if (run == null) {
@@ -324,6 +359,17 @@ public class AgentRunService {
             run.setRevisionCount(req.revisionCount());
         }
         run.setErrorMessage(req.errorMessage());
+
+        // Phase 5: Idempotent Phase-2 Settlement on terminal run states (COMPLETED / CANCELLED / FAILED)
+        if ("COMPLETED".equals(run.getStatus())
+                || "CANCELLED".equals(run.getStatus())
+                || "FAILED".equals(run.getStatus())) {
+            int sandboxCalls = req.sandboxCalls() == null ? 0 : Math.max(0, req.sandboxCalls());
+            settleRunIfFrozen(run, sandboxCalls, run.getStatus());
+            int totalTok = (run.getInputTokens() == null ? 0 : run.getInputTokens())
+                    + (run.getOutputTokens() == null ? 0 : run.getOutputTokens());
+            rateLimiter.recordAdditionalTokens(run.getOwnerId(), totalTok);
+        }
         runMapper.updateById(run);
     }
 
@@ -368,21 +414,60 @@ public class AgentRunService {
         return latest == null ? null : toCheckpoint(latest);
     }
 
-    private void dispatchToAgent(String path, Map<String, Object> body, AgentRunEntity run) {
+    private void settleRunIfFrozen(AgentRunEntity run, int sandboxCalls, String reason) {
+        if (!"FROZEN".equals(run.getBillingStatus())) {
+            return;
+        }
+        long frozen = run.getFrozenMicros() == null ? 0L : run.getFrozenMicros();
+        long settled = billingService.settleRun(
+                run.getOwnerId(),
+                run.getId(),
+                frozen,
+                run.getModelAlias(),
+                run.getInputTokens() == null ? 0 : run.getInputTokens(),
+                run.getCachedTokens() == null ? 0 : run.getCachedTokens(),
+                run.getOutputTokens() == null ? 0 : run.getOutputTokens(),
+                sandboxCalls,
+                reason
+        );
+        run.setSettledMicros(settled);
+        run.setBillingStatus(settled == 0L ? "RELEASED" : "SETTLED");
+    }
+
+    private void dispatchToAgent(String path, Map<String, Object> body, AgentRunEntity run, boolean releaseOnFailure) {
         try {
-            agentWebClient.post()
+            Runnable call = () -> agentWebClient.post()
                     .uri(path)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body)
                     .retrieve()
                     .toBodilessEntity()
                     .block(Duration.ofSeconds(10));
+
+            Runnable decorated = Bulkhead.decorateRunnable(
+                    agentBulkhead,
+                    CircuitBreaker.decorateRunnable(agentCircuitBreaker, call)
+            );
+            decorated.run();
+        } catch (BulkheadFullException ex) {
+            failAndRelease(run, releaseOnFailure, "网关并发舱壁已满，请稍后重试");
+            throw BizException.tooManyRequests("GATEWAY_BULKHEAD_FULL", "当前 AI 生成并发已达上限，请稍后再试");
+        } catch (CallNotPermittedException ex) {
+            failAndRelease(run, releaseOnFailure, "Agent 引擎熔断器已打开，触发快速降级");
+            throw BizException.serviceUnavailable("AGENT_CIRCUIT_OPEN", "AI 引擎短时波动已触发网关熔断保护，请 15 秒后重试");
         } catch (Exception ex) {
-            run.setStatus("FAILED");
-            run.setErrorMessage("无法连接 Python Agent 引擎: " + ex.getMessage());
-            runMapper.updateById(run);
+            failAndRelease(run, releaseOnFailure, "无法连接 Python Agent 引擎: " + ex.getMessage());
             throw new BizException(HttpStatus.SERVICE_UNAVAILABLE, "AGENT_UNAVAILABLE", "Python Agent 服务暂不可用，请确认 agent-py 已启动");
         }
+    }
+
+    private void failAndRelease(AgentRunEntity run, boolean releaseOnFailure, String errMsg) {
+        run.setStatus("FAILED");
+        run.setErrorMessage(errMsg);
+        if (releaseOnFailure) {
+            settleRunIfFrozen(run, 0, "DISPATCH_FAILED");
+        }
+        runMapper.updateById(run);
     }
 
     private void signalAgentControl(UUID runId, String signal) {

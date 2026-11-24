@@ -69,3 +69,10 @@ foliarc:
     enabled: ${OUTBOX_RELAY_ENABLED:true}
     poll-interval-ms: ${OUTBOX_POLL_INTERVAL_MS:1000}
     max-retries: ${OUTBOX_MAX_RETRIES:6}
+  gateway:
+    rpm-limit: ${GATEWAY_RPM_LIMIT:20}
+    tpm-limit: ${GATEWAY_TPM_LIMIT:120000}
+    bulkhead-max-concurrent: ${GATEWAY_BULKHEAD_MAX_CONCURRENT:20}
+  billing:
+    starter-grant-micros: ${BILLING_STARTER_GRANT_MICROS:50000000}
+    default-monthly-budget-micros: ${BILLING_DEFAULT_MONTHLY_BUDGET_MICROS:100000000}

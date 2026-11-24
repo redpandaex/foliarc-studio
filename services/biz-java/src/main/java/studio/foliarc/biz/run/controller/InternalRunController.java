@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import studio.foliarc.biz.billing.dto.BillingDtos;
+import studio.foliarc.biz.billing.service.BillingService;
 import studio.foliarc.biz.common.BizException;
 import studio.foliarc.biz.run.dto.RunDtos;
 import studio.foliarc.biz.run.service.AgentRunService;
@@ -18,13 +20,16 @@ import studio.foliarc.biz.run.service.AgentRunService;
 public class InternalRunController {
 
     private final AgentRunService runService;
+    private final BillingService billingService;
     private final byte[] expectedTokenBytes;
 
     public InternalRunController(
             AgentRunService runService,
+            BillingService billingService,
             @Value("${foliarc.agent.internal-token}") String internalToken
     ) {
         this.runService = runService;
+        this.billingService = billingService;
         this.expectedTokenBytes = internalToken.getBytes(StandardCharsets.UTF_8);
     }
 
@@ -61,6 +66,16 @@ public class InternalRunController {
             return Map.of("found", false);
         }
         return Map.of("found", true, "checkpoint", latest);
+    }
+
+    @PostMapping("/guardrails/audit")
+    @ResponseStatus(HttpStatus.CREATED)
+    public void recordGuardrailAudit(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestBody BillingDtos.InternalGuardrailAuditRequest body
+    ) {
+        verifyToken(token);
+        billingService.recordGuardrailAudit(body);
     }
 
     private void verifyToken(String token) {

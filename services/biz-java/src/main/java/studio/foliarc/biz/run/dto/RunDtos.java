@@ -104,7 +104,8 @@ public final class RunDtos {
             @JsonProperty("interrupt_type") String interruptType,
             @JsonProperty("interrupt_payload_json") String interruptPayloadJson,
             @JsonProperty("route_intent") String routeIntent,
-            @JsonProperty("revision_count") Integer revisionCount
+            @JsonProperty("revision_count") Integer revisionCount,
+            @JsonProperty("sandbox_calls") Integer sandboxCalls
     ) {
     }
 

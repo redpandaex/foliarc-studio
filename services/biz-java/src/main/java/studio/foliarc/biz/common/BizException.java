@@ -44,4 +44,12 @@ public class BizException extends RuntimeException {
     public static BizException serviceUnavailable(String code, String message) {
         return new BizException(HttpStatus.SERVICE_UNAVAILABLE, code, message);
     }
+
+    public static BizException paymentRequired(String code, String message) {
+        return new BizException(HttpStatus.PAYMENT_REQUIRED, code, message);
+    }
+
+    public static BizException tooManyRequests(String code, String message) {
+        return new BizException(HttpStatus.TOO_MANY_REQUESTS, code, message);
+    }
 }

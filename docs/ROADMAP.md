@@ -153,11 +153,11 @@ flowchart LR
   - **多层意图路由**：规则/关键词快速通道 -> Embedding 语义路由 -> 轻量小模型分类 -> LLM 决策。
   - **智能模型路由（Model Routing）** `★`：简单任务（摘要提取、意图分类、实体抽取）路由至廉价快模型；核心任务（高潮剧情创作、逻辑审稿）路由至旗舰模型。
   - **容灾降级（Fallback Chain）**：主模型 429 限流或 5xx 超时时自动无缝切换备用模型/厂商。
-- [ ] **2.9 Agent 准确性与安全护栏（Guardrails）**
+- [x] **2.9 Agent 准确性与安全护栏（Guardrails）**
   - **输入护栏**：Prompt 注入检测（防套取系统 Prompt）、越狱拦截、敏感词/内容合规审核（国内网文合规刚需）。
   - **输出护栏**：结构化 Schema 校验、**小说一致性核验**（对比人物当前状态与时间线防止幻觉/吃书）。
   - **高危工具审批**：批量修改世界观或覆盖已发布章节等写操作必须经过用户确认。
-- [ ] **2.10 Agent 代码与工具执行沙箱（Hardened Docker Sandbox）** `★`
+- [x] **2.10 Agent 代码与工具执行沙箱（Hardened Docker Sandbox）** `★`
   - **业务落地场景**：小说角色出场/节奏/情绪曲线 Python 分析、战力/资产/时间线数值精确校验、Skill 附带脚本及 EPUB/PDF 成品导出、不可信文档解析隔离。
   - **抽象与实现**：定义 `SandboxProvider` 统一接口，亲手实现 **`DockerSandboxProvider`**，配置化预留 **gVisor (`runsc`)** 与 **E2B / Firecracker MicroVM** 扩展口。
   - **六重安全硬化**：`--network=none`（防 SSRF 与外泄）、`--read-only` + 限额 `tmpfs` `/tmp`、`--cap-drop=ALL` + `no-new-privileges` + 非 root 用户、`--memory`/`--cpus`/`--pids-limit`（防 OOM 与 Fork Bomb）、零宿主机密钥/环境变量透传、严格执行超时强杀。
@@ -191,15 +191,15 @@ flowchart LR
 
 ### 模块 4：企业级业务中台、AI 网关与计费（Java 21 Spring Boot）
 
-- [ ] **4.1 领域建模与多租户权限体系**
+- [x] **4.1 领域建模与多租户权限体系**
   - Spring Security + JWT（Access Token + Refresh Token 轮换）+ RBAC 权限控制 + 资源归属校验（防止越权读写他人小说/知识库）。
   - **章节 Git 式版本控制** `★`：支持历史快照、版本对比、一键回滚；Java 与 Python 内部服务间通过签名/内部 JWT 鉴权。
-- [ ] **4.2 统一 AI 网关与流式代理（Gateway & SSE Bridge）**
+- [x] **4.2 统一 AI 网关与流式代理（Gateway & SSE Bridge）**
   - Java 作为统一入口代理 Python 的 SSE 流（开启 JDK 21 虚拟线程，结合 `SseEmitter` / `StreamingResponseBody` 或 WebFlux `WebClient`）。
   - **Redis Streams 流缓冲层** `★`：Python 产出的每个事件先写入 Redis Stream（`XADD`，设 TTL）并推送给网关；网关断线重连时直接从 `Last-Event-ID` 位置 `XREAD` 补发，实现高可用断点续连。
   - **多维度限流**：Redis + Lua 脚本实现令牌桶/滑动窗口，同时控制 **RPM（每分钟请求数）** 和 **TPM（每分钟 Token 数）** `★`。
   - **韧性保护**：集成 Resilience4j 实现超时控制、熔断降级、舱壁隔离（Bulkhead，防止慢 LLM 请求拖垮业务线程池）。
-- [ ] **4.3 企业级计费、配额与成本管控（Billing & Cost）** `★`
+- [x] **4.3 企业级计费、配额与成本管控（Billing & Cost）** `★`
   - **预冻结 + 精准结算模型（两阶段扣费）**：
     1. 请求前根据模型单价与最大配额 **预冻结（Freeze）** 积分/余额。
     2. Agent 结束（或中断取消）后，按实际消耗的 `input_tokens`、`cached_tokens`、`output_tokens` + 工具/沙箱调用费率进行 **精准结算（Settle）**，退还多余冻结额度。

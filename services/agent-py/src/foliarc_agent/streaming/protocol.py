@@ -66,4 +66,5 @@ class RunStateCallback(BaseModel):
     interrupt_payload_json: str | None = None
     route_intent: str | None = None
     revision_count: int | None = None
+    sandbox_calls: int = 0
     extra: dict[str, Any] = Field(default_factory=dict)

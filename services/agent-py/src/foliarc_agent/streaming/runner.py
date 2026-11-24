@@ -10,6 +10,7 @@ import httpx
 from redis.asyncio import Redis
 
 from foliarc_agent.agent.context import ContextManager
+from foliarc_agent.agent.guardrails import GuardrailEngine
 from foliarc_agent.agent.loop import AgentLoopConfig, ReActAgentLoop
 from foliarc_agent.agent.mcp_client import McpLoreClient
 from foliarc_agent.agent.multi_agent import (
@@ -20,6 +21,7 @@ from foliarc_agent.agent.multi_agent import (
 )
 from foliarc_agent.agent.prompts import PromptRegistry
 from foliarc_agent.agent.router import FallbackStreamClient, IntentAndModelRouter
+from foliarc_agent.agent.sandbox import SandboxProvider, StubSandboxProvider
 from foliarc_agent.agent.skills import SkillRegistry
 from foliarc_agent.agent.tools import ToolRegistry, register_builtin_novel_tools
 from foliarc_agent.config import Settings
@@ -101,6 +103,8 @@ class RunManager:
         rag_retriever: HybridRagRetriever | None = None,
         embedder: EmbeddingProvider | None = None,
         checkpoint_store: CheckpointStore | None = None,
+        sandbox_provider: SandboxProvider | None = None,
+        guardrails: GuardrailEngine | None = None,
         enable_mcp: bool = True,
     ) -> None:
         self._settings = settings
@@ -113,6 +117,8 @@ class RunManager:
         self._rag_retriever = rag_retriever
         self._router = IntentAndModelRouter(settings=settings, embedder=embedder)
         self._checkpoint_store = checkpoint_store or HttpBizCheckpointStore(settings)
+        self._sandbox = sandbox_provider or StubSandboxProvider()
+        self._guardrails = guardrails or GuardrailEngine(settings)
         self._enable_mcp = enable_mcp
         self._active: dict[str, _ActiveRun] = {}
 
@@ -290,6 +296,30 @@ class RunManager:
             return last_event_id
 
         try:
+            # Phase 5 Input Guardrail: block Prompt Injection / Jailbreak / Compliance before burning tokens
+            in_verdict = self._guardrails.check_input(instruction, chapter_context)
+            if not in_verdict.allowed:
+                await self._guardrails.report_audit(
+                    verdict=in_verdict,
+                    user_id=owner_id,
+                    book_id=book_id,
+                    run_id=run_id,
+                    detail=f"[{in_verdict.rule_code}] {instruction[:200]}",
+                )
+                await self._handle_failure(
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    seq=seq,
+                    accumulated_text=full_text,
+                    code=f"GUARDRAIL_{in_verdict.rule_code}",
+                    message=in_verdict.message,
+                    retryable=False,
+                    in_tok=prior_input_tokens,
+                    cached_tok=prior_cached_tokens,
+                    out_tok=prior_output_tokens,
+                )
+                return
+
             async with contextlib.AsyncExitStack() as stack:
                 tool_registry = ToolRegistry()
                 mcp_tool_names: list[str] = []
@@ -306,6 +336,7 @@ class RunManager:
                         chapter_no=chapter_no,
                         chapter_context=chapter_context,
                         rag_retriever=self._rag_retriever,
+                        sandbox_provider=self._sandbox,
                     )
                     if self._enable_mcp and owner_id and book_id:
                         try:
@@ -592,6 +623,30 @@ class RunManager:
                 await emit_next(
                     "done",
                     {"status": "cancelled", "accumulated_chars": len(full_text)},
+                )
+                return
+
+            # Phase 5 Output Guardrail: detect secret / system-prompt leak or compliance breach
+            out_verdict = self._guardrails.check_output(full_text)
+            if not out_verdict.allowed:
+                await self._guardrails.report_audit(
+                    verdict=out_verdict,
+                    user_id=owner_id,
+                    book_id=book_id,
+                    run_id=run_id,
+                    detail=out_verdict.message,
+                )
+                await self._handle_failure(
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    seq=seq,
+                    accumulated_text="",
+                    code=f"GUARDRAIL_{out_verdict.rule_code}",
+                    message=out_verdict.message,
+                    retryable=False,
+                    in_tok=total_in,
+                    cached_tok=total_cached,
+                    out_tok=total_out,
                 )
                 return
 

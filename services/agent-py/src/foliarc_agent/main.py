@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from foliarc_agent.agent.guardrails import GuardrailEngine
+from foliarc_agent.agent.sandbox import create_sandbox_provider
 from foliarc_agent.config import get_settings
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
@@ -21,7 +23,7 @@ from foliarc_agent.streaming.protocol import (
 )
 from foliarc_agent.streaming.runner import RunManager
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 
 class InternalRagSearchRequest(BaseModel):
@@ -33,6 +35,12 @@ class InternalRagSearchRequest(BaseModel):
     doc_type: str | None = None
     rewrite_query: bool = False
     chapter_context: str = ""
+
+
+class InternalSandboxExecRequest(BaseModel):
+    run_id: str = "manual-check"
+    code: str = Field(..., min_length=1, max_length=10000)
+    timeout_seconds: float = Field(default=6.0, ge=1.0, le=20.0)
 
 
 @asynccontextmanager
@@ -55,6 +63,8 @@ async def lifespan(app: FastAPI):
         embedder=embedder,
         memory_extractor=memory_extractor,
     )
+    guardrails = GuardrailEngine(settings)
+    sandbox = create_sandbox_provider(settings)
 
     app.state.redis = redis
     app.state.embedder = embedder
@@ -62,16 +72,22 @@ async def lifespan(app: FastAPI):
     app.state.vector_store = vector_store
     app.state.rag_retriever = rag_retriever
     app.state.rag_worker = rag_worker
+    app.state.guardrails = guardrails
+    app.state.sandbox = sandbox
     app.state.run_manager = RunManager(
         settings=settings,
         redis=redis,
         rag_retriever=rag_retriever,
         embedder=embedder,
+        sandbox_provider=sandbox,
+        guardrails=guardrails,
     )
     rag_worker.start()
+    await sandbox.start()
     try:
         yield
     finally:
+        await sandbox.shutdown()
         await rag_worker.stop()
         await app.state.run_manager.shutdown()
         await redis.aclose()
@@ -80,7 +96,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="FoliarcStudio Agent Engine",
     version=APP_VERSION,
-    description="Python Agent Loop, Tool/Skill/MCP, Context Compression, Milvus Hybrid RAG & Sandbox Engine",
+    description="Python Agent Loop, Tool/Skill/MCP, Multi-Agent, Milvus Hybrid RAG, Guardrails & Hardened Docker Sandbox",
     lifespan=lifespan,
 )
 
@@ -106,6 +122,7 @@ async def health() -> dict[str, Any]:
         "llm_configured": settings.llm_configured,
         "embedding_mode": app.state.embedder.mode if hasattr(app.state, "embedder") else "local_fallback",
         "rerank_mode": app.state.reranker.mode if hasattr(app.state, "reranker") else "local_fallback",
+        "sandbox_provider": app.state.sandbox.provider_name if hasattr(app.state, "sandbox") else "stub",
     }
 
 
@@ -120,6 +137,7 @@ async def readiness(response: Response) -> dict[str, Any]:
 
     milvus_up = await app.state.vector_store.health_check() if hasattr(app.state, "vector_store") else False
     mq_connected = bool(app.state.rag_worker.connected) if hasattr(app.state, "rag_worker") else False
+    sandbox_up = await app.state.sandbox.health_check() if hasattr(app.state, "sandbox") else False
 
     ready = redis_status == "up"
     if not ready:
@@ -132,6 +150,7 @@ async def readiness(response: Response) -> dict[str, Any]:
             "redis": redis_status,
             "milvus": "up" if milvus_up else "offline",
             "rabbitmq_worker": "connected" if mq_connected else "offline",
+            "docker_sandbox": "up" if sandbox_up else "stub",
         },
     }
 
@@ -156,6 +175,8 @@ async def meta() -> dict[str, Any]:
             "hitl_interrupt": "OUTLINE_APPROVAL",
             "max_revisions": 2,
         },
+        "sandbox": app.state.sandbox.stats(),
+        "guardrails_enabled": settings.guardrails_enabled,
         "skills": app.state.run_manager.skill_registry.list_catalog(),
         "model_aliases": {
             "writer-main": settings.llm_model_writer_main,
@@ -164,6 +185,29 @@ async def meta() -> dict[str, Any]:
             "embed": settings.llm_model_embed,
             "rerank": settings.llm_model_rerank,
         },
+    }
+
+
+@app.post(
+    "/internal/v1/sandbox/exec",
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_sandbox_exec(req: InternalSandboxExecRequest) -> dict[str, Any]:
+    res = await app.state.sandbox.exec_python(
+        run_id=req.run_id,
+        code=req.code,
+        timeout_seconds=req.timeout_seconds,
+    )
+    return {
+        "success": res.success,
+        "exit_code": res.exit_code,
+        "stdout": res.stdout,
+        "stderr": res.stderr,
+        "duration_ms": res.duration_ms,
+        "provider": res.provider,
+        "container_id": res.container_id,
+        "from_warm_pool": res.from_warm_pool,
+        "timed_out": res.timed_out,
     }
 
 

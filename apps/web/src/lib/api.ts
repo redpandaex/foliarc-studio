@@ -207,6 +207,70 @@ export interface StructuredMemorySnapshot {
   timelineEvents: TimelineEventItem[];
 }
 
+export interface BillingAccountSummary {
+  userId: string;
+  balanceMicros: number;
+  balanceCredits: number;
+  frozenMicros: number;
+  frozenCredits: number;
+  monthlyBudgetMicros: number;
+  monthlyBudgetCredits: number;
+  monthlySpentMicros: number;
+  monthlySpentCredits: number;
+  budgetMonth: string;
+  budgetUsageRatio: number;
+}
+
+export interface BillingLedgerEntry {
+  id: string;
+  runId: string | null;
+  requestId: string;
+  entryType: "GRANT" | "TOPUP" | "FREEZE" | "SETTLE" | "RELEASE" | string;
+  amountMicros: number;
+  amountCredits: number;
+  balanceAfterMicros: number;
+  balanceAfterCredits: number;
+  frozenAfterMicros: number;
+  modelAlias: string | null;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  cacheSavedMicros: number;
+  cacheSavedCredits: number;
+  sandboxCalls: number;
+  description: string;
+  createdAt: string | null;
+}
+
+export interface ModelCostStat {
+  modelAlias: string;
+  runsCount: number;
+  totalSpentMicros: number;
+  totalSpentCredits: number;
+  totalInputTokens: number;
+  totalCachedTokens: number;
+  totalOutputTokens: number;
+  totalCacheSavedMicros: number;
+}
+
+export interface GatewayStatusInfo {
+  circuitBreakerState: string;
+  circuitBreakerFailureRate: number;
+  bulkheadAvailableCalls: number;
+  bulkheadMaxConcurrentCalls: number;
+  rpmLimit: number;
+  tpmLimit: number;
+}
+
+export interface BillingDashboardData {
+  account: BillingAccountSummary;
+  totalCacheSavedCredits: number;
+  cacheHitRatio: number;
+  modelBreakdown: ModelCostStat[];
+  gateway: GatewayStatusInfo;
+  recentLedger: BillingLedgerEntry[];
+}
+
 export class ApiClientError extends Error {
   status: number;
   code: string;
@@ -736,6 +800,24 @@ export const memoryApi = {
   triggerExtract(bookId: string, chapterId: string): Promise<{ queued: boolean }> {
     return request(`/api/v1/books/${bookId}/memory/chapters/${chapterId}/extract`, {
       method: "POST",
+    });
+  },
+};
+
+export const billingApi = {
+  dashboard(): Promise<BillingDashboardData> {
+    return request<BillingDashboardData>("/api/v1/billing/dashboard");
+  },
+  topUp(amountCredits: number, requestId?: string): Promise<BillingAccountSummary> {
+    return request<BillingAccountSummary>("/api/v1/billing/topup", {
+      method: "POST",
+      body: JSON.stringify({ amountCredits, requestId }),
+    });
+  },
+  updateBudget(monthlyBudgetCredits: number): Promise<BillingAccountSummary> {
+    return request<BillingAccountSummary>("/api/v1/billing/budget", {
+      method: "PUT",
+      body: JSON.stringify({ monthlyBudgetCredits }),
     });
   },
 };

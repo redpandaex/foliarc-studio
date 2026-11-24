@@ -14,7 +14,11 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import studio.foliarc.biz.billing.service.BillingService;
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.gateway.RedisRateLimiterService;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
 import studio.foliarc.biz.novel.service.BookService;
 import studio.foliarc.biz.run.dto.RunDtos;
@@ -34,9 +38,12 @@ class MultiAgentCheckpointTests {
         ChapterMapper chapterMapper = mock(ChapterMapper.class);
         WebClient webClient = mock(WebClient.class);
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        RedisRateLimiterService rateLimiter = mock(RedisRateLimiterService.class);
+        BillingService billingService = mock(BillingService.class);
 
         AgentRunService service = new AgentRunService(
-                runMapper, checkpointMapper, bookService, chapterMapper, webClient, redis
+                runMapper, checkpointMapper, bookService, chapterMapper, webClient, redis,
+                rateLimiter, billingService, CircuitBreaker.ofDefaults("test"), Bulkhead.ofDefaults("test")
         );
 
         UUID ownerId = UUID.randomUUID();

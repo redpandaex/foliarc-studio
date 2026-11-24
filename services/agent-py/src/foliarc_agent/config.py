@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     rerank_base_url: str = ""
     rerank_api_key: str = ""
 
+    # --- Phase 5: Guardrails & Hardened Docker Sandbox ---
+    guardrails_enabled: bool = True
+    sandbox_provider: str = "docker"  # "docker" | "stub" (extensible: "gvisor", "e2e/e2b")
+    sandbox_docker_socket: str = "/var/run/docker.sock"
+    sandbox_docker_image: str = "python:3.12-slim"
+    sandbox_docker_runtime: str = ""  # set "runsc" to enable gVisor kernel isolation
+    sandbox_pool_size: int = 2
+    sandbox_timeout_seconds: float = 8.0
+    sandbox_memory_mb: int = 128
+    sandbox_cpu_quota: float = 0.5
+    sandbox_pids_limit: int = 32
+    sandbox_max_age_seconds: int = 180
+
     @property
     def redis_url(self) -> str:
         if self.redis_password:

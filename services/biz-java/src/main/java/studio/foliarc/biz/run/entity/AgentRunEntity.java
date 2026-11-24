@@ -36,6 +36,9 @@ public class AgentRunEntity {
     private String interruptPayloadJson;
     private String routeIntent;
     private Integer revisionCount;
+    private Long frozenMicros;
+    private Long settledMicros;
+    private String billingStatus;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -87,6 +90,12 @@ public class AgentRunEntity {
     public void setRouteIntent(String routeIntent) { this.routeIntent = routeIntent; }
     public Integer getRevisionCount() { return revisionCount; }
     public void setRevisionCount(Integer revisionCount) { this.revisionCount = revisionCount; }
+    public Long getFrozenMicros() { return frozenMicros; }
+    public void setFrozenMicros(Long frozenMicros) { this.frozenMicros = frozenMicros; }
+    public Long getSettledMicros() { return settledMicros; }
+    public void setSettledMicros(Long settledMicros) { this.settledMicros = settledMicros; }
+    public String getBillingStatus() { return billingStatus; }
+    public void setBillingStatus(String billingStatus) { this.billingStatus = billingStatus; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
