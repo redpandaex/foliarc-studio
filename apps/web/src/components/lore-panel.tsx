@@ -9,6 +9,21 @@ import {
   type WorldEntryItem,
 } from "@/lib/api";
 
+const ROLE_LABELS: Record<string, string> = {
+  PROTAGONIST: "主角",
+  SUPPORTING: "配角",
+  ANTAGONIST: "反派",
+};
+
+const WORLD_CATEGORY_LABELS: Record<string, string> = {
+  WORLD: "世界观",
+  POWER_SYSTEM: "力量体系",
+  FACTION: "宗门势力",
+  ITEM: "器物法宝",
+  LOCATION: "地标秘境",
+  RULE: "铁律禁忌",
+};
+
 interface LorePanelProps {
   bookId: string;
 }
@@ -144,8 +159,8 @@ export function LorePanel({ bookId }: LorePanelProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
-      <div className="border-b border-border bg-muted/40 px-3 py-2 font-mono text-[10px] text-muted-foreground">
-        MCP: novel-lore-mcp · Agent 创作时自动检索
+      <div className="border-b border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+        维护人物、世界观与伏笔，AI 创作时会自动参考并保持前后一致
       </div>
 
       <div className="grid grid-cols-3 border-b border-border text-[11px] font-medium">
@@ -249,8 +264,8 @@ export function LorePanel({ bookId }: LorePanelProps) {
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold">{ch.name}</span>
                     <div className="flex items-center gap-1.5">
-                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-                        {ch.realmOrLevel || ch.roleType}
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                        {ch.realmOrLevel || ROLE_LABELS[ch.roleType] || ch.roleType}
                       </span>
                       <button
                         type="button"
@@ -330,8 +345,8 @@ export function LorePanel({ bookId }: LorePanelProps) {
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold">{w.title}</span>
                     <div className="flex items-center gap-1.5">
-                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-                        {w.category}
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                        {WORLD_CATEGORY_LABELS[w.category] || w.category}
                       </span>
                       <button
                         type="button"

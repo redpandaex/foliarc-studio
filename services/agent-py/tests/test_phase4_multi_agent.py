@@ -180,3 +180,56 @@ async def test_multi_agent_hitl_checkpoint_and_critic_reflection_loop() -> None:
     assert any(t == "draft_reset" for t, _, _ in events)
     assert any(t == "critic_review" and p["passed"] is False for t, _, p in events)
     assert any(t == "critic_review" and p["passed"] is True and p["score"] == 92 for t, _, p in events)
+
+
+@pytest.mark.asyncio
+async def test_previous_chapters_context_flows_to_director_writer_and_critic() -> None:
+    settings = Settings(llm_api_key="", embedding_api_key="")
+    checkpoints = InMemoryCheckpointStore()
+    fake = _FakeStreamClient(
+        [
+            "1. 紧承第一章结尾：林青手持残缺青铜令退入古寺\n2. 黑衣人追至门外对峙",
+            "雨声未歇，林青握紧刚从寒潭边拾起的残缺青铜令，闪身没入古寺破败的山门。",
+            '{"passed": true, "score": 90, "issues": [], "revision_guidance": ""}',
+        ]
+    )
+    orchestrator = EditorialTeamOrchestrator(
+        settings=settings,
+        llm_client=FallbackStreamClient(fake),  # type: ignore[arg-type]
+        router=IntentAndModelRouter(settings=settings),
+        checkpoint_store=checkpoints,
+        skill_registry=SkillRegistry(),
+        rag_retriever=None,
+        enable_mcp=False,
+    )
+
+    async def emit(_ev_type: str, _payload: dict[str, Any], _agent: str = "writer") -> str:
+        return "ev-1"
+
+    async def check_ctrl() -> None:
+        return None
+
+    prev_ctx = "【上一章（第 1 章《寒潭遗令》）正文衔接】\n林青在寒潭边拾起残缺青铜令，身后的松林里忽有铁甲铿锵逼近。"
+    board = EditorialBlackboard(
+        run_id="run-ch2-continuity",
+        book_title="星辰剑录",
+        chapter_no=2,
+        chapter_title="古寺避雨",
+        chapter_context="",
+        previous_chapters_context=prev_ctx,
+        instruction="",
+        require_outline_approval=False,
+    )
+    res = await orchestrator.run(
+        initial_state=board,
+        emit=emit,
+        control_event=asyncio.Event(),
+        check_control=check_ctrl,
+        resumed=False,
+    )
+    assert res.status == "COMPLETED"
+    assert len(fake.calls) == 3  # DIRECTOR, WRITER, CRITIC
+    for call in fake.calls:
+        combined = "\n".join(str(m.get("content") or "") for m in call["messages"])
+        assert "残缺青铜令" in combined
+        assert "铁甲铿锵逼近" in combined

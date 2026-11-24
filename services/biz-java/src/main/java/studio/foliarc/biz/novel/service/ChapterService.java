@@ -82,6 +82,21 @@ public class ChapterService {
         if (!text.isBlank()) {
             saveSnapshotRow(entity.getId(), text, "初始草稿", ownerId);
         }
+
+        // Background auto-sync: when creating a new chapter (e.g. Chapter 2), ensure the immediately
+        // preceding chapter (e.g. Chapter 1) is indexed into RAG + structured memory automatically.
+        if (seq > 1) {
+            ChapterEntity prev = chapterMapper.selectOne(
+                    new LambdaQueryWrapper<ChapterEntity>()
+                            .eq(ChapterEntity::getBookId, bookId)
+                            .lt(ChapterEntity::getChapterNo, seq)
+                            .orderByDesc(ChapterEntity::getChapterNo)
+                            .last("LIMIT 1")
+            );
+            if (prev != null) {
+                knowledgeDocumentService.syncChapterInBackgroundIfNeeded(ownerId, bookId, prev);
+            }
+        }
         return mapDetail(entity);
     }
 
@@ -104,9 +119,12 @@ public class ChapterService {
             throw BizException.badRequest("INVALID_CHAPTER_STATUS", "不支持的章节状态: " + targetState);
         }
 
+        int oldWordCount = row.getWordCount() == null ? 0 : row.getWordCount();
+        int newWordCount = WordCounter.count(input.content());
+
         row.setTitle(input.title().trim());
         row.setContent(input.content());
-        row.setWordCount(WordCounter.count(input.content()));
+        row.setWordCount(newWordCount);
         row.setStatus(targetState);
         row.setVersion(input.version());
 
@@ -121,9 +139,13 @@ public class ChapterService {
             saveSnapshotRow(chapterId, input.content(), note, ownerId);
         }
 
-        // Phase 3: Automatically sync finalized (PUBLISHED) chapters into Milvus RAG + Structured Memory via Outbox
+        // Automatic background RAG + Structured Memory sync via Outbox (no manual user sync required)
         if ("PUBLISHED".equals(targetState) && input.content() != null && !input.content().isBlank()) {
             knowledgeDocumentService.syncChapter(ownerId, bookId, chapterId, true);
+        } else if (input.content() != null && !input.content().isBlank()
+                && ("REVIEWING".equals(targetState)
+                || (newWordCount >= 80 && Math.abs(newWordCount - oldWordCount) >= 150))) {
+            knowledgeDocumentService.syncChapterInBackgroundIfNeeded(ownerId, bookId, row);
         }
 
         ChapterEntity latest = chapterMapper.selectById(chapterId);

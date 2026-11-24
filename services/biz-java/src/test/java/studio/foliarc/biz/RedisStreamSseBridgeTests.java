@@ -77,4 +77,95 @@ class RedisStreamSseBridgeTests {
         assertThat(received.get(1).id()).isEqualTo("1700000000000-3");
         assertThat(received.get(1).event()).isEqualTo("done");
     }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void skipsHistoricalInterruptAndContinuesAfterResume() {
+        ReactiveStringRedisTemplate redis = mock(ReactiveStringRedisTemplate.class);
+        ReactiveStreamOperations<String, Object, Object> streamOps = mock(ReactiveStreamOperations.class);
+        when(redis.opsForStream()).thenReturn(streamOps);
+
+        UUID runId = UUID.randomUUID();
+        String key = RedisStreamSseBridge.streamKey(runId);
+
+        MapRecord<String, Object, Object> ev1 = MapRecord.create(key, Map.<Object, Object>of(
+                "type", "thought_delta",
+                "seq", "1",
+                "run_id", runId.toString(),
+                "agent", "director",
+                "timestamp", "2026-11-23T08:00:00Z",
+                "payload", "{\"content\":\"大纲初稿\"}"
+        )).withId(RecordId.of("1700000000000-1"));
+
+        MapRecord<String, Object, Object> oldInterrupt = MapRecord.create(key, Map.<Object, Object>of(
+                "type", "interrupt",
+                "seq", "2",
+                "run_id", runId.toString(),
+                "agent", "director",
+                "timestamp", "2026-11-23T08:00:01Z",
+                "payload", "{\"interrupt_type\":\"OUTLINE_APPROVAL\"}"
+        )).withId(RecordId.of("1700000000000-2"));
+
+        MapRecord<String, Object, Object> resumedDelta = MapRecord.create(key, Map.<Object, Object>of(
+                "type", "text_delta",
+                "seq", "3",
+                "run_id", runId.toString(),
+                "agent", "writer",
+                "timestamp", "2026-11-23T08:00:02Z",
+                "payload", "{\"content\":\"审批后继续生成的正文\"}"
+        )).withId(RecordId.of("1700000000000-3"));
+
+        MapRecord<String, Object, Object> done = MapRecord.create(key, Map.<Object, Object>of(
+                "type", "done",
+                "seq", "4",
+                "run_id", runId.toString(),
+                "agent", "writer",
+                "timestamp", "2026-11-23T08:00:03Z",
+                "payload", "{\"status\":\"completed\"}"
+        )).withId(RecordId.of("1700000000000-4"));
+
+        when(streamOps.read(any(StreamReadOptions.class), any(StreamOffset.class)))
+                .thenReturn(Flux.just(ev1, oldInterrupt))
+                .thenReturn(Flux.just(resumedDelta, done));
+
+        ObjectMapper mapper = new ObjectMapper();
+        RedisStreamSseBridge bridge = new RedisStreamSseBridge(redis, mapper);
+
+        List<ServerSentEvent<String>> received = bridge.streamRun(runId, null, () -> "RUNNING")
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        assertThat(received).extracting(ServerSentEvent::event)
+                .containsExactly("thought_delta", "text_delta", "done");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void stopsOnActiveInterruptWhenRunIsPaused() {
+        ReactiveStringRedisTemplate redis = mock(ReactiveStringRedisTemplate.class);
+        ReactiveStreamOperations<String, Object, Object> streamOps = mock(ReactiveStreamOperations.class);
+        when(redis.opsForStream()).thenReturn(streamOps);
+
+        UUID runId = UUID.randomUUID();
+        String key = RedisStreamSseBridge.streamKey(runId);
+
+        MapRecord<String, Object, Object> activeInterrupt = MapRecord.create(key, Map.<Object, Object>of(
+                "type", "interrupt",
+                "seq", "2",
+                "run_id", runId.toString(),
+                "agent", "director",
+                "timestamp", "2026-11-23T08:00:01Z",
+                "payload", "{\"interrupt_type\":\"OUTLINE_APPROVAL\"}"
+        )).withId(RecordId.of("1700000000000-2"));
+
+        when(streamOps.read(any(StreamReadOptions.class), any(StreamOffset.class)))
+                .thenReturn(Flux.just(activeInterrupt));
+
+        RedisStreamSseBridge bridge = new RedisStreamSseBridge(redis, new ObjectMapper());
+        List<ServerSentEvent<String>> received = bridge.streamRun(runId, null, () -> "PAUSED")
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        assertThat(received).extracting(ServerSentEvent::event).containsExactly("interrupt");
+    }
 }

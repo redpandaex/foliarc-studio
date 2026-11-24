@@ -159,12 +159,14 @@ export default function BookshelfPage() {
                 {user.username} ({user.email})
               </span>
             )}
-            <Link
-              href="/billing"
-              className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
-            >
-              计费与网关
-            </Link>
+            {user?.role === "ADMIN" && (
+              <Link
+                href="/billing"
+                className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
+              >
+                后台管理
+              </Link>
+            )}
             <Button variant="outline" size="sm" onClick={() => void handleLogout()}>
               退出登录
             </Button>
@@ -250,7 +252,7 @@ export default function BookshelfPage() {
           >
             <div className="sm:col-span-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">
-                编辑作品信息（乐观锁 v{editing.version}）
+                编辑作品信息
               </h2>
               <Button
                 type="button"

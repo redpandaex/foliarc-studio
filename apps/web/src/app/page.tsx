@@ -9,7 +9,8 @@ const PHASES = [
   { id: "Phase 3", title: "Milvus Hybrid RAG + 异步文档导入 + 结构化记忆", status: "已完成" },
   { id: "Phase 4", title: "多 Agent 协同编排 + 路由 + HITL 中断恢复", status: "已完成" },
   { id: "Phase 5", title: "企业级网关 + 分布式计费账本 + 安全护栏与硬化 Docker 沙箱", status: "已完成" },
-  { id: "Phase 6", title: "OpenTelemetry + Langfuse 可观测性与 Eval 评测", status: "下一步" },
+  { id: "Phase 5.5", title: "百章级 5 层长程记忆 + 零配置自动底座 + 三层作用域 RAG 知识库", status: "下一步" },
+  { id: "Phase 6", title: "/admin 运维后台（任务/会话日志/RAG/计费）+ OTel/Langfuse + Eval 评测", status: "规划中" },
 ];
 
 export default function HomePage() {

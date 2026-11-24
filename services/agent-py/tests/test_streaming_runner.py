@@ -209,3 +209,19 @@ async def test_cooperative_pause_checkpoint_and_resume_continuation() -> None:
     assert final_state.status == "COMPLETED"
     assert final_state.accumulated_text == "第一段开头，顺着修改后的指令继续展开。"
     assert json.loads(all_events[-1][1]["payload"])["status"] == "completed"
+
+
+def test_direct_build_novel_messages_injects_previous_chapter_continuity() -> None:
+    msgs = build_novel_messages(
+        action="CONTINUE",
+        book_title="星渊剑录",
+        genre="东方玄幻",
+        synopsis="少年持剑破局",
+        chapter_title="第二章 密林遇袭",
+        chapter_context="",
+        previous_chapters_context="【上一章（第 1 章《启程》）正文衔接】\n林青推开客栈木门，门外赫然立着三名黑衣死士。",
+        instruction="",
+    )
+    user_content = msgs[1]["content"]
+    assert "前文章节承接" in user_content
+    assert "三名黑衣死士" in user_content

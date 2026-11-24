@@ -26,37 +26,37 @@ flowchart LR
 ## 二、核心代码导航
 
 ### 1. Java 业务中台与可靠异步事件（`services/biz-java`）
-- **V4 数据库迁移**：[V4__create_rag_outbox_and_memory.sql](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/resources/db/migration/V4__create_rag_outbox_and_memory.sql)
+- **V4 数据库迁移**：[V4__create_rag_outbox_and_memory.sql](../services/biz-java/src/main/resources/db/migration/V4__create_rag_outbox_and_memory.sql)
   - `knowledge_documents`（含单调递增 `doc_version` 与 `deleted_at` 软删除）
   - `document_chunks`（`PARENT` / `CHILD` 父子文档层级结构）
   - `outbox_events`（本地消息表）+ `processed_events`（消费端幂等去重表）
   - `character_relations`（人物关系三元组）+ `timeline_events`（章节事件时间线）
   - Prompt 注册中心自动平滑升级 `novel_writer_system` 至 **v2**（引导 Agent 调用 `search_knowledge_base` 与 `get_structured_memory`）
-- **对象存储**：[MinioStorageService.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/storage/MinioStorageService.java)
+- **对象存储**：[MinioStorageService.java](../services/biz-java/src/main/java/studio/foliarc/biz/storage/MinioStorageService.java)
 - **RabbitMQ 拓扑与 Outbox 中继**：
-  - [RabbitMqTopologyConfig.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/outbox/RabbitMqTopologyConfig.java)（声明 Topic Exchange、3 条持久化工作队列、独立 DLX 与 3 条死信队列）
-  - [OutboxService.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/outbox/service/OutboxService.java)（与业务表处于同一 `@Transactional` 事务）
-  - [OutboxRelayScheduler.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/outbox/service/OutboxRelayScheduler.java)（`FOR UPDATE SKIP LOCKED` 防多实例重复投递 + Publisher Confirms 等 Broker ACK + 指数退避重试）
+  - [RabbitMqTopologyConfig.java](../services/biz-java/src/main/java/studio/foliarc/biz/outbox/RabbitMqTopologyConfig.java)（声明 Topic Exchange、3 条持久化工作队列、独立 DLX 与 3 条死信队列）
+  - [OutboxService.java](../services/biz-java/src/main/java/studio/foliarc/biz/outbox/service/OutboxService.java)（与业务表处于同一 `@Transactional` 事务）
+  - [OutboxRelayScheduler.java](../services/biz-java/src/main/java/studio/foliarc/biz/outbox/service/OutboxRelayScheduler.java)（`FOR UPDATE SKIP LOCKED` 防多实例重复投递 + Publisher Confirms 等 Broker ACK + 指数退避重试）
 - **知识库、双写删除与长记忆服务**：
-  - [KnowledgeDocumentService.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/rag/service/KnowledgeDocumentService.java)
-  - [MemoryService.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/memory/service/MemoryService.java)
-  - [ChapterService.java](file:///root/agent-project/foliarc-studio/services/biz-java/src/main/java/studio/foliarc/biz/novel/service/ChapterService.java)（章节切换为 `PUBLISHED` 自动触发索引同步+记忆抽取；删除章节同步清理 Milvus）
+  - [KnowledgeDocumentService.java](../services/biz-java/src/main/java/studio/foliarc/biz/rag/service/KnowledgeDocumentService.java)
+  - [MemoryService.java](../services/biz-java/src/main/java/studio/foliarc/biz/memory/service/MemoryService.java)
+  - [ChapterService.java](../services/biz-java/src/main/java/studio/foliarc/biz/novel/service/ChapterService.java)（章节切换为 `PUBLISHED` 自动触发索引同步+记忆抽取；删除章节同步清理 Milvus）
 
 ### 2. Python Milvus 混合检索与记忆抽取引擎（`services/agent-py`）
-- **多格式文档解析**：[parsers.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/parsers.py)（PyMuPDF 文本+表格解析、python-docx 标题层级保留、Markdown/小说章节结构切分）
-- **小说感知父子切片**：[chunker.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/chunker.py)（Parent ~1100 字 + Child ~320 字带重叠；状态机保护中英文引号 `“...”`/`「...」`，绝不在人物对话中间切断）
-- **双通道向量与精排**：[embeddings.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/embeddings.py)（支持独立配置硅基流动/DashScope/OpenAI `BGE-M3` & `BGE-Reranker`，未配 Key 时自动降级到 1024 维中文 N-gram 特征哈希向量与词法交叉重排，后续填 Key 无需重建 Milvus 集合）
-- **Milvus 企业级向量仓储**：[vector_store.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/vector_store.py)
+- **多格式文档解析**：[parsers.py](../services/agent-py/src/foliarc_agent/rag/parsers.py)（PyMuPDF 文本+表格解析、python-docx 标题层级保留、Markdown/小说章节结构切分）
+- **小说感知父子切片**：[chunker.py](../services/agent-py/src/foliarc_agent/rag/chunker.py)（Parent ~1100 字 + Child ~320 字带重叠；状态机保护中英文引号 `“...”`/`「...」`，绝不在人物对话中间切断）
+- **双通道向量与精排**：[embeddings.py](../services/agent-py/src/foliarc_agent/rag/embeddings.py)（支持独立配置硅基流动/DashScope/OpenAI `BGE-M3` & `BGE-Reranker`，未配 Key 时自动降级到 1024 维中文 N-gram 特征哈希向量与词法交叉重排，后续填 Key 无需重建 Milvus 集合）
+- **Milvus 企业级向量仓储**：[vector_store.py](../services/agent-py/src/foliarc_agent/rag/vector_store.py)
   - `VectorStore` 协议抽象 + `MilvusVectorStore` 实现（以及单测专用的 `InMemoryVectorStore`）
   - **`book_id` 作为 Partition Key**（16 分区逻辑多租户隔离）
   - **Dense HNSW (COSINE) + Milvus 原生 BM25 Function（中文分词器 `analyzer_params={"type":"chinese"}`）+ `RRFRanker(k=60)`**
   - **防剧透标量预过滤**：强制 `book_id == X and owner_id == Y and chapter_no <= N`
-- **混合检索流水线**：[retriever.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/retriever.py)（查询改写/代词消解 → Milvus 混合召回 → Java PG 权威父块还原 Small-to-Big → Rerank 精排）
-- **RabbitMQ 消费者 & 记忆抽取**：[worker.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/worker.py) · [memory_extractor.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/rag/memory_extractor.py)
-- **Agent 工具融合**：[tools.py](file:///root/agent-project/foliarc-studio/services/agent-py/src/foliarc_agent/agent/tools.py)（新增 `search_knowledge_base` 与 `get_structured_memory` 两个带自动防剧透上下文的原生工具）
+- **混合检索流水线**：[retriever.py](../services/agent-py/src/foliarc_agent/rag/retriever.py)（查询改写/代词消解 → Milvus 混合召回 → Java PG 权威父块还原 Small-to-Big → Rerank 精排）
+- **RabbitMQ 消费者 & 记忆抽取**：[worker.py](../services/agent-py/src/foliarc_agent/rag/worker.py) · [memory_extractor.py](../services/agent-py/src/foliarc_agent/rag/memory_extractor.py)
+- **Agent 工具融合**：[tools.py](../services/agent-py/src/foliarc_agent/agent/tools.py)（新增 `search_knowledge_base` 与 `get_structured_memory` 两个带自动防剧透上下文的原生工具）
 
 ### 3. Next.js 知识库与长记忆面板（`apps/web`）
-- [knowledge-memory-panel.tsx](file:///root/agent-project/foliarc-studio/apps/web/src/components/knowledge-memory-panel.tsx)：文档上传与异步进度条、章节一键同步 & 抽记忆、混合检索实测器（防剧透章节上限 + Small-to-Big 父块展开）、人物关系网与事件时间线视图。
+- [knowledge-memory-panel.tsx](../apps/web/src/components/knowledge-memory-panel.tsx)：文档上传与异步进度条、章节一键同步 & 抽记忆、混合检索实测器（防剧透章节上限 + Small-to-Big 父块展开）、人物关系网与事件时间线视图。
 
 ---
 

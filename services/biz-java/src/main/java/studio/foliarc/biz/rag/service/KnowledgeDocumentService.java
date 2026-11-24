@@ -237,6 +237,44 @@ public class KnowledgeDocumentService {
         return new RagDtos.SyncChapterResponse(toResponse(doc), extractMemory);
     }
 
+    /**
+     * Silently triggers background RAG indexing + structured memory extraction when a chapter
+     * has meaningful new/changed content, keeping RAG fully automatic for writers.
+     */
+    public void syncChapterInBackgroundIfNeeded(UUID ownerId, UUID bookId, ChapterEntity chapter) {
+        if (chapter == null || chapter.getContent() == null) {
+            return;
+        }
+        String text = chapter.getContent().trim();
+        if (text.length() < 60) {
+            return;
+        }
+        try {
+            long byteLen = chapter.getContent().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            KnowledgeDocumentEntity existing = documentMapper.selectOne(
+                    new LambdaQueryWrapper<KnowledgeDocumentEntity>()
+                            .eq(KnowledgeDocumentEntity::getBookId, bookId)
+                            .eq(KnowledgeDocumentEntity::getSourceChapterId, chapter.getId())
+                            .isNull(KnowledgeDocumentEntity::getDeletedAt)
+            );
+            if (existing != null) {
+                String st = existing.getStatus() == null ? "" : existing.getStatus();
+                boolean inFlight = Set.of("QUEUED", "PARSING", "CHUNKING", "EMBEDDING").contains(st);
+                if (inFlight && existing.getUpdatedAt() != null
+                        && existing.getUpdatedAt().isAfter(OffsetDateTime.now().minusSeconds(30))) {
+                    return;
+                }
+                long prevSize = existing.getFileSize() == null ? 0L : existing.getFileSize();
+                if (!"FAILED".equals(st) && Math.abs(byteLen - prevSize) < 180) {
+                    return;
+                }
+            }
+            syncChapter(ownerId, bookId, chapter.getId(), true);
+        } catch (Exception ex) {
+            log.warn("Background chapter RAG/memory sync skipped for chapter {}: {}", chapter.getId(), ex.getMessage());
+        }
+    }
+
     @Transactional
     public void triggerMemoryExtractOnly(UUID ownerId, UUID bookId, UUID chapterId) {
         bookService.requireOwnedBook(ownerId, bookId);

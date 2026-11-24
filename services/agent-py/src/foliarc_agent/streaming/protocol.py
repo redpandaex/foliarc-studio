@@ -21,6 +21,7 @@ class RunStartRequest(BaseModel):
     synopsis: str | None = None
     chapter_title: str = ""
     chapter_context: str = ""
+    previous_chapters_context: str = ""
     instruction: str = ""
     require_outline_approval: bool = True
 
@@ -39,6 +40,7 @@ class RunResumeRequest(BaseModel):
     synopsis: str | None = None
     chapter_title: str = ""
     chapter_context: str = ""
+    previous_chapters_context: str = ""
     instruction: str = ""
     accumulated_text: str = ""
     last_seq: int = Field(default=0, ge=0)

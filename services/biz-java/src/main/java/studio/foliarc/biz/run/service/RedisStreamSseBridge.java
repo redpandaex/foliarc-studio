@@ -10,6 +10,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
@@ -35,10 +36,12 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class RedisStreamSseBridge {
 
-    private static final Set<String> TERMINAL_EVENTS = Set.of("done", "error", "interrupt");
+    private static final Set<String> HARD_TERMINAL_EVENTS = Set.of("done", "error");
+    private static final Set<String> TERMINAL_RUN_STATUSES = Set.of("COMPLETED", "CANCELLED", "FAILED", "PAUSED");
     private static final Duration POLL_INTERVAL = Duration.ofMillis(80);
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
-    private static final int MAX_IDLE_POLLS = 1500; // ~120s idle safety bound
+    private static final int MAX_IDLE_POLLS = 3750; // ~300s idle safety bound for long reasoning models
+    private static final int TERMINAL_STATUS_CHECK_TICKS = 5; // ~400ms empty poll before checking DB terminal status
 
     private final ReactiveStringRedisTemplate reactiveRedis;
     private final ObjectMapper objectMapper;
@@ -60,12 +63,22 @@ public class RedisStreamSseBridge {
     }
 
     public Flux<ServerSentEvent<String>> streamRun(UUID runId, String lastEventId) {
+        return streamRun(runId, lastEventId, () -> null);
+    }
+
+    public Flux<ServerSentEvent<String>> streamRun(
+            UUID runId,
+            String lastEventId,
+            Supplier<String> runStatusSupplier
+    ) {
         String key = streamKey(runId);
         String startCursor = (lastEventId != null && !lastEventId.isBlank()) ? lastEventId.trim() : "0-0";
+        Supplier<String> safeStatusSupplier = runStatusSupplier != null ? runStatusSupplier : () -> null;
 
         AtomicReference<String> cursorRef = new AtomicReference<>(startCursor);
         AtomicInteger idleTicks = new AtomicInteger(0);
         AtomicBoolean terminalReached = new AtomicBoolean(false);
+        AtomicBoolean lastPollHadRecords = new AtomicBoolean(false);
         Sinks.One<Void> stopHeartbeats = Sinks.one();
 
         Mono<List<MapRecord<String, Object, Object>>> pollOnce = Mono.defer(() -> {
@@ -78,17 +91,9 @@ public class RedisStreamSseBridge {
                             StreamOffset.create(key, ReadOffset.from(cursorRef.get()))
                     )
                     .collectList()
-                    .doOnNext(batch -> {
-                        if (!batch.isEmpty()) {
-                            cursorRef.set(batch.getLast().getId().getValue());
-                            for (MapRecord<String, Object, Object> record : batch) {
-                                Object rawType = record.getValue().get("type");
-                                if (rawType != null && isTerminal(rawType.toString())) {
-                                    terminalReached.set(true);
-                                    break;
-                                }
-                            }
-                        }
+                    .map(batch -> {
+                        lastPollHadRecords.set(!batch.isEmpty());
+                        return filterAndTrackTerminal(batch, cursorRef, terminalReached, safeStatusSupplier);
                     });
         });
 
@@ -97,18 +102,25 @@ public class RedisStreamSseBridge {
                     if (terminalReached.get()) {
                         return Mono.empty();
                     }
-                    if (!batch.isEmpty()) {
+                    if (!batch.isEmpty() || lastPollHadRecords.get()) {
                         idleTicks.set(0);
                         return pollOnce;
                     }
-                    if (idleTicks.incrementAndGet() >= MAX_IDLE_POLLS) {
+                    int ticks = idleTicks.incrementAndGet();
+                    if (ticks >= MAX_IDLE_POLLS) {
                         return Mono.empty();
+                    }
+                    if (ticks >= TERMINAL_STATUS_CHECK_TICKS && ticks % TERMINAL_STATUS_CHECK_TICKS == 0) {
+                        String status = safeGetStatus(safeStatusSupplier);
+                        if (status != null && TERMINAL_RUN_STATUSES.contains(status)) {
+                            terminalReached.set(true);
+                            return Mono.empty();
+                        }
                     }
                     return Mono.delay(POLL_INTERVAL).then(pollOnce);
                 })
                 .flatMapIterable(batch -> batch)
                 .map(this::toServerSentEvent)
-                .takeUntil(sse -> isTerminal(sse.event()))
                 .doFinally(signal -> {
                     terminalReached.set(true);
                     stopHeartbeats.tryEmitEmpty();
@@ -119,6 +131,55 @@ public class RedisStreamSseBridge {
                 .map(tick -> buildPingEvent(runId));
 
         return Flux.merge(streamEvents, heartbeats);
+    }
+
+    private List<MapRecord<String, Object, Object>> filterAndTrackTerminal(
+            List<MapRecord<String, Object, Object>> batch,
+            AtomicReference<String> cursorRef,
+            AtomicBoolean terminalReached,
+            Supplier<String> statusSupplier
+    ) {
+        if (batch.isEmpty()) {
+            return batch;
+        }
+        cursorRef.set(batch.getLast().getId().getValue());
+        java.util.ArrayList<MapRecord<String, Object, Object>> filtered = new java.util.ArrayList<>(batch.size());
+        for (int i = 0; i < batch.size(); i++) {
+            MapRecord<String, Object, Object> record = batch.get(i);
+            Object rawType = record.getValue().get("type");
+            String type = rawType == null ? "" : rawType.toString();
+
+            if (isHardTerminal(type)) {
+                filtered.add(record);
+                terminalReached.set(true);
+                break;
+            }
+            if ("interrupt".equals(type)) {
+                boolean hasLaterEventsInBatch = i < batch.size() - 1;
+                if (hasLaterEventsInBatch) {
+                    // Historical pause that was already resumed later in the stream: skip it
+                    continue;
+                }
+                String runStatus = safeGetStatus(statusSupplier);
+                if (runStatus != null && !"PAUSED".equals(runStatus)) {
+                    // Run has already been resumed or completed in DB: do not stop at this historical interrupt
+                    continue;
+                }
+                filtered.add(record);
+                terminalReached.set(true);
+                break;
+            }
+            filtered.add(record);
+        }
+        return filtered;
+    }
+
+    private static String safeGetStatus(Supplier<String> statusSupplier) {
+        try {
+            return statusSupplier.get();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     ServerSentEvent<String> toServerSentEvent(MapRecord<String, Object, Object> record) {
@@ -179,8 +240,12 @@ public class RedisStreamSseBridge {
         return objectMapper.writeValueAsString(value);
     }
 
+    static boolean isHardTerminal(String eventType) {
+        return eventType != null && HARD_TERMINAL_EVENTS.contains(eventType);
+    }
+
     static boolean isTerminal(String eventType) {
-        return eventType != null && TERMINAL_EVENTS.contains(eventType);
+        return isHardTerminal(eventType) || "interrupt".equals(eventType);
     }
 
     private static String str(Object value, String fallback) {

@@ -13,18 +13,19 @@ import {
 } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel } from "@/components/ai-copilot-panel";
-import { KnowledgeMemoryPanel } from "@/components/knowledge-memory-panel";
 import { LorePanel } from "@/components/lore-panel";
 import { Button } from "@/components/ui/button";
 import {
   ApiClientError,
   booksApi,
   chaptersApi,
+  runsApi,
   type BookItem,
   type ChapterDetail,
   type ChapterSummary,
   type ChapterVersion,
 } from "@/lib/api";
+import type { StreamConnectionState } from "@/lib/sse-client";
 
 const CHAPTER_STATUS_LABELS: Record<string, string> = {
   DRAFT: "草稿",
@@ -34,6 +35,27 @@ const CHAPTER_STATUS_LABELS: Record<string, string> = {
 
 function countWords(text: string): number {
   return text.replace(/\s+/g, "").length;
+}
+
+function activeChapterStorageKey(bookId: string): string {
+  return `foliarc:active_chapter:${bookId}`;
+}
+
+function syncActiveChapterLocation(bookId: string, chapterId: string | null) {
+  if (typeof window === "undefined") return;
+  const key = activeChapterStorageKey(bookId);
+  if (chapterId) {
+    window.sessionStorage.setItem(key, chapterId);
+  } else {
+    window.sessionStorage.removeItem(key);
+  }
+  const url = new URL(window.location.href);
+  if (chapterId) {
+    url.searchParams.set("chapterId", chapterId);
+  } else {
+    url.searchParams.delete("chapterId");
+  }
+  window.history.replaceState(null, "", url.pathname + url.search);
 }
 
 function BookWorkbenchContent() {
@@ -59,13 +81,19 @@ function BookWorkbenchContent() {
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
 
-  const [rightTab, setRightTab] = useState<"ai" | "knowledge" | "lore" | "versions">("ai");
+  // Streamlined right pane: ONLY 2 focused writer tabs (AI 写作 / 故事设定)
+  const [rightTab, setRightTab] = useState<"ai" | "lore">("ai");
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+
+  // Version history drawer (opened on demand from top toolbar instead of occupying a permanent sidebar tab)
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
-  const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(
-    null,
-  );
+  const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(null);
   const [snapshotSummary, setSnapshotSummary] = useState("");
   const [loadingPage, setLoadingPage] = useState(true);
+
+  // Track which chapters currently have an active AI generation
+  const [runningChapterIds, setRunningChapterIds] = useState<Record<string, boolean>>({});
 
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -87,6 +115,7 @@ function BookWorkbenchContent() {
         setVersions(versionList);
         setPreviewVersion(null);
         setSaveState("idle");
+        syncActiveChapterLocation(bookId, detail.id);
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "加载章节失败");
       }
@@ -101,18 +130,57 @@ function BookWorkbenchContent() {
       return;
     }
     let active = true;
-    void Promise.all([booksApi.get(bookId), chaptersApi.list(bookId)])
-      .then(async ([bookData, chapterList]) => {
+    void Promise.all([
+      booksApi.get(bookId),
+      chaptersApi.list(bookId),
+      runsApi.list(bookId).catch(() => []),
+    ])
+      .then(async ([bookData, chapterList, bookRuns]) => {
         if (!active) return;
         setBook(bookData);
         setChapters(chapterList);
         setErrorMsg(null);
+
+        const activeRunMap: Record<string, boolean> = {};
+        let chapterWithLiveRun: string | null = null;
+        for (const r of bookRuns) {
+          if (
+            r.chapterId &&
+            (r.status === "RUNNING" || r.status === "QUEUED" || r.status === "PAUSED")
+          ) {
+            activeRunMap[r.chapterId] = true;
+            if (!chapterWithLiveRun) {
+              chapterWithLiveRun = r.chapterId;
+            }
+          }
+        }
+        setRunningChapterIds(activeRunMap);
+
         if (chapterList.length > 0) {
-          await loadChapterDetail(chapterList[0].id);
+          // Restore the chapter the author was working on across page refresh:
+          // 1) URL ?chapterId=  2) sessionStorage active chapter  3) chapter with active AI run  4) first chapter
+          const validIds = new Set(chapterList.map((c) => c.id));
+          const urlChapterId =
+            typeof window !== "undefined"
+              ? new URLSearchParams(window.location.search).get("chapterId")
+              : null;
+          const storedChapterId =
+            typeof window !== "undefined"
+              ? window.sessionStorage.getItem(activeChapterStorageKey(bookId))
+              : null;
+
+          const targetChapterId =
+            (urlChapterId && validIds.has(urlChapterId) ? urlChapterId : null) ??
+            (storedChapterId && validIds.has(storedChapterId) ? storedChapterId : null) ??
+            (chapterWithLiveRun && validIds.has(chapterWithLiveRun) ? chapterWithLiveRun : null) ??
+            chapterList[0].id;
+
+          await loadChapterDetail(targetChapterId);
         } else {
           setActiveId(null);
           setActiveChapter(null);
           setVersions([]);
+          syncActiveChapterLocation(bookId, null);
         }
       })
       .catch((err) => {
@@ -218,12 +286,32 @@ function BookWorkbenchContent() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeChapter, saveState, saveCurrentChapter]);
 
+  const handleRunStateChange = useCallback(
+    (targetChapterId: string | null, state: StreamConnectionState) => {
+      if (!targetChapterId) return;
+      const isLive =
+        state === "connecting" ||
+        state === "streaming" ||
+        state === "reconnecting" ||
+        state === "paused";
+      setRunningChapterIds((prev) => {
+        if (Boolean(prev[targetChapterId]) === isLive) return prev;
+        return { ...prev, [targetChapterId]: isLive };
+      });
+    },
+    [],
+  );
+
   async function handleCreateChapter(e: FormEvent) {
     e.preventDefault();
     if (!newChapterTitle.trim()) return;
     setCreatingChapter(true);
     setErrorMsg(null);
     try {
+      // Save any pending edits on the current chapter first so Chapter N+1 immediately sees its latest ending!
+      if (activeChapter && saveState === "dirty") {
+        await saveCurrentChapter();
+      }
       const created = await chaptersApi.create(bookId, {
         title: newChapterTitle.trim(),
         content: "",
@@ -251,6 +339,14 @@ function BookWorkbenchContent() {
     }
   }
 
+  async function handleSelectChapter(targetChapterId: string) {
+    if (targetChapterId === activeId) return;
+    if (activeChapter && saveState === "dirty") {
+      await saveCurrentChapter();
+    }
+    await loadChapterDetail(targetChapterId);
+  }
+
   async function handleDeleteChapter(chapter: ChapterSummary) {
     if (!window.confirm(`确认删除「第 ${chapter.chapterNo} 章 ${chapter.title}」？`)) {
       return;
@@ -266,6 +362,7 @@ function BookWorkbenchContent() {
           setActiveId(null);
           setActiveChapter(null);
           setVersions([]);
+          syncActiveChapterLocation(bookId, null);
         }
       }
     } catch (err) {
@@ -280,7 +377,6 @@ function BookWorkbenchContent() {
       createSnapshot: true,
       changeSummary: snapshotSummary.trim() || "手动版本快照",
     });
-    setRightTab("versions");
   }
 
   async function handleRollback(ver: ChapterVersion) {
@@ -329,7 +425,7 @@ function BookWorkbenchContent() {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-background">
       {/* Top Toolbar */}
       <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-4">
         <div className="flex min-w-0 items-center gap-3">
@@ -343,11 +439,6 @@ function BookWorkbenchContent() {
           <h1 className="truncate text-sm font-semibold">
             {book?.title ?? "未命名小说"}
           </h1>
-          {activeChapter && (
-            <span className="hidden rounded-full border border-border px-2 py-0.5 font-mono text-[11px] text-muted-foreground sm:inline">
-              乐观锁 v{activeChapter.version}
-            </span>
-          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -358,7 +449,7 @@ function BookWorkbenchContent() {
                 {saveState === "saving"
                   ? "保存中..."
                   : saveState === "dirty"
-                    ? "有未保存修改"
+                    ? "未保存"
                     : saveState === "conflict"
                       ? "版本冲突"
                       : saveState === "saved"
@@ -382,20 +473,34 @@ function BookWorkbenchContent() {
               <Button
                 size="sm"
                 variant="outline"
+                onClick={() => setVersionsOpen(true)}
+              >
+                历史版本 ({versions.length})
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
                 disabled={saveState === "saving" || saveState === "conflict"}
                 onClick={() => void saveCurrentChapter()}
               >
-                保存 (Ctrl+S)
+                保存
               </Button>
             </>
           )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setRightPanelOpen((v) => !v)}
+          >
+            {rightPanelOpen ? "收起助手" : "展开助手"}
+          </Button>
         </div>
       </header>
 
       {/* Main Three-Pane Body */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left Pane: Chapter Tree */}
-        <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/50">
+        <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card/50">
           <div className="border-b border-border p-3">
             <form onSubmit={handleCreateChapter} className="flex gap-1.5">
               <input
@@ -419,6 +524,7 @@ function BookWorkbenchContent() {
               <ul className="space-y-1">
                 {chapters.map((ch) => {
                   const isActive = ch.id === activeId;
+                  const isGenerating = Boolean(runningChapterIds[ch.id]);
                   return (
                     <li
                       key={ch.id}
@@ -430,11 +536,21 @@ function BookWorkbenchContent() {
                     >
                       <button
                         type="button"
-                        onClick={() => void loadChapterDetail(ch.id)}
+                        onClick={() => void handleSelectChapter(ch.id)}
                         className="min-w-0 flex-1 text-left"
                       >
-                        <div className="truncate font-medium">
-                          第 {ch.chapterNo} 章 {ch.title}
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate font-medium">
+                            第 {ch.chapterNo} 章 {ch.title}
+                          </span>
+                          {isGenerating && (
+                            <span
+                              title="AI 创作进行中"
+                              className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full animate-pulse ${
+                                isActive ? "bg-primary-foreground" : "bg-emerald-500"
+                              }`}
+                            />
+                          )}
                         </div>
                         <div
                           className={`mt-0.5 font-mono text-[10px] ${
@@ -506,7 +622,7 @@ function BookWorkbenchContent() {
                   setDraftContent(e.target.value);
                   if (saveState !== "conflict") setSaveState("dirty");
                 }}
-                placeholder="在此开始撰写章节正文...（支持 2.5 秒空闲自动保存与 Ctrl+S 手动保存）"
+                placeholder="在此开始撰写章节正文...（支持自动保存与 Ctrl+S 手动保存）"
                 className="min-h-0 flex-1 resize-none bg-transparent text-base leading-8 outline-none"
               />
             </div>
@@ -517,9 +633,15 @@ function BookWorkbenchContent() {
           )}
         </section>
 
-        {/* Right Pane: AI Agent Copilot, Hybrid RAG Knowledge Base, MCP Lore Bible & Versions */}
-        <aside className="flex w-96 shrink-0 flex-col border-l border-border bg-card/40">
-          <div className="grid grid-cols-4 border-b border-border text-xs font-medium">
+        {/* Right Pane: Streamlined to 2 Writer-Focused Tabs (AI 写作 / 故事设定); kept mounted when collapsed */}
+        <aside
+          className={
+            rightPanelOpen
+              ? "flex w-96 shrink-0 flex-col border-l border-border bg-card/40"
+              : "hidden"
+          }
+        >
+          <div className="grid grid-cols-2 border-b border-border text-xs font-medium">
             <button
               type="button"
               onClick={() => setRightTab("ai")}
@@ -529,18 +651,7 @@ function BookWorkbenchContent() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              AI 助手
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("knowledge")}
-              className={`py-2.5 transition-colors ${
-                rightTab === "knowledge"
-                  ? "border-b-2 border-primary text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              知识库
+              AI 写作
             </button>
             <button
               type="button"
@@ -551,113 +662,18 @@ function BookWorkbenchContent() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              设定库
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("versions")}
-              className={`py-2.5 transition-colors ${
-                rightTab === "versions"
-                  ? "border-b-2 border-primary text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              版本 ({versions.length})
+              故事设定
             </button>
           </div>
 
-          {rightTab === "knowledge" ? (
-            <KnowledgeMemoryPanel
-              bookId={bookId}
-              activeChapterId={activeId}
-              activeChapterNo={activeChapter?.chapterNo ?? null}
-              activeChapterTitle={activeChapter?.title ?? null}
-            />
-          ) : rightTab === "lore" ? (
-            <LorePanel bookId={bookId} />
-          ) : rightTab === "versions" ? (
-            <div className="flex min-h-0 flex-1 flex-col">
-              {activeChapter && (
-                <form
-                  onSubmit={handleManualSnapshot}
-                  className="space-y-2 border-b border-border p-3"
-                >
-                  <input
-                    value={snapshotSummary}
-                    onChange={(e) => setSnapshotSummary(e.target.value)}
-                    placeholder="快照备注，例如：完成初稿 / 改写打斗戏"
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  <Button
-                    type="submit"
-                    size="xs"
-                    className="w-full"
-                    disabled={saveState === "saving" || saveState === "conflict"}
-                  >
-                    保存当前正文为历史快照
-                  </Button>
-                </form>
-              )}
-
-              <div className="flex-1 overflow-y-auto p-3">
-                {versions.length === 0 ? (
-                  <p className="py-6 text-center text-xs text-muted-foreground">
-                    暂无历史快照。点击上方按钮保存一个版本节点，随时支持一键回滚。
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {versions.map((ver) => (
-                      <li
-                        key={ver.id}
-                        className="rounded-lg border border-border bg-background p-3 text-xs"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono font-semibold">
-                            v{ver.versionNo}
-                          </span>
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {countWords(ver.content)} 字
-                          </span>
-                        </div>
-                        <p className="mt-1 text-muted-foreground">
-                          {ver.changeSummary || "版本快照"}
-                        </p>
-                        <div className="mt-2 flex items-center gap-1.5">
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            onClick={() =>
-                              setPreviewVersion(
-                                previewVersion?.id === ver.id ? null : ver,
-                              )
-                            }
-                          >
-                            {previewVersion?.id === ver.id ? "收起" : "预览"}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="secondary"
-                            onClick={() => void handleRollback(ver)}
-                          >
-                            回滚到此版本
-                          </Button>
-                        </div>
-                        {previewVersion?.id === ver.id && (
-                          <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded bg-muted p-2 font-sans text-[11px] leading-relaxed">
-                            {ver.content || "（空内容）"}
-                          </pre>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          ) : (
+          {/* Keep AiCopilotPanel mounted across tab switches so active streaming never disconnects */}
+          <div className={rightTab === "ai" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
             <AiCopilotPanel
               bookId={bookId}
               chapterId={activeId}
+              chapterNo={activeChapter?.chapterNo ?? null}
               chapterContent={draftContent}
+              onRunStateChange={handleRunStateChange}
               onAppendText={(text) => {
                 setDraftContent((prev) =>
                   prev.trim() ? `${prev.replace(/\s+$/, "")}\n\n${text}` : text,
@@ -669,9 +685,114 @@ function BookWorkbenchContent() {
                 if (saveState !== "conflict") setSaveState("dirty");
               }}
             />
-          )}
+          </div>
+
+          {rightTab === "lore" && <LorePanel bookId={bookId} />}
         </aside>
       </div>
+
+      {/* On-Demand Version History Slide-Over Drawer */}
+      {versionsOpen && activeChapter && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/30"
+          onClick={() => setVersionsOpen(false)}
+        >
+          <div
+            className="flex h-full w-96 max-w-full flex-col border-l border-border bg-card shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">历史版本</h2>
+                <p className="text-[11px] text-muted-foreground">
+                  第 {activeChapter.chapterNo} 章 · {activeChapter.title}
+                </p>
+              </div>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => setVersionsOpen(false)}
+              >
+                关闭
+              </Button>
+            </div>
+
+            <form
+              onSubmit={handleManualSnapshot}
+              className="space-y-2 border-b border-border p-3"
+            >
+              <input
+                value={snapshotSummary}
+                onChange={(e) => setSnapshotSummary(e.target.value)}
+                placeholder="快照备注，例如：完成初稿 / 改写打斗戏"
+                className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+              />
+              <Button
+                type="submit"
+                size="xs"
+                className="w-full"
+                disabled={saveState === "saving" || saveState === "conflict"}
+              >
+                保存当前正文为历史快照
+              </Button>
+            </form>
+
+            <div className="flex-1 overflow-y-auto p-3">
+              {versions.length === 0 ? (
+                <p className="py-8 text-center text-xs text-muted-foreground">
+                  暂无历史快照。点击上方按钮保存版本节点，随时支持一键回滚。
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {versions.map((ver) => (
+                    <li
+                      key={ver.id}
+                      className="rounded-lg border border-border bg-background p-3 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-semibold">
+                          v{ver.versionNo}
+                        </span>
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {countWords(ver.content)} 字
+                        </span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">
+                        {ver.changeSummary || "版本快照"}
+                      </p>
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() =>
+                            setPreviewVersion(
+                              previewVersion?.id === ver.id ? null : ver,
+                            )
+                          }
+                        >
+                          {previewVersion?.id === ver.id ? "收起" : "预览"}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          onClick={() => void handleRollback(ver)}
+                        >
+                          回滚到此版本
+                        </Button>
+                      </div>
+                      {previewVersion?.id === ver.id && (
+                        <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded bg-muted p-2 font-sans text-[11px] leading-relaxed">
+                          {ver.content || "（空内容）"}
+                        </pre>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

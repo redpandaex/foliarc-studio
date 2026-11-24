@@ -196,6 +196,7 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
   let lastEventId = options.initialLastEventId ?? null;
   let terminatedByServer = false;
   let attempt = 0;
+  let authRetried = false;
 
   const loop = async () => {
     while (!masterController.signal.aborted && !terminatedByServer) {
@@ -254,10 +255,12 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
         });
 
         if (response.status === 401) {
-          const refreshed = await refreshSession();
-          if (refreshed) {
-            attempt += 1;
-            continue;
+          if (!authRetried) {
+            authRetried = true;
+            const refreshed = await refreshSession();
+            if (refreshed) {
+              continue;
+            }
           }
           options.onStateChange("error", { detail: "登录态已过期，请重新登录" });
           return;
@@ -268,6 +271,7 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
         }
 
         attempt = 0;
+        authRetried = false;
         options.onStateChange("streaming");
 
         const reader = response.body.getReader();

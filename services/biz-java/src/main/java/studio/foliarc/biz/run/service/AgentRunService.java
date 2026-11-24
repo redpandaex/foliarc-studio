@@ -153,6 +153,8 @@ public class AgentRunService {
             throw ex;
         }
 
+        String previousChaptersContext = buildPreviousChaptersContext(book.getId(), chapter);
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
         body.put("owner_id", ownerId.toString());
@@ -166,6 +168,7 @@ public class AgentRunService {
         body.put("synopsis", book.getSynopsis());
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", chapterContext);
+        body.put("previous_chapters_context", previousChaptersContext);
         body.put("instruction", instruction);
         body.put("require_outline_approval", requireOutlineApproval);
 
@@ -196,6 +199,11 @@ public class AgentRunService {
                 .eq(AgentCheckpointEntity::getRunId, runId)
                 .orderByAsc(AgentCheckpointEntity::getStepNo);
         return checkpointMapper.selectList(query).stream().map(AgentRunService::toCheckpoint).toList();
+    }
+
+    public String getRunStatus(UUID runId) {
+        AgentRunEntity run = runMapper.selectById(runId);
+        return run != null ? run.getStatus() : null;
     }
 
     public AgentRunEntity requireOwnedRun(UUID ownerId, UUID runId) {
@@ -264,6 +272,8 @@ public class AgentRunService {
 
         redis.delete(RedisStreamSseBridge.controlKey(run.getId()));
 
+        String previousChaptersContext = buildPreviousChaptersContext(book.getId(), chapter);
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
         body.put("owner_id", ownerId.toString());
@@ -277,6 +287,7 @@ public class AgentRunService {
         body.put("synopsis", book.getSynopsis());
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", run.getChapterContext() == null ? "" : run.getChapterContext());
+        body.put("previous_chapters_context", previousChaptersContext);
         body.put("instruction", run.getInstruction() == null ? "" : run.getInstruction());
         body.put("accumulated_text", run.getAccumulatedText() == null ? "" : run.getAccumulatedText());
         body.put("last_seq", run.getLastSeq() == null ? 0 : run.getLastSeq());
@@ -412,6 +423,69 @@ public class AgentRunService {
                         .last("LIMIT 1")
         );
         return latest == null ? null : toCheckpoint(latest);
+    }
+
+    public String buildPreviousChaptersContext(UUID bookId, ChapterEntity currentChapter) {
+        if (currentChapter == null || currentChapter.getChapterNo() == null || currentChapter.getChapterNo() <= 1) {
+            return "";
+        }
+        List<ChapterEntity> earlier = chapterMapper.selectList(
+                new LambdaQueryWrapper<ChapterEntity>()
+                        .eq(ChapterEntity::getBookId, bookId)
+                        .lt(ChapterEntity::getChapterNo, currentChapter.getChapterNo())
+                        .orderByAsc(ChapterEntity::getChapterNo)
+        );
+        if (earlier == null || earlier.isEmpty()) {
+            return "";
+        }
+
+        List<ChapterEntity> nonEmpty = earlier.stream()
+                .filter(c -> c.getContent() != null && !c.getContent().isBlank())
+                .toList();
+        if (nonEmpty.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        ChapterEntity immediatePrev = nonEmpty.getLast();
+
+        // Concise plot continuity recap for earlier chapters (up to 6 chapters before the immediate previous chapter)
+        int recapEnd = nonEmpty.size() - 1;
+        int recapStart = Math.max(0, recapEnd - 6);
+        if (recapStart < recapEnd) {
+            sb.append("【更早章节前情提要】\n");
+            for (int i = recapStart; i < recapEnd; i++) {
+                ChapterEntity ch = nonEmpty.get(i);
+                String text = ch.getContent().trim();
+                String digest;
+                if (text.length() <= 520) {
+                    digest = text;
+                } else {
+                    digest = text.substring(0, 220) + "\n……\n" + text.substring(text.length() - 280);
+                }
+                sb.append("第 ").append(ch.getChapterNo()).append(" 章《").append(ch.getTitle()).append("》：\n")
+                        .append(digest).append("\n\n");
+            }
+        }
+
+        // Full or generous head+tail verbatim excerpt of the immediately preceding chapter
+        String prevText = immediatePrev.getContent().trim();
+        String prevExcerpt;
+        if (prevText.length() <= 3400) {
+            prevExcerpt = prevText;
+        } else {
+            prevExcerpt = prevText.substring(0, 700)
+                    + "\n\n……（中段省略）……\n\n"
+                    + prevText.substring(prevText.length() - 2700);
+        }
+        sb.append("【上一章（第 ")
+                .append(immediatePrev.getChapterNo())
+                .append(" 章《")
+                .append(immediatePrev.getTitle())
+                .append("》）正文衔接】\n")
+                .append(prevExcerpt);
+
+        return sb.toString().trim();
     }
 
     private void settleRunIfFrozen(AgentRunEntity run, int sandboxCalls, String reason) {

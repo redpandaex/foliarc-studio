@@ -146,6 +146,7 @@ class RunManager:
                 synopsis=req.synopsis,
                 chapter_title=req.chapter_title,
                 chapter_context=req.chapter_context,
+                previous_chapters_context=req.previous_chapters_context,
                 instruction=req.instruction,
                 accumulated_text="",
                 start_seq=0,
@@ -179,6 +180,7 @@ class RunManager:
                 synopsis=req.synopsis,
                 chapter_title=req.chapter_title,
                 chapter_context=req.chapter_context,
+                previous_chapters_context=req.previous_chapters_context,
                 instruction=req.instruction,
                 accumulated_text=req.accumulated_text,
                 start_seq=req.last_seq,
@@ -260,6 +262,7 @@ class RunManager:
         synopsis: str | None,
         chapter_title: str,
         chapter_context: str,
+        previous_chapters_context: str = "",
         instruction: str,
         accumulated_text: str,
         start_seq: int,
@@ -397,6 +400,7 @@ class RunManager:
                         synopsis=synopsis,
                         chapter_title=chapter_title,
                         chapter_context=chapter_context,
+                        previous_chapters_context=previous_chapters_context,
                         instruction=instruction,
                         requested_model_alias=model_alias,
                         require_outline_approval=require_outline_approval,
@@ -431,12 +435,20 @@ class RunManager:
                     if chapter_no is not None or chapter_title:
                         ch_label = f"第 {chapter_no} 章 " if chapter_no else ""
                         user_parts.append(f"当前章节：{ch_label}{chapter_title}".strip())
+                    if previous_chapters_context.strip():
+                        user_parts.append(
+                            f"【前文章节承接（必须紧密衔接上一章结尾，禁止割裂剧情）】\n{previous_chapters_context.strip()[-4500:]}"
+                        )
+                    elif chapter_no and chapter_no > 1 and not chapter_context.strip():
+                        user_parts.append(
+                            f"【衔接提示】当前为第 {chapter_no} 章且正文尚空，动笔前请优先调用 read_chapter_excerpt(chapter_no={chapter_no - 1}) 阅读上一章结尾。"
+                        )
                     if chapter_context.strip():
-                        user_parts.append(f"【已有正文参考】\n{chapter_context[-4000:]}")
+                        user_parts.append(f"【当前章节已有正文】\n{chapter_context[-4000:]}")
                     if instruction.strip():
                         user_parts.append(f"【作者指令】\n{instruction.strip()}")
                     else:
-                        user_parts.append("【作者指令】\n请结合小说设定库与前文自然推进剧情，输出高质量正文。")
+                        user_parts.append("【作者指令】\n请紧接上一章结尾与小说设定自然推进剧情，输出高质量正文。")
 
                     context_manager = ContextManager()
                     loop = ReActAgentLoop(
@@ -469,6 +481,7 @@ class RunManager:
                         synopsis=synopsis,
                         chapter_title=chapter_title,
                         chapter_context=chapter_context,
+                        previous_chapters_context=previous_chapters_context,
                         instruction=instruction,
                         accumulated_text=accumulated_text,
                     )

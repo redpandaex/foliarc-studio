@@ -112,8 +112,9 @@ flowchart LR
   - **后端协作式暂停与恢复**：前端发送 `pause`，Agent 在安全检查点挂起并保存状态；用户修改指令或直接点 `resume` 后从检查点继续流式输出。
 - [ ] **1.6 小说编辑器与 AI 协作体验** `★`
   - 集成富文本编辑器（Tiptap / Lexical），支持划词改写/扩写、AI 生成内容 **Git 式 Diff 审阅（逐段 Accept / Reject）**、防抖自动保存 + 乐观锁版本冲突提示。
-- [x] **1.7 Agent 执行轨迹可视化面板** `★`
-  - 类似 Cursor/Manus 的实时步骤时间轴：展示当前是哪个 Agent 在工作、调用了哪些 Tool/MCP/Sandbox、命中了哪些设定文档、本次消耗了多少 Token 与耗时。
+- [x] **1.7 前后台解耦与创作工作台体验** `★`
+  - **前台（作者端）**：极简三栏写作台（章节目录 + 正文编辑 + 「AI 写作 / 故事设定」双栏 + 按需抽屉「历史版本」），完全隐藏计费、RAG/Milvus、Checkpoint 等工程概念；支持极简「我的资料库」上传个人参考文档与按书启用开关。
+  - **后台（`/admin` 运营/工程端）**：独立 `ROLE_ADMIN` 权限控制台，统一承载公共/定向 RAG 资料库、异步任务中心、Agent 会话执行日志时间轴、计费与网关监控及 Prompt 模板管理。
 
 ---
 
@@ -141,6 +142,11 @@ flowchart LR
   - **Token 预算分配器**：精确计算（`tiktoken`）各区域配额（System + Skill + 长期记忆 + RAG 片段 + 近期对话 + 输出预留）。
   - **分层压缩策略**：滑动窗口 + 滚动摘要（Rolling Summary）+ 大工具输出截断与外置（Tool Output Offloading，只给摘要和引用 ID）。
   - **KV Cache 前缀优化（Prompt Caching）** `★`：将静态 System Prompt、固定世界观设定放在前缀最前面，动态指令放尾部，显著降低 TTFT 延迟与 50%~80% 的输入成本。
+- [ ] **2.6.1 百章级 5 层长程记忆与零配置自动底座（Phase 5.5）** `★`
+  - **零配置自动涌现式 L0 静态底座**：作者未手填简介/世界观时，冷启动可直接开写第 1 章；在写完第 1 章、第 3 章及每满 10 章（每卷）时，后台异步归纳 `auto_inferred` 故事宪章（主线梗概、人称视角、文风基调、核心人物与规则），低频刷新以保住 KV Cache 命中率；严格遵守 `author_defined > auto_inferred`，作者随时可一键确认/编辑并锁定，AI 永不覆盖作者手填内容。
+  - **5 层定额上下文金字塔（单次输入恒定 8k~12k Tokens）**：
+    - `L0 静态底座`（~1k，KV Cache 前缀）+ `L1 热窗口`（当前章 + 上一章末尾 1500~2500 字原文，~2.5k）+ `L2 滚动摘要`（近期 5~10 章结构化单章摘要 `chapter_summaries` + 更早章节每 10~20 章归并卷级摘要 `volume_summaries`，~2.5k）+ `L3 实体感知动态账本`（仅注入当前章/上章提及的活跃角色状态 + `OPEN` 未回收伏笔，~1.5k）+ `L4 按需召回 RAG`（打捞百章前原场景父块，~2.5k）。
+  - **修改前文的级联脏标记（Cascade Invalidation）**：`chapters` 维护 `content_hash` / `summary_dirty`，作者回头修改历史章节后自动触发异步重算：单章摘要 → 所属卷摘要 → Milvus 切片 → 结构化记忆。
 - [x] **2.7 多 Agent 架构与协作编排**
   - 设计“小说编辑部”多 Agent 团队：
     - `Director（总编/规划师）`：拆解章节大纲与场景节拍（Beat Sheet）。
@@ -186,6 +192,12 @@ flowchart LR
     - 更新 **人物状态表**（位置、境界、伤势、持有物品、情绪关系）。
     - 更新 **伏笔追踪表**（埋设章节、描述、状态：未回收/已回收）。
     - 更新 **人物关系三元组**（`角色A --关系/事件--> 角色B`）与 **事件时间线**。
+- [ ] **3.6 三层作用域知识库与定向授权（Phase 5.5）** `★`
+  - **三层 Scope 模型**：`BOOK`（单书专属，含已写章节自动入库） / `USER`（作者个人跨书资料库） / `GLOBAL` & `ASSIGNED`（后台公共题材资料包 + 定向分配给指定作者的只读资料）。
+  - **零拷贝共享授权**：新增 `knowledge_grants` 授权表与 `book_knowledge_bindings` 挂载表，后台一份向量可授权多位作者共享，一处更新全员生效；作者对后台下发资料只读（可停用挂载不可误删）。
+  - **优先级与冲突覆盖**：检索 Rerank 与 Prompt 严格遵循 **`BOOK > USER > ASSIGNED > GLOBAL`**，防止公共设定污染作者原创世界观；公共库按 `genre_tags` 题材标签过滤，避免串题材召回。
+  - **租户隔离与防剧透红线**：Milvus 标量预过滤严格括号隔离多租户，且 `chapter_no < current_chapter_no` 仅作用于 `BOOK/CHAPTER`，不误杀公共库、个人库与本书全局设定。
+  - **配额、去重与队列分级**：作者上传支持 SHA-256 去重、单文件与用户总配额控制；RabbitMQ 拆分「章节实时同步/摘要高优队列」与「大文档导入普通队列」，防止大 PDF 阻塞实时写作连贯性。
 
 ---
 
@@ -210,8 +222,13 @@ flowchart LR
 
 ---
 
-### 模块 5：可观测性、评测与工程交付（LLMOps & DevOps）`★`
+### 模块 5：后台管理系统、可观测性、评测与工程交付（Admin + LLMOps）`★`
 
+- [ ] **5.0 统一后台管理系统（`/admin`，严格 `ROLE_ADMIN` 鉴权）** `★`
+  - **公共 / 定向 RAG 资料库管理**：上传公共资料包、配置 `genre_tags` 题材标签、通过 `knowledge_grants` 定向授权给指定作者、切片原文检查与多 Scope 混合检索调试。
+  - **异步任务中心（Async Job Center）**：聚合监控 `outbox_events`、文档解析（`PARSING/CHUNKING/EMBEDDING/FAILED`）、章摘/卷摘与结构化记忆抽取队列，支持死信（DLQ）排查与一键重试。
+  - **Agent 会话日志中心（Session Trace Center）**：新增 `agent_run_events` 持久化表，仅落盘结构化关键节点（`route_decision`、`agent_handoff`、`tool_call`、`tool_result`、命中 RAG 来源与得分、`critic_review`、`interrupt`、`error`、`usage`），不存逐字 `text_delta` 碎片，带脱敏与 TTL 归档；后台以时间轴瀑布图展示每个会话 Agent 的完整行为，并关联 PG Checkpoints 与 `guardrail_audit_logs`。
+  - **计费网关与 Prompt 注册中心**：将 `/billing`（账本流水、缓存省费、RPM/TPM 限流与熔断监控）统一收编进 `/admin/billing`，补齐 `prompt_templates` 在线编辑、版本管理与灰度发布页面。
 - [ ] **5.1 跨语言全链路追踪（Distributed Tracing）**
   - 使用 OpenTelemetry 打通 **Next.js -> Spring Boot -> Python FastAPI -> LLM/DB**，通过统一 `trace_id` 串联全链路耗时。
 - [ ] **5.2 LLM 可观测性（Tracing & Metrics）**
@@ -226,7 +243,7 @@ flowchart LR
 
 ---
 
-## 四、应该从哪里开始？（7 阶段垂直切片实战路线）
+## 四、应该从哪里开始？（8 阶段垂直切片实战路线）
 
 > [!WARNING]
 > **切忌“横向瀑布式开发”！** 不要花一个月先写完 Java 的权限、计费、RBAC 却还没跑通一句 AI 生成；也不要在 Python 里堆砌 10 个 Agent 却没有前后端联调。
@@ -239,7 +256,8 @@ flowchart TD
     P2 --> P3["Phase 3: Milvus Hybrid RAG + 文档异步导入 + 记忆库 (第6-7周)"]
     P3 --> P4["Phase 4: 多Agent协同 + 路由 + HITL中断恢复 (第8-9周)"]
     P4 --> P5["Phase 5: 企业级网关 + 计费账本 + 安全护栏 + 硬化Docker沙箱 (第10-11周)"]
-    P5 --> P6["Phase 6: 全链路追踪 + Eval评测 + 简历与面试包装 (第12周)"]
+    P5 --> P55["Phase 5.5: 百章级5层长程记忆 + 自动底座 + 三层RAG知识库 (第12周)"]
+    P55 --> P6["Phase 6: /admin后台运维(任务/日志/RAG/计费) + OTel/Langfuse + Eval评测 (第13周)"]
 ```
 
 ### 各阶段落地目标与简历产出
@@ -273,9 +291,20 @@ flowchart TD
    - **里程碑**：高并发压测下余额不超扣、触发 TPM 限流优雅降级、Prompt 注入被拦截、沙箱攻防用例全部拦截通过（禁外网/禁读密钥/防 Fork Bomb/超时强杀）。
    - **简历亮点**：补齐高并发 Java 后端分布式幂等计费、限流熔断与企业级 Agent 纵深安全隔离体系。
 
-7. **Phase 6：可观测性、自动化评测与求职冲刺（第 12 周）**
-   - **做什么**：接入 OpenTelemetry 跨语言链路追踪 + Langfuse；跑通 30+ 场景 Eval 评测集，量化记录优化前后指标（如：TTFT 降低 X%、检索 Recall@5 提升 Y%、KV Cache 节省 Z% 成本、长篇一致性错误率下降 W%）。
-   - **里程碑**：沉淀架构图、核心技术复盘文档与可演示 Demo，直接转化为简历 STAR 案例。
+7. **Phase 5.5：百章级 5 层长程记忆、零配置自动底座与三层 RAG 知识库（第 12 周）—— 放在 Eval 评测前！**
+   - **做什么**：
+     - 落地 `chapter_summaries`（单章摘要）+ `volume_summaries`（卷级摘要）+ `auto_inferred` 自动涌现式 L0 故事宪章（低频刷新保 KV Cache，`author_defined` 永远优先）+ 改前文级联脏标记重算；
+     - 升级为 5 层定额上下文装配器（L0 底座 + L1 上章末尾原文 + L2 章摘/卷摘 + L3 实体感知活跃状态/未回收伏笔 + L4 Milvus RAG），单次输入恒定 8k~12k Tokens；
+     - 扩展三层知识库（`BOOK` / `USER` / `GLOBAL` + `knowledge_grants` 零拷贝定向授权），落实 `BOOK > USER > ASSIGNED > GLOBAL` 覆盖优先级、题材标签过滤、SHA-256 去重与配额、高/普通优先级队列隔离；前台给作者提供极简「我的资料库」上传与按书启用开关。
+   - **里程碑**：零设定冷启动写到第 100 章仍保持人设/主线/伏笔高度一致；作者私库与后台公共/定向资料互不串租户且不覆盖本书设定。
+   - **简历亮点**：攻克超长文本“上下文爆炸 / 吃书 / 回头改文失效”与多作用域 SaaS RAG 权限隔离难题。
+
+8. **Phase 6：`/admin` 统一运维后台、全链路可观测性与 Eval 评测（第 13 周）**
+   - **做什么**：
+     - 建设严格 `ROLE_ADMIN` 鉴权的 `/admin` 控制台：公共/定向 RAG 资料库管理、**异步任务中心**（Outbox/文档/摘要/记忆队列监控与死信一键重试）、**Agent 会话日志中心**（`agent_run_events` 关键轨迹持久化表 + 时间轴瀑布图 + RAG 命中出处 + PG Checkpoints + 安全护栏审计）、计费网关看板收编、Prompt 模板版本管理；
+     - 接入 OpenTelemetry 跨语言链路追踪 + Langfuse（与 `/admin` 业务日志通过 `trace_id` 联动）；
+     - 跑通 30+ 场景 Eval 评测集，量化记录 Phase 5.5 优化前后指标（TTFT、Recall@5、KV Cache 节省比例、百章长篇一致性错误率下降幅度）。
+   - **里程碑**：前后台彻底解耦、每次会话与每个异步任务全链路可追溯可重试；沉淀量化对比数据与架构复盘文档。
 
 ---
 

@@ -42,6 +42,8 @@ class EditorialBlackboard(BaseModel):
     synopsis: str | None = None
     chapter_title: str = ""
     chapter_context: str = ""
+    previous_chapters_context: str = ""
+    director_lore_brief: str = ""
     instruction: str = ""
     requested_model_alias: str = "writer-main"
     require_outline_approval: bool = True
@@ -385,6 +387,7 @@ class EditorialTeamOrchestrator:
         # NODE 1: DIRECTOR (Beat Sheet Planner + HITL Interrupt)
         # =====================================================================
         if state.current_node == "DIRECTOR":
+            await self._hydrate_director_continuity(state)
             director_msgs = self._build_director_messages(state)
             outline_text, ctrl = await _collect_stream(
                 agent="director",
@@ -634,6 +637,69 @@ class EditorialTeamOrchestrator:
 
         return self._make_result("COMPLETED", state, total_in, total_cached, total_out)
 
+    async def _hydrate_director_continuity(self, state: EditorialBlackboard) -> None:
+        """
+        Ensures DIRECTOR always sees the preceding chapter's ending and core story bible
+        (characters + open foreshadowings) BEFORE planning the new chapter's beat sheet,
+        preventing disconnected Chapter 2+ outlines.
+        """
+        if not state.owner_id or not state.book_id:
+            return
+        headers = {
+            "X-Internal-Token": self._settings.internal_service_token,
+            "X-Owner-Id": state.owner_id,
+        }
+        base = self._settings.biz_java_base_url.rstrip("/")
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            if not state.previous_chapters_context.strip() and state.chapter_no and state.chapter_no > 1:
+                try:
+                    resp = await client.get(
+                        f"{base}/internal/v1/books/{state.book_id}/lore/chapters/{state.chapter_no - 1}",
+                        headers=headers,
+                        params={"maxChars": 3200},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        excerpt = str(data.get("excerpt") or "").strip()
+                        if excerpt:
+                            prev_title = str(data.get("title") or "")
+                            state.previous_chapters_context = (
+                                f"【上一章（第 {state.chapter_no - 1} 章《{prev_title}》）正文衔接】\n{excerpt}"
+                            )
+                except (httpx.HTTPError, ValueError, KeyError):
+                    pass
+
+            if not state.director_lore_brief.strip():
+                try:
+                    resp = await client.get(
+                        f"{base}/internal/v1/books/{state.book_id}/lore/bible",
+                        headers=headers,
+                    )
+                    if resp.status_code == 200:
+                        bible = resp.json()
+                        lines: list[str] = []
+                        chars = bible.get("characters") or []
+                        if chars:
+                            char_items = [
+                                f"- {c.get('name', '')}（{c.get('realmOrLevel') or c.get('roleType', '')}"
+                                f"{'，位置：' + c['currentLocation'] if c.get('currentLocation') else ''}"
+                                f"{'，持有：' + c['inventory'] if c.get('inventory') else ''}"
+                                f"{'，状态：' + c['statusNotes'] if c.get('statusNotes') else ''}）"
+                                for c in chars[:10]
+                            ]
+                            lines.append("主要人物：\n" + "\n".join(char_items))
+                        clues = bible.get("openForeshadowings") or []
+                        if clues:
+                            clue_items = [
+                                f"- {f.get('title', '')}：{str(f.get('description') or '')[:120]}"
+                                for f in clues[:8]
+                            ]
+                            lines.append("未回收伏笔：\n" + "\n".join(clue_items))
+                        if lines:
+                            state.director_lore_brief = "\n".join(lines)[:1800]
+                except (httpx.HTTPError, ValueError, KeyError):
+                    pass
+
     async def _run_lorekeeper(
         self,
         state: EditorialBlackboard,
@@ -642,7 +708,8 @@ class EditorialTeamOrchestrator:
         """Collects grounded facts from MCP Lore Server, Milvus Hybrid RAG, and Structured Memory."""
         brief_parts: list[str] = []
         citations: list[dict[str, Any]] = []
-        query_seed = f"{state.chapter_title} {state.instruction} {state.outline_text[:300]}".strip()
+        prev_tail = state.previous_chapters_context.strip()[-350:] if state.previous_chapters_context else ""
+        query_seed = f"{state.chapter_title} {state.instruction} {state.outline_text[:300]} {prev_tail}".strip()
 
         # 1. MCP Novel Lore Bible
         if self._enable_mcp and state.owner_id and state.book_id:
@@ -831,7 +898,8 @@ class EditorialTeamOrchestrator:
             "请为当前小说章节设计一份清晰、可执行、充满张力的【场景节拍大纲（Beat Sheet）】。\n"
             "输出要求：\n"
             "1. 使用 3~4 条编号列表（1. 2. 3. 4.），每条写明【场景地点】【核心冲突/转折】【人物动机】【伏笔或结尾钩子】。\n"
-            "2. 严格承接前文，不写正文，只输出精炼可编辑的大纲（300~500 字）。"
+            "2. 跨章连贯性是首要铁律：如果提供了【前文章节承接】，第 1 个节拍必须直接紧接上一章结尾的时间、地点、人物状态与未解悬念，沿用前文已出场的人物与冲突，严禁另起炉灶或重新开篇。\n"
+            "3. 不写正文，只输出精炼可编辑的大纲（300~500 字）。"
         )
         user_parts = [f"作品：《{state.book_title}》"]
         if state.genre:
@@ -840,9 +908,17 @@ class EditorialTeamOrchestrator:
             user_parts.append(f"简介：{state.synopsis}")
         if state.chapter_no or state.chapter_title:
             user_parts.append(f"目标章节：第 {state.chapter_no or '?'} 章 {state.chapter_title}")
+        if state.director_lore_brief.strip():
+            user_parts.append(f"【作品核心设定与伏笔】\n{state.director_lore_brief.strip()}")
+        if state.previous_chapters_context.strip():
+            user_parts.append(
+                f"【前文章节承接（必须紧密衔接上一章结尾，严禁脱节）】\n{state.previous_chapters_context.strip()[-4200:]}"
+            )
         if state.chapter_context.strip():
-            user_parts.append(f"【当前已有正文尾部】\n{state.chapter_context[-2500:]}")
-        user_parts.append(f"【作者指令】\n{state.instruction or '请自然推进本章节冲突并设计结尾钩子'}")
+            user_parts.append(f"【当前章节已有正文尾部】\n{state.chapter_context[-2500:]}")
+        user_parts.append(
+            f"【作者指令】\n{state.instruction or '请紧承上一章结尾自然推进本章节冲突，延续已出场人物线索并设计结尾钩子'}"
+        )
         if state.human_feedback:
             user_parts.append(f"【作者针对上一版大纲的打回修改意见（务必落实）】\n{state.human_feedback}")
         return [
@@ -854,7 +930,8 @@ class EditorialTeamOrchestrator:
     def _build_writer_messages(state: EditorialBlackboard, skill_body: str) -> list[dict[str, str]]:
         static_prefix = [
             "你是 FoliarcStudio 编辑部的【Writer 执笔作家】。",
-            "请严格按照总编拟定并经作者批准的【章节大纲】与设定管家提供的【设定核验简报】撰写高质量中文小说正文。",
+            "请严格按照总编拟定并经作者批准的【章节大纲】、【前文章节承接】与设定管家提供的【设定核验简报】撰写高质量中文小说正文。",
+            "跨章连贯铁律：必须紧接上一章的结尾场景、时间线、人物状态、对话余韵与未解悬念自然展开，禁止另起炉灶、凭空切换无关场景或重复介绍前文已交代的背景。",
             "严禁出现人设 OOC、战力境界矛盾、时间线错乱或“吃书”现象；直接输出小说正文，不要输出任何大纲标题或元说明。",
         ]
         if state.book_title:
@@ -866,8 +943,12 @@ class EditorialTeamOrchestrator:
             f"【作者批准的章节节拍大纲】\n{state.outline_text}",
             f"【设定管家核验简报（强约束）】\n{state.lore_brief[:3500]}",
         ]
+        if state.previous_chapters_context.strip():
+            user_parts.append(
+                f"【上一章及前文衔接（必须紧接其结尾展开，严禁割裂）】\n{state.previous_chapters_context.strip()[-3800:]}"
+            )
         if state.chapter_context.strip():
-            user_parts.append(f"【前文衔接段落】\n{state.chapter_context[-2000:]}")
+            user_parts.append(f"【当前章节已有正文尾部】\n{state.chapter_context[-2000:]}")
         if state.instruction.strip():
             user_parts.append(f"【作者补充要求】\n{state.instruction.strip()}")
         if state.revision_count > 0 and state.critic_guidance:
@@ -887,21 +968,24 @@ class EditorialTeamOrchestrator:
     def _build_critic_messages(state: EditorialBlackboard) -> list[dict[str, str]]:
         sys_prompt = (
             "你是 FoliarcStudio 编辑部的【ContinuityCritic 审稿与一致性审查编辑】。\n"
-            "请对照【批准大纲】与【设定核验简报】，严格审阅【执笔作家草稿】是否存在：\n"
+            "请对照【批准大纲】、【上一章结尾参考】与【设定核验简报】，严格审阅【执笔作家草稿】是否存在：\n"
             "1. 人物 OOC（性格/称谓/立场崩塌）\n"
             "2. 战力境界、持有物品或地点时间线矛盾（吃书）\n"
             "3. 遗漏大纲核心节拍或文风质量明显不足\n"
+            "4. 跨章衔接断层：若提供了【上一章结尾参考】，本章必须自然承接上一章末尾的剧情、人物状态与悬念；若另起炉灶、与上一章关联薄弱或重复前文，必须扣分并打回重写\n"
             '请仅输出严格 JSON 对象：{"passed": true/false, "score": 0-100, "issues": ["问题1"], "revision_guidance": "具体修改指令"}'
             "\n评分 >= 78 且无硬伤时 passed 为 true；否则 passed 为 false 并给出可执行修改意见。"
         )
-        user_prompt = (
-            f"【批准大纲】\n{state.outline_text[:1500]}\n\n"
-            f"【设定核验简报】\n{state.lore_brief[:2500]}\n\n"
-            f"【待审稿正文（第 {state.revision_count + 1} 稿）】\n{state.draft_text[:4500]}"
-        )
+        user_sections = [
+            f"【批准大纲】\n{state.outline_text[:1500]}",
+        ]
+        if state.previous_chapters_context.strip():
+            user_sections.append(f"【上一章结尾参考】\n{state.previous_chapters_context.strip()[-1800:]}")
+        user_sections.append(f"【设定核验简报】\n{state.lore_brief[:2500]}")
+        user_sections.append(f"【待审稿正文（第 {state.revision_count + 1} 稿）】\n{state.draft_text[:4500]}")
         return [
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": "\n\n".join(user_sections)},
         ]
 
     @staticmethod

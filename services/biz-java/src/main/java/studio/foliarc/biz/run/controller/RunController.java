@@ -78,7 +78,7 @@ public class RunController {
         String cursor = (lastEventIdHeader != null && !lastEventIdHeader.isBlank())
                 ? lastEventIdHeader
                 : lastEventIdParam;
-        return sseBridge.streamRun(runId, cursor);
+        return sseBridge.streamRun(runId, cursor, () -> runService.getRunStatus(runId));
     }
 
     @PostMapping("/{runId}/pause")

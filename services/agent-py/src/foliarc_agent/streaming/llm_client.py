@@ -60,18 +60,20 @@ def build_novel_messages(
     chapter_context: str,
     instruction: str,
     accumulated_text: str = "",
+    previous_chapters_context: str = "",
 ) -> list[dict[str, str]]:
     action_guides = {
         "CONTINUE": (
-            "任务：基于已有章节正文自然续写后续剧情。保持人物语气、叙事视角与文风连贯，"
-            "直接输出正文段落，不要输出开场白或元说明。"
+            "任务：基于前文章节衔接与当前章节已有正文自然续写后续剧情。"
+            "若当前章节尚无正文，必须紧接上一章末尾的场景、人物状态、对话余韵与未解悬念展开，"
+            "严禁另起炉灶或重新开篇。保持人物语气、叙事视角与文风连贯，直接输出正文段落，不要输出开场白或元说明。"
         ),
         "REWRITE": (
             "任务：对给定正文进行润色与细节扩写，提升画面感、动作节奏与对话张力，"
-            "保留核心剧情与人物设定。直接输出润色后的正文。"
+            "保留核心剧情与人物设定并确保与前文衔接自然。直接输出润色后的正文。"
         ),
         "OUTLINE": (
-            "任务：为当前章节规划清晰的场景节拍大纲（3-5 个场景，包含冲突、伏笔与结尾钩子）。"
+            "任务：紧承上一章结尾与已有世界观，为当前章节规划清晰的场景节拍大纲（3-5 个场景，包含承接前文、核心冲突、伏笔照应与结尾钩子）。"
             "使用简洁的 Markdown 列表输出。"
         ),
     }
@@ -90,13 +92,17 @@ def build_novel_messages(
     user_parts = []
     if chapter_title:
         user_parts.append(f"当前章节：{chapter_title}")
+    if previous_chapters_context.strip():
+        user_parts.append(
+            f"【前文章节承接（必须紧密衔接上一章结尾，严禁割裂或重启剧情）】\n{previous_chapters_context.strip()[-4500:]}"
+        )
     if chapter_context.strip():
         tail_context = chapter_context[-4000:]
-        user_parts.append(f"【已有正文参考】\n{tail_context}")
+        user_parts.append(f"【当前章节已有正文】\n{tail_context}")
     if instruction.strip():
         user_parts.append(f"【作者指令】\n{instruction.strip()}")
     else:
-        user_parts.append("【作者指令】\n请自然推进当前场景，输出约 400-800 字高质量内容。")
+        user_parts.append("【作者指令】\n请紧接前文自然推进当前场景，输出约 500-900 字高质量内容。")
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": "\n".join(system_parts)},
