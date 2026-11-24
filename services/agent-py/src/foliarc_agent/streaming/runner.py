@@ -12,10 +12,18 @@ from redis.asyncio import Redis
 from foliarc_agent.agent.context import ContextManager
 from foliarc_agent.agent.loop import AgentLoopConfig, ReActAgentLoop
 from foliarc_agent.agent.mcp_client import McpLoreClient
+from foliarc_agent.agent.multi_agent import (
+    CheckpointStore,
+    EditorialBlackboard,
+    EditorialTeamOrchestrator,
+    HttpBizCheckpointStore,
+)
 from foliarc_agent.agent.prompts import PromptRegistry
+from foliarc_agent.agent.router import FallbackStreamClient, IntentAndModelRouter
 from foliarc_agent.agent.skills import SkillRegistry
 from foliarc_agent.agent.tools import ToolRegistry, register_builtin_novel_tools
 from foliarc_agent.config import Settings
+from foliarc_agent.rag.embeddings import EmbeddingProvider
 from foliarc_agent.rag.retriever import HybridRagRetriever
 from foliarc_agent.streaming.llm_client import (
     LlmConfigurationError,
@@ -91,15 +99,20 @@ class RunManager:
         state_reporter: StateReporter | None = None,
         skill_registry: SkillRegistry | None = None,
         rag_retriever: HybridRagRetriever | None = None,
+        embedder: EmbeddingProvider | None = None,
+        checkpoint_store: CheckpointStore | None = None,
         enable_mcp: bool = True,
     ) -> None:
         self._settings = settings
         self._redis = redis
         self._llm = llm_client or OpenAICompatibleStreamClient(settings)
+        self._fallback_llm = FallbackStreamClient(self._llm)
         self._reporter = state_reporter or HttpBizStateReporter(settings)
         self._skills = skill_registry or SkillRegistry()
         self._prompts = PromptRegistry(settings)
         self._rag_retriever = rag_retriever
+        self._router = IntentAndModelRouter(settings=settings, embedder=embedder)
+        self._checkpoint_store = checkpoint_store or HttpBizCheckpointStore(settings)
         self._enable_mcp = enable_mcp
         self._active: dict[str, _ActiveRun] = {}
 
@@ -134,6 +147,8 @@ class RunManager:
                 prior_cached_tokens=0,
                 prior_output_tokens=0,
                 resumed=False,
+                require_outline_approval=req.require_outline_approval,
+                approval_payload=None,
             ),
             name=f"foliarc-run-{req.run_id}",
         )
@@ -165,6 +180,8 @@ class RunManager:
                 prior_cached_tokens=req.prior_cached_tokens,
                 prior_output_tokens=req.prior_output_tokens,
                 resumed=True,
+                require_outline_approval=True,
+                approval_payload=req.approval_payload,
             ),
             name=f"foliarc-run-resume-{req.run_id}",
         )
@@ -244,6 +261,8 @@ class RunManager:
         prior_cached_tokens: int,
         prior_output_tokens: int,
         resumed: bool,
+        require_outline_approval: bool = True,
+        approval_payload: dict[str, Any] | None = None,
     ) -> None:
         seq = start_seq
         last_event_id: str | None = None
@@ -251,8 +270,13 @@ class RunManager:
         seg_input = 0
         seg_cached = 0
         seg_output = 0
+        current_node: str | None = None
+        route_intent: str | None = None
+        revision_count: int | None = None
+        hitl_interrupt_type: str | None = None
+        hitl_interrupt_payload: dict[str, Any] | None = None
 
-        async def emit_next(event_type: str, payload: dict[str, Any]) -> str:
+        async def emit_next(event_type: str, payload: dict[str, Any], agent: str = "writer") -> str:
             nonlocal seq, last_event_id
             seq += 1
             last_event_id = await self._emit(
@@ -261,6 +285,7 @@ class RunManager:
                 seq=seq,
                 event_type=event_type,
                 payload=payload,
+                agent=agent,
             )
             return last_event_id
 
@@ -320,7 +345,50 @@ class RunManager:
                     ),
                 )
 
-                if mode == "AGENT":
+                if mode == "MULTI_AGENT":
+                    orchestrator = EditorialTeamOrchestrator(
+                        settings=self._settings,
+                        llm_client=self._fallback_llm,
+                        router=self._router,
+                        checkpoint_store=self._checkpoint_store,
+                        skill_registry=self._skills,
+                        rag_retriever=self._rag_retriever,
+                        enable_mcp=self._enable_mcp,
+                    )
+                    board = EditorialBlackboard(
+                        run_id=run_id,
+                        owner_id=owner_id,
+                        book_id=book_id,
+                        chapter_no=chapter_no,
+                        action=str(action),
+                        book_title=book_title,
+                        genre=genre,
+                        synopsis=synopsis,
+                        chapter_title=chapter_title,
+                        chapter_context=chapter_context,
+                        instruction=instruction,
+                        requested_model_alias=model_alias,
+                        require_outline_approval=require_outline_approval,
+                    )
+                    ma_res = await orchestrator.run(
+                        initial_state=board,
+                        emit=emit_next,
+                        control_event=active.control_event,
+                        check_control=lambda: self._check_control(active),
+                        resumed=resumed,
+                        approval_payload=approval_payload,
+                    )
+                    full_text = ma_res.accumulated_text
+                    seg_input = ma_res.input_tokens
+                    seg_cached = ma_res.cached_tokens
+                    seg_output = ma_res.output_tokens
+                    current_node = ma_res.current_node
+                    route_intent = ma_res.route_intent
+                    revision_count = ma_res.revision_count
+                    hitl_interrupt_type = ma_res.interrupt_type
+                    hitl_interrupt_payload = ma_res.interrupt_payload
+                    final_outcome = ma_res.status
+                elif mode == "AGENT":
                     rendered = await self._prompts.render_writer_system(
                         action=action,
                         book_title=book_title,
@@ -419,6 +487,55 @@ class RunManager:
             total_cached = prior_cached_tokens + seg_cached
             total_out = prior_output_tokens + seg_output
 
+            if final_outcome == "INTERRUPTED" and hitl_interrupt_payload is not None:
+                payload_json = json.dumps(hitl_interrupt_payload, ensure_ascii=False)
+                next_seq = seq + 1
+                await self._reporter.report(
+                    run_id,
+                    RunStateCallback(
+                        status="PAUSED",
+                        accumulated_text=full_text,
+                        last_seq=next_seq,
+                        last_event_id=last_event_id,
+                        input_tokens=total_in,
+                        cached_tokens=total_cached,
+                        output_tokens=total_out,
+                        current_node=current_node,
+                        interrupt_type=hitl_interrupt_type or "OUTLINE_APPROVAL",
+                        interrupt_payload_json=payload_json,
+                        route_intent=route_intent,
+                        revision_count=revision_count,
+                    ),
+                )
+                await emit_next(
+                    "interrupt",
+                    {
+                        "checkpoint_id": f"ckpt-step-{hitl_interrupt_payload.get('checkpoint_step', seq)}",
+                        "reason": hitl_interrupt_type or "OUTLINE_APPROVAL",
+                        "interrupt_type": hitl_interrupt_type or "OUTLINE_APPROVAL",
+                        "proposed_data": hitl_interrupt_payload,
+                    },
+                    agent="director",
+                )
+                await self._reporter.report(
+                    run_id,
+                    RunStateCallback(
+                        status="PAUSED",
+                        accumulated_text=full_text,
+                        last_seq=seq,
+                        last_event_id=last_event_id,
+                        input_tokens=total_in,
+                        cached_tokens=total_cached,
+                        output_tokens=total_out,
+                        current_node=current_node,
+                        interrupt_type=hitl_interrupt_type or "OUTLINE_APPROVAL",
+                        interrupt_payload_json=payload_json,
+                        route_intent=route_intent,
+                        revision_count=revision_count,
+                    ),
+                )
+                return
+
             if final_outcome == "PAUSED":
                 checkpoint_id = f"ckpt-{seq}"
                 next_seq = seq + 1
@@ -497,6 +614,9 @@ class RunManager:
                     input_tokens=total_in,
                     cached_tokens=total_cached,
                     output_tokens=total_out,
+                    current_node=current_node,
+                    route_intent=route_intent,
+                    revision_count=revision_count,
                 ),
             )
             await emit_next(

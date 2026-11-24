@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 RunAction = Literal["CONTINUE", "REWRITE", "OUTLINE"]
-RunMode = Literal["AGENT", "DIRECT"]
+RunMode = Literal["AGENT", "DIRECT", "MULTI_AGENT"]
 ControlSignal = Literal["PAUSE", "CANCEL"]
 
 
@@ -22,6 +22,7 @@ class RunStartRequest(BaseModel):
     chapter_title: str = ""
     chapter_context: str = ""
     instruction: str = ""
+    require_outline_approval: bool = True
 
 
 class RunResumeRequest(BaseModel):
@@ -44,6 +45,7 @@ class RunResumeRequest(BaseModel):
     prior_input_tokens: int = Field(default=0, ge=0)
     prior_cached_tokens: int = Field(default=0, ge=0)
     prior_output_tokens: int = Field(default=0, ge=0)
+    approval_payload: dict[str, Any] | None = None
 
 
 class RunControlRequest(BaseModel):
@@ -59,4 +61,9 @@ class RunStateCallback(BaseModel):
     cached_tokens: int = 0
     output_tokens: int = 0
     error_message: str | None = None
+    current_node: str | None = None
+    interrupt_type: str | None = None
+    interrupt_payload_json: str | None = None
+    route_intent: str | None = None
+    revision_count: int | None = None
     extra: dict[str, Any] = Field(default_factory=dict)

@@ -19,7 +19,7 @@ public final class RunDtos {
 
             UUID chapterId,
 
-            @Size(max = 16)
+            @Size(max = 24)
             String mode,
 
             @Size(max = 32)
@@ -31,13 +31,26 @@ public final class RunDtos {
             @Size(max = 4000)
             String instruction,
 
-            String chapterContext
+            String chapterContext,
+
+            Boolean requireOutlineApproval
     ) {
     }
 
     public record ResumeRunRequest(
             @Size(max = 4000)
             String revisedInstruction
+    ) {
+    }
+
+    public record ApproveRunRequest(
+            Boolean approved,
+
+            @Size(max = 8000)
+            String editedOutline,
+
+            @Size(max = 4000)
+            String feedback
     ) {
     }
 
@@ -57,8 +70,24 @@ public final class RunDtos {
             int cachedTokens,
             int outputTokens,
             String errorMessage,
+            String currentNode,
+            String interruptType,
+            String interruptPayloadJson,
+            String routeIntent,
+            int revisionCount,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt
+    ) {
+    }
+
+    public record CheckpointResponse(
+            UUID id,
+            UUID runId,
+            int stepNo,
+            String nodeName,
+            String status,
+            String stateJson,
+            OffsetDateTime createdAt
     ) {
     }
 
@@ -70,7 +99,20 @@ public final class RunDtos {
             @JsonProperty("input_tokens") Integer inputTokens,
             @JsonProperty("cached_tokens") Integer cachedTokens,
             @JsonProperty("output_tokens") Integer outputTokens,
-            @JsonProperty("error_message") String errorMessage
+            @JsonProperty("error_message") String errorMessage,
+            @JsonProperty("current_node") String currentNode,
+            @JsonProperty("interrupt_type") String interruptType,
+            @JsonProperty("interrupt_payload_json") String interruptPayloadJson,
+            @JsonProperty("route_intent") String routeIntent,
+            @JsonProperty("revision_count") Integer revisionCount
+    ) {
+    }
+
+    public record InternalSaveCheckpointRequest(
+            @JsonProperty("step_no") Integer stepNo,
+            @JsonProperty("node_name") String nodeName,
+            String status,
+            @JsonProperty("state_json") String stateJson
     ) {
     }
 }

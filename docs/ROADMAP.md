@@ -141,7 +141,7 @@ flowchart LR
   - **Token 预算分配器**：精确计算（`tiktoken`）各区域配额（System + Skill + 长期记忆 + RAG 片段 + 近期对话 + 输出预留）。
   - **分层压缩策略**：滑动窗口 + 滚动摘要（Rolling Summary）+ 大工具输出截断与外置（Tool Output Offloading，只给摘要和引用 ID）。
   - **KV Cache 前缀优化（Prompt Caching）** `★`：将静态 System Prompt、固定世界观设定放在前缀最前面，动态指令放尾部，显著降低 TTFT 延迟与 50%~80% 的输入成本。
-- [ ] **2.7 多 Agent 架构与协作编排**
+- [x] **2.7 多 Agent 架构与协作编排**
   - 设计“小说编辑部”多 Agent 团队：
     - `Director（总编/规划师）`：拆解章节大纲与场景节拍（Beat Sheet）。
     - `Lorekeeper（设定管家）`：检索世界观、人物状态与未回收伏笔。
@@ -149,7 +149,7 @@ flowchart LR
     - `ContinuityCritic（审稿/查重编辑）`：检查人设 OOC、时间线矛盾、战力崩坏，不通过则打回重写（Reflection 循环，限制最大打回次数如 2 次）。
   - **状态共享模式**：基于 Shared State（黑板模式）+ PostgreSQL Checkpoint 持久化，避免 Agent 间“传话失真”。
   - **HITL（Human-in-the-Loop）中断与恢复** `★`：如 `Director` 生成章节大纲后主动触发 `interrupt`，等待前端用户修改/批准后再唤醒 `Writer` 写正文。
-- [ ] **2.8 Agent 路由与模型调度（Routing & Fallback）**
+- [x] **2.8 Agent 路由与模型调度（Routing & Fallback）**
   - **多层意图路由**：规则/关键词快速通道 -> Embedding 语义路由 -> 轻量小模型分类 -> LLM 决策。
   - **智能模型路由（Model Routing）** `★`：简单任务（摘要提取、意图分类、实体抽取）路由至廉价快模型；核心任务（高潮剧情创作、逻辑审稿）路由至旗舰模型。
   - **容灾降级（Fallback Chain）**：主模型 429 限流或 5xx 超时时自动无缝切换备用模型/厂商。

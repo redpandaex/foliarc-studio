@@ -21,7 +21,7 @@ from foliarc_agent.streaming.protocol import (
 )
 from foliarc_agent.streaming.runner import RunManager
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 
 class InternalRagSearchRequest(BaseModel):
@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
         settings=settings,
         redis=redis,
         rag_retriever=rag_retriever,
+        embedder=embedder,
     )
     rag_worker.start()
     try:
@@ -149,6 +150,11 @@ async def meta() -> dict[str, Any]:
             "rerank_mode": app.state.reranker.mode,
             "embedding_dim": settings.embedding_dim,
             "rabbitmq_worker_connected": app.state.rag_worker.connected,
+        },
+        "multi_agent": {
+            "nodes": ["ROUTER", "DIRECTOR", "LOREKEEPER", "WRITER", "CRITIC"],
+            "hitl_interrupt": "OUTLINE_APPROVAL",
+            "max_revisions": 2,
         },
         "skills": app.state.run_manager.skill_registry.list_catalog(),
         "model_aliases": {

@@ -24,17 +24,20 @@ import studio.foliarc.biz.novel.entity.ChapterEntity;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
 import studio.foliarc.biz.novel.service.BookService;
 import studio.foliarc.biz.run.dto.RunDtos;
+import studio.foliarc.biz.run.entity.AgentCheckpointEntity;
 import studio.foliarc.biz.run.entity.AgentRunEntity;
+import studio.foliarc.biz.run.mapper.AgentCheckpointMapper;
 import studio.foliarc.biz.run.mapper.AgentRunMapper;
 
 @Service
 public class AgentRunService {
 
     private static final Set<String> VALID_ACTIONS = Set.of("CONTINUE", "REWRITE", "OUTLINE");
-    private static final Set<String> VALID_MODES = Set.of("AGENT", "DIRECT");
+    private static final Set<String> VALID_MODES = Set.of("AGENT", "DIRECT", "MULTI_AGENT");
     private static final Duration STREAM_TTL = Duration.ofHours(2);
 
     private final AgentRunMapper runMapper;
+    private final AgentCheckpointMapper checkpointMapper;
     private final BookService bookService;
     private final ChapterMapper chapterMapper;
     private final WebClient agentWebClient;
@@ -42,12 +45,14 @@ public class AgentRunService {
 
     public AgentRunService(
             AgentRunMapper runMapper,
+            AgentCheckpointMapper checkpointMapper,
             BookService bookService,
             ChapterMapper chapterMapper,
             WebClient agentWebClient,
             StringRedisTemplate redis
     ) {
         this.runMapper = runMapper;
+        this.checkpointMapper = checkpointMapper;
         this.bookService = bookService;
         this.chapterMapper = chapterMapper;
         this.agentWebClient = agentWebClient;
@@ -87,6 +92,9 @@ public class AgentRunService {
         String chapterContext = req.chapterContext() != null
                 ? req.chapterContext()
                 : (chapter != null && chapter.getContent() != null ? chapter.getContent() : "");
+        boolean requireOutlineApproval = req.requireOutlineApproval() == null
+                ? "MULTI_AGENT".equals(mode)
+                : Boolean.TRUE.equals(req.requireOutlineApproval());
 
         AgentRunEntity run = new AgentRunEntity();
         run.setId(UUID.randomUUID());
@@ -104,6 +112,7 @@ public class AgentRunService {
         run.setInputTokens(0);
         run.setCachedTokens(0);
         run.setOutputTokens(0);
+        run.setRevisionCount(0);
         runMapper.insert(run);
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -120,6 +129,7 @@ public class AgentRunService {
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", chapterContext);
         body.put("instruction", instruction);
+        body.put("require_outline_approval", requireOutlineApproval);
 
         dispatchToAgent("/internal/v1/runs/start", body, run);
         return toResponse(run);
@@ -140,6 +150,14 @@ public class AgentRunService {
             query.eq(AgentRunEntity::getChapterId, chapterId);
         }
         return runMapper.selectList(query).stream().map(AgentRunService::toResponse).toList();
+    }
+
+    public List<RunDtos.CheckpointResponse> listCheckpoints(UUID ownerId, UUID runId) {
+        requireOwnedRun(ownerId, runId);
+        var query = new LambdaQueryWrapper<AgentCheckpointEntity>()
+                .eq(AgentCheckpointEntity::getRunId, runId)
+                .orderByAsc(AgentCheckpointEntity::getStepNo);
+        return checkpointMapper.selectList(query).stream().map(AgentRunService::toCheckpoint).toList();
     }
 
     public AgentRunEntity requireOwnedRun(UUID ownerId, UUID runId) {
@@ -173,18 +191,42 @@ public class AgentRunService {
         if (!"PAUSED".equals(run.getStatus())) {
             throw BizException.conflict("RUN_NOT_PAUSED", "只有已暂停的任务才能继续生成，当前状态: " + run.getStatus());
         }
-
-        BookEntity book = bookService.requireOwnedBook(ownerId, run.getBookId());
-        ChapterEntity chapter = run.getChapterId() != null ? chapterMapper.selectById(run.getChapterId()) : null;
-
         if (req != null && req.revisedInstruction() != null && !req.revisedInstruction().isBlank()) {
             run.setInstruction(req.revisedInstruction().trim());
         }
+        return dispatchResumeInternal(ownerId, run, null);
+    }
+
+    @Transactional
+    public RunDtos.RunResponse approveRun(UUID ownerId, UUID runId, RunDtos.ApproveRunRequest req) {
+        AgentRunEntity run = requireOwnedRun(ownerId, runId);
+        if (!"PAUSED".equals(run.getStatus())) {
+            throw BizException.conflict("RUN_NOT_AWAITING_APPROVAL", "当前任务未处于等待人工审批状态: " + run.getStatus());
+        }
+        boolean approved = req == null || req.approved() == null || Boolean.TRUE.equals(req.approved());
+        Map<String, Object> approval = new LinkedHashMap<>();
+        approval.put("approved", approved);
+        approval.put("edited_outline", req != null && req.editedOutline() != null ? req.editedOutline().trim() : "");
+        approval.put("feedback", req != null && req.feedback() != null ? req.feedback().trim() : "");
+
+        return dispatchResumeInternal(ownerId, run, approval);
+    }
+
+    private RunDtos.RunResponse dispatchResumeInternal(
+            UUID ownerId,
+            AgentRunEntity run,
+            Map<String, Object> approvalPayload
+    ) {
+        BookEntity book = bookService.requireOwnedBook(ownerId, run.getBookId());
+        ChapterEntity chapter = run.getChapterId() != null ? chapterMapper.selectById(run.getChapterId()) : null;
+
         run.setStatus("RUNNING");
         run.setErrorMessage(null);
+        run.setInterruptType(null);
+        run.setInterruptPayloadJson(null);
         runMapper.updateById(run);
 
-        redis.delete(RedisStreamSseBridge.controlKey(runId));
+        redis.delete(RedisStreamSseBridge.controlKey(run.getId()));
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
@@ -205,8 +247,11 @@ public class AgentRunService {
         body.put("prior_input_tokens", run.getInputTokens() == null ? 0 : run.getInputTokens());
         body.put("prior_cached_tokens", run.getCachedTokens() == null ? 0 : run.getCachedTokens());
         body.put("prior_output_tokens", run.getOutputTokens() == null ? 0 : run.getOutputTokens());
+        if (approvalPayload != null) {
+            body.put("approval_payload", approvalPayload);
+        }
 
-        dispatchToAgent("/internal/v1/runs/" + runId + "/resume", body, run);
+        dispatchToAgent("/internal/v1/runs/" + run.getId() + "/resume", body, run);
         return toResponse(run);
     }
 
@@ -221,6 +266,8 @@ public class AgentRunService {
             int nextSeq = (run.getLastSeq() == null ? 0 : run.getLastSeq()) + 1;
             RecordId recordId = appendCancelledEventToStream(runId, nextSeq, run.getAccumulatedText());
             run.setStatus("CANCELLED");
+            run.setInterruptType(null);
+            run.setInterruptPayloadJson(null);
             run.setLastSeq(nextSeq);
             if (recordId != null) {
                 run.setLastEventId(recordId.getValue());
@@ -261,8 +308,64 @@ public class AgentRunService {
         if (req.outputTokens() != null) {
             run.setOutputTokens(req.outputTokens());
         }
+        if (req.currentNode() != null) {
+            run.setCurrentNode(req.currentNode());
+        }
+        if (req.interruptType() != null) {
+            run.setInterruptType(req.interruptType().isBlank() ? null : req.interruptType());
+        }
+        if (req.interruptPayloadJson() != null) {
+            run.setInterruptPayloadJson(req.interruptPayloadJson().isBlank() ? null : req.interruptPayloadJson());
+        }
+        if (req.routeIntent() != null) {
+            run.setRouteIntent(req.routeIntent());
+        }
+        if (req.revisionCount() != null) {
+            run.setRevisionCount(req.revisionCount());
+        }
         run.setErrorMessage(req.errorMessage());
         runMapper.updateById(run);
+    }
+
+    @Transactional
+    public RunDtos.CheckpointResponse saveCheckpoint(UUID runId, RunDtos.InternalSaveCheckpointRequest req) {
+        AgentRunEntity run = runMapper.selectById(runId);
+        if (run == null) {
+            throw BizException.notFound("RUN_NOT_FOUND", "流式运行任务不存在");
+        }
+        int stepNo = req.stepNo() != null ? req.stepNo() : 1;
+        AgentCheckpointEntity existing = checkpointMapper.selectOne(
+                new LambdaQueryWrapper<AgentCheckpointEntity>()
+                        .eq(AgentCheckpointEntity::getRunId, runId)
+                        .eq(AgentCheckpointEntity::getStepNo, stepNo)
+        );
+        if (existing != null) {
+            existing.setNodeName(req.nodeName() != null ? req.nodeName() : existing.getNodeName());
+            existing.setStatus(req.status() != null ? req.status() : "COMPLETED");
+            existing.setStateJson(req.stateJson() != null ? req.stateJson() : "{}");
+            checkpointMapper.updateById(existing);
+            return toCheckpoint(existing);
+        }
+
+        AgentCheckpointEntity entity = new AgentCheckpointEntity();
+        entity.setId(UUID.randomUUID());
+        entity.setRunId(runId);
+        entity.setStepNo(stepNo);
+        entity.setNodeName(req.nodeName() != null ? req.nodeName() : "UNKNOWN");
+        entity.setStatus(req.status() != null ? req.status() : "COMPLETED");
+        entity.setStateJson(req.stateJson() != null ? req.stateJson() : "{}");
+        checkpointMapper.insert(entity);
+        return toCheckpoint(entity);
+    }
+
+    public RunDtos.CheckpointResponse getLatestCheckpoint(UUID runId) {
+        AgentCheckpointEntity latest = checkpointMapper.selectOne(
+                new LambdaQueryWrapper<AgentCheckpointEntity>()
+                        .eq(AgentCheckpointEntity::getRunId, runId)
+                        .orderByDesc(AgentCheckpointEntity::getStepNo)
+                        .last("LIMIT 1")
+        );
+        return latest == null ? null : toCheckpoint(latest);
     }
 
     private void dispatchToAgent(String path, Map<String, Object> body, AgentRunEntity run) {
@@ -330,8 +433,25 @@ public class AgentRunService {
                 r.getCachedTokens() == null ? 0 : r.getCachedTokens(),
                 r.getOutputTokens() == null ? 0 : r.getOutputTokens(),
                 r.getErrorMessage(),
+                r.getCurrentNode(),
+                r.getInterruptType(),
+                r.getInterruptPayloadJson(),
+                r.getRouteIntent(),
+                r.getRevisionCount() == null ? 0 : r.getRevisionCount(),
                 r.getCreatedAt(),
                 r.getUpdatedAt()
+        );
+    }
+
+    private static RunDtos.CheckpointResponse toCheckpoint(AgentCheckpointEntity c) {
+        return new RunDtos.CheckpointResponse(
+                c.getId(),
+                c.getRunId(),
+                c.getStepNo() == null ? 0 : c.getStepNo(),
+                c.getNodeName(),
+                c.getStatus(),
+                c.getStateJson(),
+                c.getCreatedAt()
         );
     }
 }

@@ -2,10 +2,14 @@ import { getAccessToken, refreshSession } from "@/lib/api";
 
 export type SseEventType =
   | "run_started"
+  | "route_decision"
+  | "agent_handoff"
   | "thought_delta"
   | "tool_call"
   | "tool_result"
   | "text_delta"
+  | "draft_reset"
+  | "critic_review"
   | "interrupt"
   | "usage"
   | "ping"

@@ -2,6 +2,7 @@ package studio.foliarc.biz.run.controller;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -34,9 +35,37 @@ public class InternalRunController {
             @PathVariable UUID runId,
             @RequestBody RunDtos.InternalStateUpdateRequest body
     ) {
+        verifyToken(token);
+        runService.updateInternalState(runId, body);
+    }
+
+    @PostMapping("/{runId}/checkpoints")
+    @ResponseStatus(HttpStatus.CREATED)
+    public RunDtos.CheckpointResponse saveCheckpoint(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID runId,
+            @RequestBody RunDtos.InternalSaveCheckpointRequest body
+    ) {
+        verifyToken(token);
+        return runService.saveCheckpoint(runId, body);
+    }
+
+    @GetMapping("/{runId}/checkpoint/latest")
+    public Map<String, Object> latestCheckpoint(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID runId
+    ) {
+        verifyToken(token);
+        RunDtos.CheckpointResponse latest = runService.getLatestCheckpoint(runId);
+        if (latest == null) {
+            return Map.of("found", false);
+        }
+        return Map.of("found", true, "checkpoint", latest);
+    }
+
+    private void verifyToken(String token) {
         if (token == null || !MessageDigest.isEqual(token.getBytes(StandardCharsets.UTF_8), expectedTokenBytes)) {
             throw BizException.forbidden("INVALID_INTERNAL_TOKEN", "非法内部服务凭证");
         }
-        runService.updateInternalState(runId, body);
     }
 }

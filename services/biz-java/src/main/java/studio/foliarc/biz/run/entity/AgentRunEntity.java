@@ -31,6 +31,11 @@ public class AgentRunEntity {
     private Integer cachedTokens;
     private Integer outputTokens;
     private String errorMessage;
+    private String currentNode;
+    private String interruptType;
+    private String interruptPayloadJson;
+    private String routeIntent;
+    private Integer revisionCount;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -72,6 +77,16 @@ public class AgentRunEntity {
     public void setOutputTokens(Integer outputTokens) { this.outputTokens = outputTokens; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public String getCurrentNode() { return currentNode; }
+    public void setCurrentNode(String currentNode) { this.currentNode = currentNode; }
+    public String getInterruptType() { return interruptType; }
+    public void setInterruptType(String interruptType) { this.interruptType = interruptType; }
+    public String getInterruptPayloadJson() { return interruptPayloadJson; }
+    public void setInterruptPayloadJson(String interruptPayloadJson) { this.interruptPayloadJson = interruptPayloadJson; }
+    public String getRouteIntent() { return routeIntent; }
+    public void setRouteIntent(String routeIntent) { this.routeIntent = routeIntent; }
+    public Integer getRevisionCount() { return revisionCount; }
+    public void setRevisionCount(Integer revisionCount) { this.revisionCount = revisionCount; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

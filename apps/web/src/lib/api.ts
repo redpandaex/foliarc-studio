@@ -52,7 +52,7 @@ export interface ChapterVersion {
 }
 
 export type RunAction = "CONTINUE" | "REWRITE" | "OUTLINE";
-export type RunMode = "AGENT" | "DIRECT";
+export type RunMode = "AGENT" | "DIRECT" | "MULTI_AGENT";
 
 export interface AgentRunItem {
   id: string;
@@ -70,8 +70,23 @@ export interface AgentRunItem {
   cachedTokens: number;
   outputTokens: number;
   errorMessage: string | null;
+  currentNode?: string | null;
+  interruptType?: string | null;
+  interruptPayloadJson?: string | null;
+  routeIntent?: string | null;
+  revisionCount?: number;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+export interface AgentCheckpointItem {
+  id: string;
+  runId: string;
+  stepNo: number;
+  nodeName: string;
+  status: string;
+  stateJson: string;
+  createdAt: string | null;
 }
 
 export interface CharacterItem {
@@ -485,6 +500,7 @@ export const runsApi = {
     modelAlias?: string;
     instruction?: string;
     chapterContext?: string;
+    requireOutlineApproval?: boolean;
   }): Promise<AgentRunItem> {
     return request<AgentRunItem>("/api/v1/runs", {
       method: "POST",
@@ -493,6 +509,9 @@ export const runsApi = {
   },
   get(runId: string): Promise<AgentRunItem> {
     return request<AgentRunItem>(`/api/v1/runs/${runId}`);
+  },
+  listCheckpoints(runId: string): Promise<AgentCheckpointItem[]> {
+    return request<AgentCheckpointItem[]>(`/api/v1/runs/${runId}/checkpoints`);
   },
   list(bookId: string, chapterId?: string): Promise<AgentRunItem[]> {
     const query = new URLSearchParams({ bookId });
@@ -510,6 +529,19 @@ export const runsApi = {
     return request<AgentRunItem>(`/api/v1/runs/${runId}/resume`, {
       method: "POST",
       body: JSON.stringify({ revisedInstruction }),
+    });
+  },
+  approve(
+    runId: string,
+    payload: {
+      approved: boolean;
+      editedOutline?: string;
+      feedback?: string;
+    },
+  ): Promise<AgentRunItem> {
+    return request<AgentRunItem>(`/api/v1/runs/${runId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   },
   cancel(runId: string): Promise<AgentRunItem> {

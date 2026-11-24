@@ -55,6 +55,14 @@ public class RunController {
         return runService.getRun(actor.userId(), runId);
     }
 
+    @GetMapping("/{runId}/checkpoints")
+    public List<RunDtos.CheckpointResponse> listCheckpoints(
+            @AuthenticationPrincipal AuthenticatedUser actor,
+            @PathVariable UUID runId
+    ) {
+        return runService.listCheckpoints(actor.userId(), runId);
+    }
+
     @GetMapping(value = "/{runId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> streamRun(
             @AuthenticationPrincipal AuthenticatedUser actor,
@@ -88,6 +96,15 @@ public class RunController {
             @Valid @RequestBody(required = false) RunDtos.ResumeRunRequest body
     ) {
         return runService.resumeRun(actor.userId(), runId, body);
+    }
+
+    @PostMapping("/{runId}/approve")
+    public RunDtos.RunResponse approveRun(
+            @AuthenticationPrincipal AuthenticatedUser actor,
+            @PathVariable UUID runId,
+            @Valid @RequestBody(required = false) RunDtos.ApproveRunRequest body
+    ) {
+        return runService.approveRun(actor.userId(), runId, body);
     }
 
     @PostMapping("/{runId}/cancel")
