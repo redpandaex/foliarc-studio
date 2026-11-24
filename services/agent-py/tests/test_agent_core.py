@@ -5,12 +5,12 @@ from typing import Any
 
 import pytest
 
-from inkflow_agent.agent.context import ContextBudget, ContextManager, TokenCounter
-from inkflow_agent.agent.loop import AgentLoopConfig, ReActAgentLoop
-from inkflow_agent.agent.mcp_client import McpLoreClient
-from inkflow_agent.agent.skills import SkillRegistry
-from inkflow_agent.agent.tools import ToolDefinition, ToolRegistry, register_builtin_novel_tools
-from inkflow_agent.streaming.llm_client import LlmStreamChunk, ToolCallDelta
+from foliarc_agent.agent.context import ContextBudget, ContextManager, TokenCounter
+from foliarc_agent.agent.loop import AgentLoopConfig, ReActAgentLoop
+from foliarc_agent.agent.mcp_client import McpLoreClient
+from foliarc_agent.agent.skills import SkillRegistry
+from foliarc_agent.agent.tools import ToolDefinition, ToolRegistry, register_builtin_novel_tools
+from foliarc_agent.streaming.llm_client import LlmStreamChunk, ToolCallDelta
 
 
 class ScriptedToolLlm:

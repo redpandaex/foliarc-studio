@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "InkFlow Studio | 墨流工坊",
+  title: "FoliarcStudio | 卷弧工坊",
   description:
     "企业级长篇小说创作 AI Agent 平台（Next.js + Java 21 Spring Boot + Python FastAPI）",
 };

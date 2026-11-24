@@ -79,12 +79,14 @@ const STATE_BADGE: Record<StreamConnectionState, { label: string; dot: string }>
 const SOURCE_STYLE: Record<string, string> = {
   mcp: "bg-emerald-500/15 text-emerald-600",
   skill: "bg-violet-500/15 text-violet-600",
+  rag: "bg-indigo-500/15 text-indigo-600",
+  memory: "bg-teal-500/15 text-teal-600",
   sandbox: "bg-amber-500/15 text-amber-600",
   builtin: "bg-sky-500/15 text-sky-600",
 };
 
 function storageKey(bookId: string, chapterId: string | null): string {
-  return `inkflow:sse_run:${bookId}:${chapterId ?? "book"}`;
+  return `foliarc:sse_run:${bookId}:${chapterId ?? "book"}`;
 }
 
 export function AiCopilotPanel({

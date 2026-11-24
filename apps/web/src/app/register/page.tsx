@@ -46,7 +46,7 @@ export default function RegisterPage() {
       <div className="rounded-xl border border-border bg-card p-6 shadow-xs">
         <div className="mb-6 space-y-1">
           <p className="font-mono text-xs text-muted-foreground">
-            InkFlow Studio · 墨流工坊
+            FoliarcStudio · 卷弧工坊
           </p>
           <h1 className="text-2xl font-bold tracking-tight">创建作者账号</h1>
           <p className="text-sm text-muted-foreground">
@@ -83,7 +83,7 @@ export default function RegisterPage() {
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="author@inkflow.studio"
+              placeholder="author@foliarc.studio"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
             />
           </div>

@@ -30,24 +30,24 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ==============================================================================
 FROM python:3.12-slim AS runtime
 
-RUN groupadd --system inkflow && \
-    useradd --system --gid inkflow --home-dir /app --shell /sbin/nologin inkflow
+RUN groupadd --system foliarc && \
+    useradd --system --gid foliarc --home-dir /app --shell /sbin/nologin foliarc
 
 WORKDIR /app
 
-COPY --from=builder --chown=inkflow:inkflow /app/.venv /app/.venv
-COPY --from=builder --chown=inkflow:inkflow /app/skills /app/skills
+COPY --from=builder --chown=foliarc:foliarc /app/.venv /app/.venv
+COPY --from=builder --chown=foliarc:foliarc /app/skills /app/skills
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    INKFLOW_SKILLS_DIR=/app/skills
+    FOLIARC_SKILLS_DIR=/app/skills
 
-USER inkflow
+USER foliarc
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
 
-CMD ["uvicorn", "inkflow_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "foliarc_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]

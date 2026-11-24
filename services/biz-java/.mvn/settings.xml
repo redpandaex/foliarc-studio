@@ -4,7 +4,7 @@
     <!-- Project-scoped HTTPS settings to avoid legacy HTTP mirrors in ~/.m2/settings.xml -->
     <profiles>
         <profile>
-            <id>inkflow-https</id>
+            <id>foliarc-https</id>
             <repositories>
                 <repository>
                     <id>aliyun-public</id>
@@ -36,6 +36,6 @@
         </profile>
     </profiles>
     <activeProfiles>
-        <activeProfile>inkflow-https</activeProfile>
+        <activeProfile>foliarc-https</activeProfile>
     </activeProfiles>
 </settings>

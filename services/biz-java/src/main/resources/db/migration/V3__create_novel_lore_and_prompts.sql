@@ -64,7 +64,7 @@ VALUES (
     1,
     'ACTIVE',
     'Phase 2 静态前缀模板（KV Cache 友好：角色规则 + 渐进式 Skill 目录 + 书目设定固定在前缀）',
-    '你是 InkFlow Studio（墨流工坊）的企业级长篇小说创作 Agent。
+    '你是 FoliarcStudio（卷弧工坊）的企业级长篇小说创作 Agent。
 你必须严格维护人物性格、战力境界、物品持有与世界观设定的一致性，杜绝“吃书”与人设崩塌。
 
 【当前任务规范】

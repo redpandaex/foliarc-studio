@@ -13,6 +13,7 @@ import {
 } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel } from "@/components/ai-copilot-panel";
+import { KnowledgeMemoryPanel } from "@/components/knowledge-memory-panel";
 import { LorePanel } from "@/components/lore-panel";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,7 +59,7 @@ function BookWorkbenchContent() {
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
 
-  const [rightTab, setRightTab] = useState<"ai" | "lore" | "versions">("ai");
+  const [rightTab, setRightTab] = useState<"ai" | "knowledge" | "lore" | "versions">("ai");
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(
     null,
@@ -516,9 +517,9 @@ function BookWorkbenchContent() {
           )}
         </section>
 
-        {/* Right Pane: AI Agent Copilot, MCP Lore Bible & Versions */}
-        <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-card/40">
-          <div className="grid grid-cols-3 border-b border-border text-xs font-medium">
+        {/* Right Pane: AI Agent Copilot, Hybrid RAG Knowledge Base, MCP Lore Bible & Versions */}
+        <aside className="flex w-96 shrink-0 flex-col border-l border-border bg-card/40">
+          <div className="grid grid-cols-4 border-b border-border text-xs font-medium">
             <button
               type="button"
               onClick={() => setRightTab("ai")}
@@ -529,6 +530,17 @@ function BookWorkbenchContent() {
               }`}
             >
               AI 助手
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("knowledge")}
+              className={`py-2.5 transition-colors ${
+                rightTab === "knowledge"
+                  ? "border-b-2 border-primary text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              知识库
             </button>
             <button
               type="button"
@@ -554,7 +566,14 @@ function BookWorkbenchContent() {
             </button>
           </div>
 
-          {rightTab === "lore" ? (
+          {rightTab === "knowledge" ? (
+            <KnowledgeMemoryPanel
+              bookId={bookId}
+              activeChapterId={activeId}
+              activeChapterNo={activeChapter?.chapterNo ?? null}
+              activeChapterTitle={activeChapter?.title ?? null}
+            />
+          ) : rightTab === "lore" ? (
             <LorePanel bookId={bookId} />
           ) : rightTab === "versions" ? (
             <div className="flex min-h-0 flex-1 flex-col">

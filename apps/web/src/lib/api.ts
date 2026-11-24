@@ -118,6 +118,80 @@ export interface NovelBible {
   openForeshadowings: ForeshadowingItem[];
 }
 
+export type KnowledgeDocType = "WORLDBOOK" | "CHAPTER" | "STYLE_REF" | "OUTLINE";
+
+export interface KnowledgeDocumentItem {
+  id: string;
+  bookId: string;
+  sourceType: "UPLOAD" | "CHAPTER";
+  sourceChapterId: string | null;
+  chapterNo: number;
+  docType: KnowledgeDocType;
+  title: string;
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  docVersion: number;
+  status: "QUEUED" | "PARSING" | "CHUNKING" | "EMBEDDING" | "READY" | "FAILED" | "DELETED";
+  progress: number;
+  chunkCount: number;
+  errorMessage: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface RagSearchHit {
+  parent_chunk_id: string;
+  document_id: string;
+  document_title: string;
+  doc_type: string;
+  chapter_no: number;
+  scene_title: string;
+  score: number;
+  matched_snippet: string;
+  parent_context: string;
+}
+
+export interface RagSearchResult {
+  query: string;
+  expanded_queries?: string[];
+  max_chapter_no: number | null;
+  embedding_mode: string;
+  rerank_mode: string;
+  hits: RagSearchHit[];
+}
+
+export interface CharacterRelationItem {
+  id: string;
+  bookId: string;
+  sourceCharacter: string;
+  targetCharacter: string;
+  relationType: string;
+  description: string;
+  sinceChapterNo: number | null;
+  confidence: number;
+  updatedAt: string | null;
+}
+
+export interface TimelineEventItem {
+  id: string;
+  bookId: string;
+  chapterNo: number;
+  eventTitle: string;
+  summary: string;
+  involvedCharacters: string;
+  location: string;
+  updatedAt: string | null;
+}
+
+export interface StructuredMemorySnapshot {
+  bookId: string;
+  characters: CharacterItem[];
+  foreshadowings: ForeshadowingItem[];
+  relations: CharacterRelationItem[];
+  timelineEvents: TimelineEventItem[];
+}
+
 export class ApiClientError extends Error {
   status: number;
   code: string;
@@ -207,7 +281,11 @@ async function request<T>(
   retryOnUnauthorized = true,
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) {
+  if (
+    init.body &&
+    !(init.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
   if (memoryAccessToken) {
@@ -506,5 +584,126 @@ export const loreApi = {
       `/api/v1/books/${bookId}/foreshadowings/${foreshadowingId}`,
       { method: "DELETE" },
     );
+  },
+};
+
+export const knowledgeApi = {
+  listDocuments(bookId: string): Promise<KnowledgeDocumentItem[]> {
+    return request<KnowledgeDocumentItem[]>(`/api/v1/books/${bookId}/documents`);
+  },
+  uploadDocument(
+    bookId: string,
+    payload: {
+      file: File;
+      docType?: KnowledgeDocType;
+      chapterNo?: number;
+      title?: string;
+    },
+  ): Promise<KnowledgeDocumentItem> {
+    const form = new FormData();
+    form.append("file", payload.file);
+    const params = new URLSearchParams();
+    if (payload.docType) params.set("docType", payload.docType);
+    if (payload.chapterNo !== undefined) {
+      params.set("chapterNo", String(payload.chapterNo));
+    }
+    if (payload.title?.trim()) params.set("title", payload.title.trim());
+    return request<KnowledgeDocumentItem>(
+      `/api/v1/books/${bookId}/documents?${params.toString()}`,
+      { method: "POST", body: form },
+    );
+  },
+  reprocess(bookId: string, docId: string): Promise<KnowledgeDocumentItem> {
+    return request<KnowledgeDocumentItem>(
+      `/api/v1/books/${bookId}/documents/${docId}/reprocess`,
+      { method: "POST" },
+    );
+  },
+  deleteDocument(bookId: string, docId: string): Promise<void> {
+    return request<void>(`/api/v1/books/${bookId}/documents/${docId}`, {
+      method: "DELETE",
+    });
+  },
+  syncChapter(
+    bookId: string,
+    chapterId: string,
+    extractMemory = true,
+  ): Promise<{ document: KnowledgeDocumentItem; memoryExtractionQueued: boolean }> {
+    return request(`/api/v1/books/${bookId}/chapters/${chapterId}/sync-rag`, {
+      method: "POST",
+      body: JSON.stringify({ extractMemory }),
+    });
+  },
+  search(
+    bookId: string,
+    payload: {
+      query: string;
+      topK?: number;
+      maxChapterNo?: number;
+      docType?: string;
+      rewriteQuery?: boolean;
+    },
+  ): Promise<RagSearchResult> {
+    return request<RagSearchResult>(`/api/v1/books/${bookId}/knowledge/search`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
+export const memoryApi = {
+  get(bookId: string, maxChapterNo?: number): Promise<StructuredMemorySnapshot> {
+    const query =
+      maxChapterNo !== undefined ? `?maxChapterNo=${maxChapterNo}` : "";
+    return request<StructuredMemorySnapshot>(
+      `/api/v1/books/${bookId}/memory${query}`,
+    );
+  },
+  upsertRelation(
+    bookId: string,
+    payload: {
+      sourceCharacter: string;
+      targetCharacter: string;
+      relationType: string;
+      description?: string;
+      sinceChapterNo?: number;
+    },
+  ): Promise<CharacterRelationItem> {
+    return request<CharacterRelationItem>(
+      `/api/v1/books/${bookId}/memory/relations`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+  deleteRelation(bookId: string, relationId: string): Promise<void> {
+    return request<void>(
+      `/api/v1/books/${bookId}/memory/relations/${relationId}`,
+      { method: "DELETE" },
+    );
+  },
+  upsertTimeline(
+    bookId: string,
+    payload: {
+      chapterNo: number;
+      eventTitle: string;
+      summary?: string;
+      involvedCharacters?: string;
+      location?: string;
+    },
+  ): Promise<TimelineEventItem> {
+    return request<TimelineEventItem>(
+      `/api/v1/books/${bookId}/memory/timeline`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+  deleteTimeline(bookId: string, eventId: string): Promise<void> {
+    return request<void>(
+      `/api/v1/books/${bookId}/memory/timeline/${eventId}`,
+      { method: "DELETE" },
+    );
+  },
+  triggerExtract(bookId: string, chapterId: string): Promise<{ queued: boolean }> {
+    return request(`/api/v1/books/${bookId}/memory/chapters/${chapterId}/extract`, {
+      method: "POST",
+    });
   },
 };

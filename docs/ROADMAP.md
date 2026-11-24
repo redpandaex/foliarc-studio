@@ -1,4 +1,4 @@
-# InkFlow Studio（墨流工坊）：企业级小说创作 Agent 平台实战路线图与学习清单
+# FoliarcStudio（卷弧工坊）：企业级小说创作 Agent 平台实战路线图与学习清单
 
 > **定位**：面向求职与全栈进阶的企业级 AI Agent 项目，采用 **Next.js（前端/交互层） + Java 21 Spring Boot（业务与网关计费层） + Python FastAPI（Agent 与 RAG 引擎层）** 三端解耦 Monorepo 架构，关系型数据使用 **PostgreSQL**，向量检索独立采用企业级 **Milvus**。
 >
@@ -11,7 +11,7 @@
 
 | 维度 | 最终选型 | 说明 |
 | :--- | :--- | :--- |
-| **项目名 & 仓库** | **InkFlow Studio** (`~/agent-project/inkflow-studio`) | 单仓 Monorepo（按目录路径独立触发 CI） |
+| **项目名 & 仓库** | **FoliarcStudio** (`~/agent-project/foliarc-studio`) | 单仓 Monorepo（按目录路径独立触发 CI） |
 | **前端** | **Next.js (App Router + TS)** + `pnpm` (`fnm`) + Tailwind CSS + `shadcn/ui` | 富文本编辑（Tiptap）、Diff 审阅、自研 SSE 状态机 |
 | **业务与网关** | **Java 21 + Spring Boot 4.1 + MyBatis-Plus + Maven (`./mvnw`)** | 虚拟线程、MyBatis-Plus `@Version` 乐观锁、统一 AI 网关、RPM/TPM 限流、幂等计费账本 |
 | **Agent 引擎** | **Python 3.12 + FastAPI + `uv`** | 手写 Agent Loop / Tool / Skill / MCP / 上下文压缩 / Hybrid RAG / 硬化 Docker 沙箱 |
@@ -167,21 +167,21 @@ flowchart LR
 
 ### 模块 3：小说级 RAG 与记忆引擎（Python + Milvus + PostgreSQL）
 
-- [ ] **3.1 多格式文档异步导入流水线**
+- [x] **3.1 多格式文档异步导入流水线**
   - 支持 **PDF**（PyMuPDF / pdfplumber + 版面/表格解析，进阶可接入 OCR 处理扫描件）、**Word（`.docx`）**（保留标题层级结构）、**Markdown / TXT / EPUB**（导入已有小说原稿）。
   - **企业级异步解耦链路** `★`：前端直传/经 Java 存 MinIO -> 发送 MQ 消息 -> Python Worker 异步解析切片入库 -> 实时回写解析进度（解析中/切片中/向量化/完成/失败重试）。
-- [ ] **3.2 小说感知文档切片（Chunking）**
+- [x] **3.2 小说感知文档切片（Chunking）**
   - 对比实现：固定长度切片、递归字符切片、**结构/语义切片**（按章/节/场景切分，绝不在人物对话中间切断）、**父子文档索引（Parent-Child / Small-to-Big）**（小块精准检索，返回大块完整上下文）。
   - 丰富元数据（Metadata）：`tenant_id`、`book_id`、`chapter_no`、`scene_id`、`characters`、`doc_type`（设定集/正文/文风参考）。
-- [ ] **3.3 Milvus 企业级混合召回与精排（Hybrid Retrieval + Rerank）**
+- [x] **3.3 Milvus 企业级混合召回与精排（Hybrid Retrieval + Rerank）**
   - **向量仓储抽象层** `★`：定义 `VectorStore` 协议接口，以 **Milvus Standalone** 作为核心实现，支持按 `book_id` 配置 **Partition Key 多租户隔离**与 HNSW / IVF 索引选型对比。
   - **双路混合召回**：Milvus 原生 **稠密向量（Dense）+ 稀疏向量（BM25 / Sparse）** 双路召回，解决小说专有名词（人名、招式、地名）纯向量召回不准的痛点。
   - **融合与精排**：实现 **RRF（Reciprocal Rank Fusion）** 融合多路结果 + Cross-Encoder **Reranker**（如 BGE-Reranker）二次精排。
   - **查询改写（Query Transformation）** `★`：多查询扩展（Multi-Query）、代词消解（将“他刚才拿的剑”改写为“主角林青在第三章获得的玄铁剑”）。
   - **防剧透标量预过滤** `★`：修改第 15 章时，通过 Milvus 标量表达式强制过滤 `book_id == X and chapter_no <= 15`，避免检索到后续章节造成时间线错乱。
-- [ ] **3.4 PG 与 Milvus 双写一致性（企业高频系统设计考点）** `★`
+- [x] **3.4 PG 与 Milvus 双写一致性（企业高频系统设计考点）** `★`
   - 修改或删除文档/章节时，基于 PostgreSQL 事务 + Outbox 异步同步 Milvus，通过 `doc_version` 版本号与软删除/幂等 `upsert/delete` 机制，彻底杜绝“PG 已删但向量库还能召回脏数据”。
-- [ ] **3.5 结构化长程记忆 / 轻量 GraphRAG（小说杀手锏）** `★`
+- [x] **3.5 结构化长程记忆 / 轻量 GraphRAG（小说杀手锏）** `★`
   - 每次章节定稿后，异步触发记忆抽取流水线写入 PostgreSQL：
     - 更新 **人物状态表**（位置、境界、伤势、持有物品、情绪关系）。
     - 更新 **伏笔追踪表**（埋设章节、描述、状态：未回收/已回收）。
@@ -205,7 +205,7 @@ flowchart LR
     2. Agent 结束（或中断取消）后，按实际消耗的 `input_tokens`、`cached_tokens`、`output_tokens` + 工具/沙箱调用费率进行 **精准结算（Settle）**，退还多余冻结额度。
   - **防并发超扣与幂等性**：Redis 分布式锁 + 数据库乐观锁（`version`）+ 唯一 `request_id` 记账流水表（复式记账思想，支持对账与审计）。
   - **成本监控看板**：单章生成成本、模型占比、Prompt Cache 命中节省比例、租户月度预算告警与硬熔断。
-- [ ] **4.4 可靠异步事件（Outbox + MQ）** `★`
+- [x] **4.4 可靠异步事件（Outbox + MQ）** `★`
   - 使用本地消息表（Transactional Outbox）+ RabbitMQ/Kafka，保证“文档上传/章节定稿/计费结算”与数据库事务的最终一致性，配备死信队列（DLQ）与消费幂等处理。
 
 ---

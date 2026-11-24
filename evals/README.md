@@ -1,4 +1,4 @@
-# InkFlow Studio Evaluation Suite (Phase 6)
+# FoliarcStudio Evaluation Suite (Phase 6)
 
 This directory will house the 30–50 novel-writing golden dataset cases and automated evaluation runners:
 

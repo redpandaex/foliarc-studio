@@ -6,18 +6,18 @@ from typing import Any
 import httpx
 import pytest
 
-from inkflow_agent.config import Settings
-from inkflow_agent.streaming.llm_client import (
+from foliarc_agent.config import Settings
+from foliarc_agent.streaming.llm_client import (
     LlmStreamChunk,
     OpenAICompatibleStreamClient,
     build_novel_messages,
 )
-from inkflow_agent.streaming.protocol import (
+from foliarc_agent.streaming.protocol import (
     RunResumeRequest,
     RunStartRequest,
     RunStateCallback,
 )
-from inkflow_agent.streaming.runner import RunManager, stream_key
+from foliarc_agent.streaming.runner import RunManager, stream_key
 
 
 class FakeRedis:

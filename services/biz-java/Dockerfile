@@ -22,15 +22,15 @@ RUN --mount=type=cache,target=/root/.m2 \
 # ==============================================================================
 FROM eclipse-temurin:21-jre-alpine AS runtime
 
-RUN addgroup -S inkflow && adduser -S -G inkflow inkflow
+RUN addgroup -S foliarc && adduser -S -G foliarc foliarc
 
 WORKDIR /app
 
-COPY --from=builder --chown=inkflow:inkflow /build/app.jar /app/app.jar
+COPY --from=builder --chown=foliarc:foliarc /build/app.jar /app/app.jar
 
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
 
-USER inkflow
+USER foliarc
 
 EXPOSE 8080
 

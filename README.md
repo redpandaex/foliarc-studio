@@ -1,4 +1,4 @@
-# InkFlow Studio（墨流工坊）
+# FoliarcStudio（卷弧工坊）
 
 > 企业级长篇小说创作 AI Agent 平台 — **Next.js + Java 21 Spring Boot + Python FastAPI** 三端解耦 Monorepo，采用 **PostgreSQL 16 + Milvus Standalone + Redis 7 + MinIO** 存算分离架构。
 
@@ -9,7 +9,7 @@
 ## 目录结构
 
 ```text
-inkflow-studio/
+foliarc-studio/
 ├── apps/
 │   └── web/                  # Next.js (App Router + TS + Tailwind + shadcn/ui) 前端编辑器与 SSE 状态机
 ├── services/

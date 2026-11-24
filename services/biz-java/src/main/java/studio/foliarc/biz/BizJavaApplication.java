@@ -1,0 +1,18 @@
+package studio.foliarc.biz;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+import studio.foliarc.biz.auth.JwtProperties;
+
+@SpringBootApplication
+@EnableScheduling
+@EnableConfigurationProperties(JwtProperties.class)
+public class BizJavaApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(BizJavaApplication.class, args);
+    }
+}

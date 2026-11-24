@@ -147,7 +147,7 @@ export default function BookshelfPage() {
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-4">
             <Link href="/" className="font-semibold tracking-tight">
-              墨流工坊 · InkFlow Studio
+              卷弧工坊 · FoliarcStudio
             </Link>
             <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
               我的书架

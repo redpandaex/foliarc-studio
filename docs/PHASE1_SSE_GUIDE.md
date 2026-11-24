@@ -29,7 +29,7 @@ sequenceDiagram
     PY->>LLM: POST /chat/completions (stream=true, include_usage=true)
     loop 逐 token 流式产出
         LLM-->>PY: SSE delta (reasoning_content / content)
-        PY->>RD: XADD inkflow:run:{id}:events * type text_delta ...
+        PY->>RD: XADD foliarc:run:{id}:events * type text_delta ...
         GW->>RD: Reactive XREAD COUNT 100 (游标严格递增)
         GW-->>FE: Flux<ServerSentEvent> (id=streamId, event, data)
     end
@@ -40,7 +40,7 @@ sequenceDiagram
 
     Note over FE,LLM: 协作式暂停（省 Token）与修改指令续写
     FE->>GW: 3. POST /api/v1/runs/{id}/pause
-    GW->>RD: SET inkflow:run:{id}:ctrl = PAUSE
+    GW->>RD: SET foliarc:run:{id}:ctrl = PAUSE
     GW->>PY: POST /internal/v1/runs/{id}/control (PAUSE)
     PY->>LLM: 立即 close 上游 HTTP 流（停止计费）
     PY->>GW: POST /internal/v1/runs/{id}/state (status=PAUSED, accumulated_text)
@@ -70,10 +70,10 @@ sequenceDiagram
 
 ### 2. Java 网关：WebFlux 响应式流代理 + Redis Streams 避坑
 - **核心文件**：
-  - `services/biz-java/src/main/java/studio/inkflow/biz/run/service/RedisStreamSseBridge.java`
-  - `services/biz-java/src/main/java/studio/inkflow/biz/run/service/AgentRunService.java`
-  - `services/biz-java/src/main/java/studio/inkflow/biz/run/controller/RunController.java`
-  - `services/biz-java/src/main/java/studio/inkflow/biz/config/SecurityConfig.java`
+  - `services/biz-java/src/main/java/studio/foliarc/biz/run/service/RedisStreamSseBridge.java`
+  - `services/biz-java/src/main/java/studio/foliarc/biz/run/service/AgentRunService.java`
+  - `services/biz-java/src/main/java/studio/foliarc/biz/run/controller/RunController.java`
+  - `services/biz-java/src/main/java/studio/foliarc/biz/config/SecurityConfig.java`
 - **3 个企业级面试高频考点**：
   1. **为什么不用 Lettuce `XREAD BLOCK`？**
      Spring Data Redis 的 Lettuce 默认复用单条多路复用连接；若在共享连接上做 `XREAD BLOCK 5000`，会阻塞同连接上的登录刷新等其他 Redis 命令。我们在 `RedisStreamSseBridge` 里改用 **非阻塞 `XREAD COUNT 100`** 配合 Reactor `Mono.delay(80ms)` 异步轮询（有突发积压帧时 0ms 连续排空），同时合并 `Flux.interval(15s)` 心跳并通过 `Sinks.One` 在客户端断开或终态时立即回收定时器。
@@ -83,8 +83,8 @@ sequenceDiagram
 
 ### 3. Python 引擎：真实 OpenAI 兼容流 + 协作式暂停防竞态
 - **核心文件**：
-  - `services/agent-py/src/inkflow_agent/streaming/llm_client.py`
-  - `services/agent-py/src/inkflow_agent/streaming/runner.py`
+  - `services/agent-py/src/foliarc_agent/streaming/llm_client.py`
+  - `services/agent-py/src/foliarc_agent/streaming/runner.py`
 - **关键设计细节**：
   - **统一 OpenAI 兼容协议**：兼容 DeepSeek（原生解析 `delta.reasoning_content` 思考流与 `prompt_cache_hit_tokens` 缓存命中数）及 OpenRouter / 硅基流动 / 公司内部 AI 聚合中转站。
   - **毫秒级协作式暂停**：用 `asyncio.wait({anext(stream_iter), control_event.wait()}, return_when=FIRST_COMPLETED)` 竞速，一旦收到 `PAUSE`/`CANCEL` 立即 `aclose()` 关闭上游 HTTP 连接止损 Token。

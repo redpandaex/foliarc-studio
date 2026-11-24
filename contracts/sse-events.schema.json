@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://inkflow.studio/contracts/sse-events.schema.json",
-  "title": "InkFlow Studio Structured SSE Event Envelope v1",
+  "$id": "https://foliarc.studio/contracts/sse-events.schema.json",
+  "title": "FoliarcStudio Structured SSE Event Envelope v1",
   "description": "Shared cross-service streaming event contract across Python Agent Engine, Java AI Gateway (Redis Streams bridge), and Next.js SSE Client.",
   "type": "object",
   "required": ["event_id", "run_id", "seq", "type", "timestamp", "payload"],
