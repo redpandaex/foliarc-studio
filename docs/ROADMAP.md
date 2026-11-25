@@ -147,12 +147,13 @@ flowchart LR
   - **5 层定额上下文金字塔（单次输入恒定 8k~12k Tokens）**：
     - `L0 静态底座`（~1k，KV Cache 前缀）+ `L1 热窗口`（当前章 + 上一章末尾 1500~2500 字原文，~2.5k）+ `L2 滚动摘要`（近期 5~10 章结构化单章摘要 `chapter_summaries` + 更早章节每 10~20 章归并卷级摘要 `volume_summaries`，~2.5k）+ `L3 实体感知动态账本`（仅注入当前章/上章提及的活跃角色状态 + `OPEN` 未回收伏笔，~1.5k）+ `L4 按需召回 RAG`（打捞百章前原场景父块，~2.5k）。
   - **修改前文的级联脏标记（Cascade Invalidation）**：`chapters` 维护 `content_hash` / `summary_dirty`，作者回头修改历史章节后自动触发异步重算：单章摘要 → 所属卷摘要 → Milvus 切片 → 结构化记忆。
-- [ ] **2.6.2 万章级跨体裁长篇架构演进（Phase 5.8，详见 [`docs/architecture/00-ARCHITECTURE-OVERVIEW.md`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）** `★`
-  - **三级柔性文学结构（Volume → Chapter → Section）**：支持网文隐式单节无感写作与古典/严肃文学大章制（单章聚合 10~20 万字、单节上限 10 万字，超 1.2 万字自动 Map-Reduce 摘要）；全链路切换为单调叙事刻度 `narrative_order`。
-  - **万章级 4 层对数摘要树 + 章节统一编译**：`story_rollup_summaries`（卷/篇/纪元）+ 三档自适应精度（1~300 / 301~1000 / 1000~10000+ 章）+ 单次 `ChapterDistiller` 统一编译（省 ~45% 后台成本）+ L3 冷热休眠/唤醒 + L4 Coarse-to-Fine 两阶段万章检索。
-  - **伏笔全生命周期导演台与连续性防线**：6 态伏笔状态机（策划/埋入/潜伏防剧透/照应/启用引爆/回收 + 原文精准回捞）、人物别名归一、POV 视角信息隔离、按节状态快照时间旅行与 `memory_proposals` 防污染闸门。
-  - **题材分类档案包（Genre Profile）**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签，联动分层 Skill 路由、人物 `JSONB` 动态表单、Critic 差异化 Rubric、少样本黄金文风锚点（Style Anchors）与公共 RAG 标准化匹配。
-  - **双向自选范围蝴蝶效应引擎 + VIP 动态权益中台**：支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）；引入 4 档 **VIP 会员权益中台（`FREE / VIP / SVIP / STUDIO`）**，统一治理蝴蝶效应最大可选章数（50 / 300 / 1,000 / 2,000~全书）、单批补丁上限（5 / 20 / 50 / 100 章）、万章记忆规模、个人资料库配额、网关 RPM/TPM 与积分折扣。
+- [x] **2.6.2A 万章级三级柔性结构、4 层对数记忆树与 Coarse-to-Fine 检索（Phase 5.8A，已完成）** `★`
+  - **三级柔性文学结构（Volume → Chapter → Section）**：支持网文隐式单节无感写作与古典/严肃文学大章制（单节上限 10 万字联动 VIP 配额、单章聚合 20 万字，超 1.2 万字自动 Map-Reduce 并行压缩）；全链路切换为单调叙事刻度 `narrative_order = chapter_no * 1000 + section_no`。
+  - **万章级 O(1) 4 层对数摘要树 + 统一编译**：`story_rollup_summaries`（Tier 1 卷 / Tier 2 篇 / Tier 3 纪元）+ 三档自适应精度（`PRECISE`/`EXPEDITION`/`EPIC`）+ 反向预算装配（≤ 4,100 字绝不截断近期章节）+ `ChapterDistiller` 单次统一编译 + Milvus `chunks_v2` / `summary_vectors` Coarse-to-Fine 两阶段万章检索 + 前端卷/章/小节柔性目录树与整章预览。
+- [ ] **2.6.2B 伏笔导演台、6 大题材档案包与双向蝴蝶效应引擎（Phase 5.8B~D，详见 [`docs/architecture/00-ARCHITECTURE-OVERVIEW.md`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）** `★`
+  - **伏笔全生命周期导演台与连续性防线（5.8B）**：6 态伏笔状态机（策划/埋入/潜伏防剧透/照应/启用引爆/回收 + 原文精准回捞）、人物别名归一、POV 视角信息隔离、按节状态快照时间旅行与 `memory_proposals` 防污染闸门。
+  - **题材分类档案包（5.8C）**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签，联动分层 Skill 路由、人物 `JSONB` 动态表单、Critic 差异化 Rubric、少样本黄金文风锚点（Style Anchors）与公共 RAG 标准化匹配。
+  - **双向自选范围蝴蝶效应引擎（5.8D）**：原生对接 Phase 5.5 已落地的 VIP 动态权益中台，支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）。
 - [x] **2.7 多 Agent 架构与协作编排**
   - 设计“小说编辑部”多 Agent 团队：
     - `Director（总编/规划师）`：拆解章节大纲与场景节拍（Beat Sheet）。

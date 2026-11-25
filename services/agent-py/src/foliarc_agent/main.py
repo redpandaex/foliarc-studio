@@ -11,11 +11,12 @@ from redis.exceptions import RedisError
 from foliarc_agent.agent.guardrails import GuardrailEngine
 from foliarc_agent.agent.sandbox import create_sandbox_provider
 from foliarc_agent.config import get_settings
+from foliarc_agent.rag.distiller import ChapterDistiller
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
 from foliarc_agent.rag.retriever import HybridRagRetriever
 from foliarc_agent.rag.summarizer import HierarchicalSummarizer
-from foliarc_agent.rag.vector_store import MilvusVectorStore
+from foliarc_agent.rag.vector_store import MilvusSummaryVectorStore, MilvusVectorStore
 from foliarc_agent.rag.worker import RagIngestionWorker
 from foliarc_agent.streaming.protocol import (
     RunControlRequest,
@@ -33,6 +34,8 @@ class InternalRagSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000)
     top_k: int = Field(default=5, ge=1, le=20)
     max_chapter_no: int | None = Field(default=None, ge=0)
+    max_narrative_order: int | None = Field(default=None, ge=0)
+    precision_mode: str = "AUTO"
     doc_type: str | None = None
     rewrite_query: bool = False
     chapter_context: str = ""
@@ -54,20 +57,25 @@ async def lifespan(app: FastAPI):
     embedder = EmbeddingProvider(settings)
     reranker = RerankProvider(settings)
     vector_store = MilvusVectorStore(settings)
+    summary_store = MilvusSummaryVectorStore(settings)
     rag_retriever = HybridRagRetriever(
         settings=settings,
         vector_store=vector_store,
         embedder=embedder,
         reranker=reranker,
+        summary_store=summary_store,
     )
     memory_extractor = StructuredMemoryExtractor(settings)
     summarizer = HierarchicalSummarizer(settings)
+    distiller = ChapterDistiller(settings)
     rag_worker = RagIngestionWorker(
         settings=settings,
         vector_store=vector_store,
         embedder=embedder,
         memory_extractor=memory_extractor,
         summarizer=summarizer,
+        distiller=distiller,
+        summary_store=summary_store,
     )
     guardrails = GuardrailEngine(settings)
     sandbox = create_sandbox_provider(settings)
@@ -171,6 +179,7 @@ async def meta() -> dict[str, Any]:
         "llm_configured": settings.llm_configured,
         "rag": {
             "milvus_collection": settings.milvus_collection,
+            "milvus_summary_collection": settings.milvus_summary_collection,
             "embedding_mode": app.state.embedder.mode,
             "rerank_mode": app.state.reranker.mode,
             "embedding_dim": settings.embedding_dim,
@@ -228,6 +237,8 @@ async def internal_rag_search(req: InternalRagSearchRequest) -> dict[str, Any]:
         query=req.query,
         top_k=req.top_k,
         max_chapter_no=req.max_chapter_no,
+        max_narrative_order=req.max_narrative_order,
+        precision_mode=req.precision_mode,
         doc_type=req.doc_type,
         rewrite_query=req.rewrite_query,
         chapter_context=req.chapter_context,

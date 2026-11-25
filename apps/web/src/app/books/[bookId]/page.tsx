@@ -13,6 +13,7 @@ import {
 } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel } from "@/components/ai-copilot-panel";
+import { BookStructureTree } from "@/components/book-structure-tree";
 import { LorePanel } from "@/components/lore-panel";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,10 +21,15 @@ import {
   booksApi,
   chaptersApi,
   runsApi,
+  structureApi,
   type BookItem,
+  type BookTreeResponse,
   type ChapterDetail,
-  type ChapterSummary,
+  type ChapterTreeItem,
   type ChapterVersion,
+  type FullChapterPreview,
+  type SectionDetail,
+  type SectionSummaryItem,
 } from "@/lib/api";
 import type { StreamConnectionState } from "@/lib/sse-client";
 
@@ -58,6 +64,11 @@ function syncActiveChapterLocation(bookId: string, chapterId: string | null) {
   window.history.replaceState(null, "", url.pathname + url.search);
 }
 
+function flattenTreeChapters(tree: BookTreeResponse | null): ChapterTreeItem[] {
+  if (!tree) return [];
+  return tree.volumes.flatMap((v) => v.chapters);
+}
+
 function BookWorkbenchContent() {
   const params = useParams<{ bookId: string }>();
   const bookId = params.bookId;
@@ -65,9 +76,10 @@ function BookWorkbenchContent() {
   const { user, loading: authLoading } = useAuth();
 
   const [book, setBook] = useState<BookItem | null>(null);
-  const [chapters, setChapters] = useState<ChapterSummary[]>([]);
+  const [tree, setTree] = useState<BookTreeResponse | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeChapter, setActiveChapter] = useState<ChapterDetail | null>(null);
+  const [activeSection, setActiveSection] = useState<SectionDetail | null>(null);
 
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
@@ -77,31 +89,57 @@ function BookWorkbenchContent() {
     "idle" | "dirty" | "saving" | "saved" | "conflict" | "error"
   >("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [vipLimitError, setVipLimitError] = useState<string | null>(null);
 
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
 
-  // Streamlined right pane: ONLY 2 focused writer tabs (AI 写作 / 故事设定)
   const [rightTab, setRightTab] = useState<"ai" | "lore">("ai");
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
-  // Version history drawer (opened on demand from top toolbar instead of occupying a permanent sidebar tab)
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(null);
   const [snapshotSummary, setSnapshotSummary] = useState("");
+  const [fullPreview, setFullPreview] = useState<FullChapterPreview | null>(null);
   const [loadingPage, setLoadingPage] = useState(true);
 
-  // Track which chapters currently have an active AI generation
   const [runningChapterIds, setRunningChapterIds] = useState<Record<string, boolean>>({});
-
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const liveWordCount = useMemo(() => countWords(draftContent), [draftContent]);
 
+  const activeTreeChapter = useMemo(() => {
+    if (!activeId) return null;
+    return flattenTreeChapters(tree).find((c) => c.id === activeId) ?? null;
+  }, [tree, activeId]);
+
+  const isMultiSectionEditing = Boolean(
+    activeSection &&
+      activeTreeChapter &&
+      (activeTreeChapter.structureMode === "MULTI_SECTION" ||
+        activeTreeChapter.sections.length > 1),
+  );
+
+  const effectiveSectionId = useMemo(() => {
+    if (activeSection) return activeSection.id;
+    return activeTreeChapter?.sections[0]?.id ?? null;
+  }, [activeSection, activeTreeChapter]);
+
+  const refreshTree = useCallback(async (): Promise<BookTreeResponse | null> => {
+    try {
+      const next = await structureApi.getTree(bookId);
+      setTree(next);
+      return next;
+    } catch {
+      return null;
+    }
+  }, [bookId]);
+
   const loadChapterDetail = useCallback(
-    async (targetChapterId: string) => {
+    async (targetChapterId: string, preferredSectionId?: string | null, treeSnapshot?: BookTreeResponse | null) => {
       setErrorMsg(null);
+      setVipLimitError(null);
       try {
         const [detail, versionList] = await Promise.all([
           chaptersApi.get(bookId, targetChapterId),
@@ -109,18 +147,38 @@ function BookWorkbenchContent() {
         ]);
         setActiveId(detail.id);
         setActiveChapter(detail);
-        setDraftTitle(detail.title);
-        setDraftContent(detail.content);
-        setDraftStatus(detail.status);
         setVersions(versionList);
         setPreviewVersion(null);
-        setSaveState("idle");
         syncActiveChapterLocation(bookId, detail.id);
+
+        const targetTree = treeSnapshot ?? tree;
+        const treeChap = flattenTreeChapters(targetTree).find((c) => c.id === targetChapterId);
+        const isMulti =
+          treeChap &&
+          (treeChap.structureMode === "MULTI_SECTION" || treeChap.sections.length > 1);
+
+        if (isMulti && treeChap.sections.length > 0) {
+          const secId =
+            preferredSectionId && treeChap.sections.some((s) => s.id === preferredSectionId)
+              ? preferredSectionId
+              : treeChap.sections[0].id;
+          const secDetail = await structureApi.getSection(bookId, targetChapterId, secId);
+          setActiveSection(secDetail);
+          setDraftTitle(secDetail.title);
+          setDraftContent(secDetail.content);
+          setDraftStatus(detail.status);
+        } else {
+          setActiveSection(null);
+          setDraftTitle(detail.title);
+          setDraftContent(detail.content);
+          setDraftStatus(detail.status);
+        }
+        setSaveState("idle");
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "加载章节失败");
       }
     },
-    [bookId],
+    [bookId, tree],
   );
 
   useEffect(() => {
@@ -132,13 +190,13 @@ function BookWorkbenchContent() {
     let active = true;
     void Promise.all([
       booksApi.get(bookId),
-      chaptersApi.list(bookId),
+      structureApi.getTree(bookId),
       runsApi.list(bookId).catch(() => []),
     ])
-      .then(async ([bookData, chapterList, bookRuns]) => {
+      .then(async ([bookData, treeData, bookRuns]) => {
         if (!active) return;
         setBook(bookData);
-        setChapters(chapterList);
+        setTree(treeData);
         setErrorMsg(null);
 
         const activeRunMap: Record<string, boolean> = {};
@@ -156,10 +214,9 @@ function BookWorkbenchContent() {
         }
         setRunningChapterIds(activeRunMap);
 
-        if (chapterList.length > 0) {
-          // Restore the chapter the author was working on across page refresh:
-          // 1) URL ?chapterId=  2) sessionStorage active chapter  3) chapter with active AI run  4) first chapter
-          const validIds = new Set(chapterList.map((c) => c.id));
+        const allChapters = flattenTreeChapters(treeData);
+        if (allChapters.length > 0) {
+          const validIds = new Set(allChapters.map((c) => c.id));
           const urlChapterId =
             typeof window !== "undefined"
               ? new URLSearchParams(window.location.search).get("chapterId")
@@ -173,12 +230,13 @@ function BookWorkbenchContent() {
             (urlChapterId && validIds.has(urlChapterId) ? urlChapterId : null) ??
             (storedChapterId && validIds.has(storedChapterId) ? storedChapterId : null) ??
             (chapterWithLiveRun && validIds.has(chapterWithLiveRun) ? chapterWithLiveRun : null) ??
-            chapterList[0].id;
+            allChapters[0].id;
 
-          await loadChapterDetail(targetChapterId);
+          await loadChapterDetail(targetChapterId, null, treeData);
         } else {
           setActiveId(null);
           setActiveChapter(null);
+          setActiveSection(null);
           setVersions([]);
           syncActiveChapterLocation(bookId, null);
         }
@@ -199,7 +257,7 @@ function BookWorkbenchContent() {
     };
   }, [authLoading, user, router, bookId, loadChapterDetail]);
 
-  const saveCurrentChapter = useCallback(
+  const saveCurrentUnit = useCallback(
     async (options?: { createSnapshot?: boolean; changeSummary?: string }) => {
       if (!activeChapter) return;
       if (autoSaveTimerRef.current) {
@@ -208,7 +266,29 @@ function BookWorkbenchContent() {
       }
       setSaveState("saving");
       setErrorMsg(null);
+      setVipLimitError(null);
       try {
+        if (isMultiSectionEditing && activeSection) {
+          const updatedSec = await structureApi.updateSection(
+            bookId,
+            activeChapter.id,
+            activeSection.id,
+            {
+              title: draftTitle.trim() || activeSection.title,
+              content: draftContent,
+              version: activeSection.version,
+              createSnapshot: options?.createSnapshot ?? false,
+              changeSummary: options?.changeSummary,
+            },
+          );
+          setActiveSection(updatedSec);
+          setDraftTitle(updatedSec.title);
+          setDraftContent(updatedSec.content);
+          await refreshTree();
+          setSaveState("saved");
+          return;
+        }
+
         const updated = await chaptersApi.update(bookId, activeChapter.id, {
           title: draftTitle.trim() || activeChapter.title,
           content: draftContent,
@@ -221,20 +301,7 @@ function BookWorkbenchContent() {
         setDraftTitle(updated.title);
         setDraftContent(updated.content);
         setDraftStatus(updated.status);
-        setChapters((prev) =>
-          prev.map((c) =>
-            c.id === updated.id
-              ? {
-                  ...c,
-                  title: updated.title,
-                  wordCount: updated.wordCount,
-                  status: updated.status,
-                  version: updated.version,
-                  updatedAt: updated.updatedAt,
-                }
-              : c,
-          ),
-        );
+        await refreshTree();
         if (options?.createSnapshot) {
           const versionList = await chaptersApi.listVersions(bookId, updated.id);
           setVersions(versionList);
@@ -242,7 +309,10 @@ function BookWorkbenchContent() {
         }
         setSaveState("saved");
       } catch (err) {
-        if (
+        if (err instanceof ApiClientError && err.code === "VIP_QUOTA_EXCEEDED") {
+          setSaveState("error");
+          setVipLimitError(err.message);
+        } else if (
           err instanceof ApiClientError &&
           (err.status === 409 || err.code === "VERSION_CONFLICT")
         ) {
@@ -254,7 +324,16 @@ function BookWorkbenchContent() {
         }
       }
     },
-    [activeChapter, bookId, draftTitle, draftContent, draftStatus],
+    [
+      activeChapter,
+      activeSection,
+      isMultiSectionEditing,
+      bookId,
+      draftTitle,
+      draftContent,
+      draftStatus,
+      refreshTree,
+    ],
   );
 
   // Debounced auto-save after 2.5s idle when dirty
@@ -263,14 +342,14 @@ function BookWorkbenchContent() {
       return;
     }
     autoSaveTimerRef.current = setTimeout(() => {
-      void saveCurrentChapter();
+      void saveCurrentUnit();
     }, 2500);
     return () => {
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
       }
     };
-  }, [saveState, activeChapter, saveCurrentChapter]);
+  }, [saveState, activeChapter, saveCurrentUnit]);
 
   // Ctrl/Cmd + S manual save shortcut
   useEffect(() => {
@@ -278,13 +357,13 @@ function BookWorkbenchContent() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (activeChapter && saveState !== "conflict") {
-          void saveCurrentChapter();
+          void saveCurrentUnit();
         }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeChapter, saveState, saveCurrentChapter]);
+  }, [activeChapter, saveState, saveCurrentUnit]);
 
   const handleRunStateChange = useCallback(
     (targetChapterId: string | null, state: StreamConnectionState) => {
@@ -308,30 +387,16 @@ function BookWorkbenchContent() {
     setCreatingChapter(true);
     setErrorMsg(null);
     try {
-      // Save any pending edits on the current chapter first so Chapter N+1 immediately sees its latest ending!
       if (activeChapter && saveState === "dirty") {
-        await saveCurrentChapter();
+        await saveCurrentUnit();
       }
       const created = await chaptersApi.create(bookId, {
         title: newChapterTitle.trim(),
         content: "",
       });
-      setChapters((prev) => [
-        ...prev,
-        {
-          id: created.id,
-          bookId: created.bookId,
-          chapterNo: created.chapterNo,
-          title: created.title,
-          wordCount: created.wordCount,
-          status: created.status,
-          version: created.version,
-          createdAt: created.createdAt,
-          updatedAt: created.updatedAt,
-        },
-      ]);
       setNewChapterTitle("");
-      await loadChapterDetail(created.id);
+      const latestTree = await refreshTree();
+      await loadChapterDetail(created.id, null, latestTree);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "新建章节失败");
     } finally {
@@ -339,28 +404,37 @@ function BookWorkbenchContent() {
     }
   }
 
-  async function handleSelectChapter(targetChapterId: string) {
-    if (targetChapterId === activeId) return;
+  async function handleSelectChapter(ch: ChapterTreeItem) {
+    if (ch.id === activeId && !activeSection) return;
     if (activeChapter && saveState === "dirty") {
-      await saveCurrentChapter();
+      await saveCurrentUnit();
     }
-    await loadChapterDetail(targetChapterId);
+    await loadChapterDetail(ch.id);
   }
 
-  async function handleDeleteChapter(chapter: ChapterSummary) {
-    if (!window.confirm(`确认删除「第 ${chapter.chapterNo} 章 ${chapter.title}」？`)) {
+  async function handleSelectSection(ch: ChapterTreeItem, sec: SectionSummaryItem) {
+    if (ch.id === activeId && activeSection?.id === sec.id) return;
+    if (activeChapter && saveState === "dirty") {
+      await saveCurrentUnit();
+    }
+    await loadChapterDetail(ch.id, sec.id);
+  }
+
+  async function handleDeleteChapter(ch: ChapterTreeItem) {
+    if (!window.confirm(`确认删除「第 ${ch.chapterNo} 章 ${ch.title}」？`)) {
       return;
     }
     try {
-      await chaptersApi.remove(bookId, chapter.id);
-      const remaining = chapters.filter((c) => c.id !== chapter.id);
-      setChapters(remaining);
-      if (activeId === chapter.id) {
+      await chaptersApi.remove(bookId, ch.id);
+      const latestTree = await refreshTree();
+      const remaining = flattenTreeChapters(latestTree);
+      if (activeId === ch.id) {
         if (remaining.length > 0) {
-          await loadChapterDetail(remaining[0].id);
+          await loadChapterDetail(remaining[0].id, null, latestTree);
         } else {
           setActiveId(null);
           setActiveChapter(null);
+          setActiveSection(null);
           setVersions([]);
           syncActiveChapterLocation(bookId, null);
         }
@@ -370,10 +444,79 @@ function BookWorkbenchContent() {
     }
   }
 
+  async function handleCreateSection(ch: ChapterTreeItem) {
+    const suggested = `第 ${ch.sections.length + 1} 节`;
+    const title = window.prompt(`为「第 ${ch.chapterNo} 章 ${ch.title}」新增小节标题：`, suggested);
+    if (title === null) return;
+    setErrorMsg(null);
+    try {
+      if (activeChapter && saveState === "dirty") {
+        await saveCurrentUnit();
+      }
+      const created = await structureApi.createSection(bookId, ch.id, {
+        title: title.trim() || suggested,
+        content: "",
+      });
+      const latestTree = await refreshTree();
+      await loadChapterDetail(ch.id, created.id, latestTree);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "新增小节失败");
+    }
+  }
+
+  async function handleDeleteSection(ch: ChapterTreeItem, sec: SectionSummaryItem) {
+    if (!window.confirm(`确认删除小节「§${sec.sectionNo} ${sec.title}」？`)) {
+      return;
+    }
+    setErrorMsg(null);
+    try {
+      await structureApi.deleteSection(bookId, ch.id, sec.id);
+      const latestTree = await refreshTree();
+      if (activeSection?.id === sec.id) {
+        await loadChapterDetail(ch.id, null, latestTree);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "删除小节失败");
+    }
+  }
+
+  async function handleOpenFullPreview(ch: ChapterTreeItem) {
+    setErrorMsg(null);
+    try {
+      const preview = await structureApi.getFullPreview(bookId, ch.id);
+      setFullPreview(preview);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "加载整章预览失败");
+    }
+  }
+
+  async function handleCreateVolume(payload: { title: string; arcGoal: string; realmScope: string }) {
+    setErrorMsg(null);
+    try {
+      await structureApi.createVolume(bookId, payload);
+      await refreshTree();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "创建分卷失败");
+    }
+  }
+
+  async function handleUpdateVolume(
+    volumeId: string,
+    payload: { title: string; arcGoal: string; realmScope: string },
+  ) {
+    setErrorMsg(null);
+    try {
+      await structureApi.updateVolume(bookId, volumeId, payload);
+      await refreshTree();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "更新分卷失败");
+    }
+  }
+
   async function handleManualSnapshot(e: FormEvent) {
     e.preventDefault();
     if (!activeChapter) return;
-    await saveCurrentChapter({
+    await saveCurrentUnit({
       createSnapshot: true,
       changeSummary: snapshotSummary.trim() || "手动版本快照",
     });
@@ -397,6 +540,7 @@ function BookWorkbenchContent() {
         activeChapter.version,
       );
       setActiveChapter(updated);
+      setActiveSection(null);
       setDraftTitle(updated.title);
       setDraftContent(updated.content);
       setDraftStatus(updated.status);
@@ -404,13 +548,7 @@ function BookWorkbenchContent() {
       setPreviewVersion(null);
       const versionList = await chaptersApi.listVersions(bookId, updated.id);
       setVersions(versionList);
-      setChapters((prev) =>
-        prev.map((c) =>
-          c.id === updated.id
-            ? { ...c, wordCount: updated.wordCount, version: updated.version }
-            : c,
-        ),
-      );
+      await refreshTree();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "回滚失败");
     }
@@ -456,32 +594,45 @@ function BookWorkbenchContent() {
                         ? "已保存"
                         : "就绪"}
               </span>
-              <select
-                value={draftStatus}
-                onChange={(e) => {
-                  setDraftStatus(e.target.value);
-                  setSaveState("dirty");
-                }}
-                className="rounded-md border border-input bg-background px-2 py-1 text-xs"
-              >
-                {Object.entries(CHAPTER_STATUS_LABELS).map(([k, label]) => (
-                  <option key={k} value={k}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setVersionsOpen(true)}
-              >
-                历史版本 ({versions.length})
-              </Button>
+              {!isMultiSectionEditing && (
+                <select
+                  value={draftStatus}
+                  onChange={(e) => {
+                    setDraftStatus(e.target.value);
+                    setSaveState("dirty");
+                  }}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                >
+                  {Object.entries(CHAPTER_STATUS_LABELS).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {isMultiSectionEditing && activeTreeChapter && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleOpenFullPreview(activeTreeChapter)}
+                >
+                  整章预览
+                </Button>
+              )}
+              {!isMultiSectionEditing && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setVersionsOpen(true)}
+                >
+                  历史版本 ({versions.length})
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
                 disabled={saveState === "saving" || saveState === "conflict"}
-                onClick={() => void saveCurrentChapter()}
+                onClick={() => void saveCurrentUnit()}
               >
                 保存
               </Button>
@@ -499,91 +650,39 @@ function BookWorkbenchContent() {
 
       {/* Main Three-Pane Body */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Left Pane: Chapter Tree */}
-        <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card/50">
-          <div className="border-b border-border p-3">
-            <form onSubmit={handleCreateChapter} className="flex gap-1.5">
-              <input
-                value={newChapterTitle}
-                onChange={(e) => setNewChapterTitle(e.target.value)}
-                placeholder="新章节标题..."
-                className="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
-              />
-              <Button type="submit" size="xs" disabled={creatingChapter}>
-                + 新增
-              </Button>
-            </form>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-2">
-            {chapters.length === 0 ? (
-              <p className="p-4 text-center text-xs text-muted-foreground">
-                暂无章节，在上方输入标题创建第一章
-              </p>
-            ) : (
-              <ul className="space-y-1">
-                {chapters.map((ch) => {
-                  const isActive = ch.id === activeId;
-                  const isGenerating = Boolean(runningChapterIds[ch.id]);
-                  return (
-                    <li
-                      key={ch.id}
-                      className={`group flex items-center justify-between rounded-md px-2.5 py-2 text-xs transition-colors ${
-                        isActive
-                          ? "bg-primary text-primary-foreground"
-                          : "hover:bg-muted"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void handleSelectChapter(ch.id)}
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate font-medium">
-                            第 {ch.chapterNo} 章 {ch.title}
-                          </span>
-                          {isGenerating && (
-                            <span
-                              title="AI 创作进行中"
-                              className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full animate-pulse ${
-                                isActive ? "bg-primary-foreground" : "bg-emerald-500"
-                              }`}
-                            />
-                          )}
-                        </div>
-                        <div
-                          className={`mt-0.5 font-mono text-[10px] ${
-                            isActive
-                              ? "text-primary-foreground/80"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {ch.wordCount} 字 · {CHAPTER_STATUS_LABELS[ch.status] ?? ch.status}
-                        </div>
-                      </button>
-                      <button
-                        type="button"
-                        title="删除章节"
-                        onClick={() => void handleDeleteChapter(ch)}
-                        className={`ml-1 rounded px-1 py-0.5 text-[11px] opacity-0 transition-opacity group-hover:opacity-100 ${
-                          isActive
-                            ? "hover:bg-primary-foreground/20"
-                            : "text-destructive hover:bg-destructive/10"
-                        }`}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </aside>
+        <BookStructureTree
+          tree={tree}
+          activeChapterId={activeId}
+          activeSectionId={activeSection?.id ?? null}
+          runningChapterIds={runningChapterIds}
+          creatingChapter={creatingChapter}
+          newChapterTitle={newChapterTitle}
+          onNewChapterTitleChange={setNewChapterTitle}
+          onCreateChapter={handleCreateChapter}
+          onSelectChapter={(ch) => void handleSelectChapter(ch)}
+          onSelectSection={(ch, sec) => void handleSelectSection(ch, sec)}
+          onDeleteChapter={(ch) => void handleDeleteChapter(ch)}
+          onCreateSection={(ch) => void handleCreateSection(ch)}
+          onDeleteSection={(ch, sec) => void handleDeleteSection(ch, sec)}
+          onOpenFullPreview={(ch) => void handleOpenFullPreview(ch)}
+          onCreateVolume={handleCreateVolume}
+          onUpdateVolume={handleUpdateVolume}
+        />
 
         {/* Center Pane: Manuscript Editor */}
         <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {vipLimitError && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+              <span>{vipLimitError}</span>
+              <Link
+                href="/vip"
+                className="rounded bg-amber-600 px-2.5 py-1 font-medium text-white hover:bg-amber-700"
+              >
+                升级解锁更大单节字数 →
+              </Link>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="flex items-center justify-between gap-3 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">
               <span>{errorMsg}</span>
@@ -591,7 +690,7 @@ function BookWorkbenchContent() {
                 <Button
                   size="xs"
                   variant="outline"
-                  onClick={() => void loadChapterDetail(activeChapter.id)}
+                  onClick={() => void loadChapterDetail(activeChapter.id, activeSection?.id)}
                 >
                   拉取最新版本
                 </Button>
@@ -599,11 +698,28 @@ function BookWorkbenchContent() {
             </div>
           )}
 
+          {activeChapter && liveWordCount > 8000 && activeTreeChapter && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/5 px-4 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+              <span>
+                当前正文已超过 8,000 字（支持最高 10 万字），按场景拆分小节可让 AI 记忆与连贯校对更精准。
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleCreateSection(activeTreeChapter)}
+                className="font-medium underline hover:opacity-80"
+              >
+                + 新增下一小节
+              </button>
+            </div>
+          )}
+
           {activeChapter ? (
             <div className="flex min-h-0 flex-1 flex-col p-6">
               <div className="mb-3 flex items-center gap-3 border-b border-border pb-3">
                 <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  第 {activeChapter.chapterNo} 章
+                  {isMultiSectionEditing && activeSection
+                    ? `第 ${activeChapter.chapterNo} 章 · 第 ${activeSection.sectionNo} 节`
+                    : `第 ${activeChapter.chapterNo} 章`}
                 </span>
                 <input
                   value={draftTitle}
@@ -611,7 +727,7 @@ function BookWorkbenchContent() {
                     setDraftTitle(e.target.value);
                     if (saveState !== "conflict") setSaveState("dirty");
                   }}
-                  placeholder="请输入章节标题"
+                  placeholder={isMultiSectionEditing ? "请输入小节标题" : "请输入章节标题"}
                   className="min-w-0 flex-1 bg-transparent text-xl font-bold outline-none"
                 />
               </div>
@@ -622,7 +738,7 @@ function BookWorkbenchContent() {
                   setDraftContent(e.target.value);
                   if (saveState !== "conflict") setSaveState("dirty");
                 }}
-                placeholder="在此开始撰写章节正文...（支持自动保存与 Ctrl+S 手动保存）"
+                placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存）"
                 className="min-h-0 flex-1 resize-none bg-transparent text-base leading-8 outline-none"
               />
             </div>
@@ -633,7 +749,7 @@ function BookWorkbenchContent() {
           )}
         </section>
 
-        {/* Right Pane: Streamlined to 2 Writer-Focused Tabs (AI 写作 / 故事设定); kept mounted when collapsed */}
+        {/* Right Pane */}
         <aside
           className={
             rightPanelOpen
@@ -666,11 +782,11 @@ function BookWorkbenchContent() {
             </button>
           </div>
 
-          {/* Keep AiCopilotPanel mounted across tab switches so active streaming never disconnects */}
           <div className={rightTab === "ai" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
             <AiCopilotPanel
               bookId={bookId}
               chapterId={activeId}
+              sectionId={effectiveSectionId}
               chapterNo={activeChapter?.chapterNo ?? null}
               chapterContent={draftContent}
               onRunStateChange={handleRunStateChange}
@@ -690,6 +806,36 @@ function BookWorkbenchContent() {
           {rightTab === "lore" && <LorePanel bookId={bookId} />}
         </aside>
       </div>
+
+      {/* Full Chapter Preview Modal (for Multi-Section Big Chapters) */}
+      {fullPreview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setFullPreview(null)}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-card shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">
+                  第 {fullPreview.chapterNo} 章 · {fullPreview.title}（整章预览）
+                </h2>
+                <p className="text-[11px] text-muted-foreground">
+                  共 {fullPreview.sectionCount} 个小节 · {fullPreview.totalWordCount.toLocaleString()} 字
+                </p>
+              </div>
+              <Button size="xs" variant="ghost" onClick={() => setFullPreview(null)}>
+                关闭
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto whitespace-pre-wrap p-6 text-sm leading-8">
+              {fullPreview.combinedContent || "（本章暂无正文）"}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* On-Demand Version History Slide-Over Drawer */}
       {versionsOpen && activeChapter && (

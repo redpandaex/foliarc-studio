@@ -133,6 +133,67 @@ export interface ChapterDetail extends ChapterSummary {
   content: string;
 }
 
+export interface SectionSummaryItem {
+  id: string;
+  chapterId: string;
+  chapterNo: number;
+  sectionNo: number;
+  narrativeOrder: number;
+  title: string;
+  wordCount: number;
+  isDefault: boolean;
+  summaryDirty: boolean;
+  version: number;
+}
+
+export interface SectionDetail extends SectionSummaryItem {
+  bookId: string;
+  content: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface ChapterTreeItem {
+  id: string;
+  chapterNo: number;
+  volumeId: string | null;
+  title: string;
+  structureMode: "SINGLE" | "MULTI_SECTION" | string;
+  wordCount: number;
+  status: string;
+  version: number;
+  sections: SectionSummaryItem[];
+}
+
+export interface VolumeTreeItem {
+  id: string | null;
+  volumeNo: number;
+  title: string;
+  arcGoal: string;
+  pacingNotes: string;
+  realmScope: string;
+  status: string;
+  chapters: ChapterTreeItem[];
+}
+
+export interface BookTreeResponse {
+  bookId: string;
+  precisionMode: string;
+  effectivePrecisionMode: "PRECISE" | "EXPEDITION" | "EPIC" | string;
+  totalUnits: number;
+  volumes: VolumeTreeItem[];
+}
+
+export interface FullChapterPreview {
+  chapterId: string;
+  chapterNo: number;
+  title: string;
+  structureMode: string;
+  totalWordCount: number;
+  sectionCount: number;
+  combinedContent: string;
+}
+
 export interface ChapterVersion {
   id: string;
   chapterId: string;
@@ -723,10 +784,117 @@ export function getRunStreamUrl(runId: string): string {
   return `${API_BASE}/api/v1/runs/${runId}/stream`;
 }
 
+export const structureApi = {
+  getTree(bookId: string): Promise<BookTreeResponse> {
+    return request<BookTreeResponse>(`/api/v1/books/${bookId}/tree`);
+  },
+  createVolume(
+    bookId: string,
+    payload: { title: string; arcGoal?: string; pacingNotes?: string; realmScope?: string },
+  ): Promise<VolumeTreeItem> {
+    return request<VolumeTreeItem>(`/api/v1/books/${bookId}/volumes`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateVolume(
+    bookId: string,
+    volumeId: string,
+    payload: {
+      title?: string;
+      arcGoal?: string;
+      pacingNotes?: string;
+      realmScope?: string;
+      status?: string;
+    },
+  ): Promise<VolumeTreeItem> {
+    return request<VolumeTreeItem>(`/api/v1/books/${bookId}/volumes/${volumeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteVolume(bookId: string, volumeId: string): Promise<void> {
+    return request<void>(`/api/v1/books/${bookId}/volumes/${volumeId}`, {
+      method: "DELETE",
+    });
+  },
+  moveChapterVolume(
+    bookId: string,
+    chapterId: string,
+    volumeId: string | null,
+  ): Promise<void> {
+    return request<void>(`/api/v1/books/${bookId}/chapters/${chapterId}/volume`, {
+      method: "PATCH",
+      body: JSON.stringify({ volumeId }),
+    });
+  },
+  createSection(
+    bookId: string,
+    chapterId: string,
+    payload: { title?: string; content?: string },
+  ): Promise<SectionDetail> {
+    return request<SectionDetail>(
+      `/api/v1/books/${bookId}/chapters/${chapterId}/sections`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+  getSection(
+    bookId: string,
+    chapterId: string,
+    sectionId: string,
+  ): Promise<SectionDetail> {
+    return request<SectionDetail>(
+      `/api/v1/books/${bookId}/chapters/${chapterId}/sections/${sectionId}`,
+    );
+  },
+  updateSection(
+    bookId: string,
+    chapterId: string,
+    sectionId: string,
+    payload: {
+      title: string;
+      content: string;
+      version: number;
+      createSnapshot?: boolean;
+      changeSummary?: string;
+    },
+  ): Promise<SectionDetail> {
+    return request<SectionDetail>(
+      `/api/v1/books/${bookId}/chapters/${chapterId}/sections/${sectionId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          ...payload,
+          createSnapshot: payload.createSnapshot ?? false,
+        }),
+      },
+    );
+  },
+  deleteSection(
+    bookId: string,
+    chapterId: string,
+    sectionId: string,
+  ): Promise<void> {
+    return request<void>(
+      `/api/v1/books/${bookId}/chapters/${chapterId}/sections/${sectionId}`,
+      { method: "DELETE" },
+    );
+  },
+  getFullPreview(bookId: string, chapterId: string): Promise<FullChapterPreview> {
+    return request<FullChapterPreview>(
+      `/api/v1/books/${bookId}/chapters/${chapterId}/full-preview`,
+    );
+  },
+};
+
 export const runsApi = {
   start(payload: {
     bookId: string;
     chapterId?: string;
+    sectionId?: string;
     mode?: RunMode;
     action: RunAction;
     modelAlias?: string;

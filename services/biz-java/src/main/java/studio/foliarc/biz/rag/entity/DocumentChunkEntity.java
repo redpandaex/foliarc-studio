@@ -24,6 +24,8 @@ public class DocumentChunkEntity {
     private UUID parentChunkId;
     private Integer chunkIndex;
     private Integer chapterNo;
+    private Long narrativeOrder;
+    private UUID sectionId;
     private String sceneTitle;
     private String content;
     private Integer tokenCount;
@@ -52,6 +54,10 @@ public class DocumentChunkEntity {
     public void setChunkIndex(Integer chunkIndex) { this.chunkIndex = chunkIndex; }
     public Integer getChapterNo() { return chapterNo; }
     public void setChapterNo(Integer chapterNo) { this.chapterNo = chapterNo; }
+    public Long getNarrativeOrder() { return narrativeOrder; }
+    public void setNarrativeOrder(Long narrativeOrder) { this.narrativeOrder = narrativeOrder; }
+    public UUID getSectionId() { return sectionId; }
+    public void setSectionId(UUID sectionId) { this.sectionId = sectionId; }
     public String getSceneTitle() { return sceneTitle; }
     public void setSceneTitle(String sceneTitle) { this.sceneTitle = sceneTitle; }
     public String getContent() { return content; }

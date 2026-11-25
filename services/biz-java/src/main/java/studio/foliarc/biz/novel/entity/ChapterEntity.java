@@ -17,7 +17,9 @@ public class ChapterEntity {
     private UUID id;
 
     private UUID bookId;
+    private UUID volumeId;
     private Integer chapterNo;
+    private String structureMode;
     private String title;
     private String content;
     private Integer wordCount;
@@ -48,6 +50,22 @@ public class ChapterEntity {
 
     public void setBookId(UUID bookId) {
         this.bookId = bookId;
+    }
+
+    public UUID getVolumeId() {
+        return volumeId;
+    }
+
+    public void setVolumeId(UUID volumeId) {
+        this.volumeId = volumeId;
+    }
+
+    public String getStructureMode() {
+        return structureMode;
+    }
+
+    public void setStructureMode(String structureMode) {
+        this.structureMode = structureMode;
     }
 
     public Integer getChapterNo() {

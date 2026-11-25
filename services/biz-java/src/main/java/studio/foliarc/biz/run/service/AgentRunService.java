@@ -2,6 +2,7 @@ package studio.foliarc.biz.run.service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,8 +31,11 @@ import studio.foliarc.biz.gateway.RedisRateLimiterService;
 import studio.foliarc.biz.memory.service.StoryMemoryContextService;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
+import studio.foliarc.biz.novel.entity.ChapterSectionEntity;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
+import studio.foliarc.biz.novel.mapper.ChapterSectionMapper;
 import studio.foliarc.biz.novel.service.BookService;
+import studio.foliarc.biz.novel.service.StructureService;
 import studio.foliarc.biz.run.dto.RunDtos;
 import studio.foliarc.biz.run.entity.AgentCheckpointEntity;
 import studio.foliarc.biz.run.entity.AgentRunEntity;
@@ -59,6 +63,7 @@ public class AgentRunService {
     private final Bulkhead agentBulkhead;
     private final StoryMemoryContextService storyMemoryContextService;
     private VipEntitlementService vipEntitlementService;
+    private ChapterSectionMapper chapterSectionMapper;
 
     public AgentRunService(
             AgentRunMapper runMapper,
@@ -110,15 +115,23 @@ public class AgentRunService {
         this.vipEntitlementService = vipEntitlementService;
     }
 
+    @Autowired(required = false)
+    public void setChapterSectionMapper(ChapterSectionMapper chapterSectionMapper) {
+        this.chapterSectionMapper = chapterSectionMapper;
+    }
+
     public RunDtos.RunResponse startRun(UUID ownerId, RunDtos.StartRunRequest req) {
         BookEntity book = bookService.requireOwnedBook(ownerId, req.bookId());
 
+        ChapterSectionEntity section = req.sectionId() == null ? null : requireSection(book.getId(), req.sectionId(), req.chapterId());
+        UUID chapterId = section == null ? req.chapterId() : section.getChapterId();
         ChapterEntity chapter = null;
-        if (req.chapterId() != null) {
-            chapter = chapterMapper.selectById(req.chapterId());
+        if (chapterId != null) {
+            chapter = chapterMapper.selectById(chapterId);
             if (chapter == null || !book.getId().equals(chapter.getBookId())) {
                 throw BizException.notFound("CHAPTER_NOT_FOUND", "目标章节不存在");
             }
+            if (section == null) section = findActiveSection(chapter);
         }
 
         String mode = (req.mode() == null || req.mode().isBlank())
@@ -139,9 +152,10 @@ public class AgentRunService {
                 ? "writer-main"
                 : req.modelAlias().trim();
         String instruction = req.instruction() == null ? "" : req.instruction().trim();
+        String storedContext = section != null ? section.getContent() : chapter != null ? chapter.getContent() : null;
         String chapterContext = req.chapterContext() != null
                 ? req.chapterContext()
-                : (chapter != null && chapter.getContent() != null ? chapter.getContent() : "");
+                : (storedContext != null ? storedContext : "");
         boolean requireOutlineApproval = req.requireOutlineApproval() == null
                 ? "MULTI_AGENT".equals(mode)
                 : Boolean.TRUE.equals(req.requireOutlineApproval());
@@ -157,10 +171,15 @@ public class AgentRunService {
             rateLimiter.acquireOrThrow(ownerId, estTokens);
         }
 
+        StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
+                ownerId, book, chapter, section, chapterContext, instruction
+        );
+
         AgentRunEntity run = new AgentRunEntity();
         run.setId(UUID.randomUUID());
         run.setBookId(book.getId());
         run.setChapterId(chapter != null ? chapter.getId() : null);
+        run.setSectionId(section != null ? section.getId() : null);
         run.setOwnerId(ownerId);
         run.setMode(mode);
         run.setAction(action);
@@ -192,15 +211,12 @@ public class AgentRunService {
             throw ex;
         }
 
-        StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
-                ownerId, book, chapter, chapterContext, instruction
-        );
-
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
         body.put("owner_id", ownerId.toString());
         body.put("book_id", book.getId().toString());
         body.put("chapter_no", chapter != null ? chapter.getChapterNo() : null);
+        addSectionContext(body, run, chapter, section, fiveLayer);
         body.put("mode", mode);
         body.put("action", action);
         body.put("model_alias", modelAlias);
@@ -307,6 +323,19 @@ public class AgentRunService {
     ) {
         BookEntity book = bookService.requireOwnedBook(ownerId, run.getBookId());
         ChapterEntity chapter = run.getChapterId() != null ? chapterMapper.selectById(run.getChapterId()) : null;
+        ChapterSectionEntity section = run.getSectionId() == null
+                ? findActiveSection(chapter)
+                : requireSection(book.getId(), run.getSectionId(), run.getChapterId());
+        run.setSectionId(section != null ? section.getId() : null);
+
+        StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
+                ownerId,
+                book,
+                chapter,
+                section,
+                run.getChapterContext() == null ? "" : run.getChapterContext(),
+                run.getInstruction() == null ? "" : run.getInstruction()
+        );
 
         run.setStatus("RUNNING");
         run.setErrorMessage(null);
@@ -316,19 +345,12 @@ public class AgentRunService {
 
         redis.delete(RedisStreamSseBridge.controlKey(run.getId()));
 
-        StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
-                ownerId,
-                book,
-                chapter,
-                run.getChapterContext() == null ? "" : run.getChapterContext(),
-                run.getInstruction() == null ? "" : run.getInstruction()
-        );
-
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
         body.put("owner_id", ownerId.toString());
         body.put("book_id", book.getId().toString());
         body.put("chapter_no", chapter != null ? chapter.getChapterNo() : null);
+        addSectionContext(body, run, chapter, section, fiveLayer);
         body.put("mode", run.getMode() == null ? "AGENT" : run.getMode());
         body.put("action", run.getAction());
         body.put("model_alias", run.getModelAlias());
@@ -482,15 +504,47 @@ public class AgentRunService {
             UUID ownerId,
             BookEntity book,
             ChapterEntity chapter,
+            ChapterSectionEntity section,
             String chapterContext,
             String instruction
     ) {
         if (storyMemoryContextService != null) {
-            return storyMemoryContextService.buildFiveLayerContext(ownerId, book, chapter, chapterContext, instruction);
+            return section == null
+                    ? storyMemoryContextService.buildFiveLayerContext(ownerId, book, chapter, chapterContext, instruction)
+                    : storyMemoryContextService.buildAdaptiveContext(ownerId, book, chapter, section, chapterContext, instruction);
         }
         String fallbackPrev = buildPreviousChaptersContext(book.getId(), chapter);
         String charter = StoryMemoryContextService.resolveEffectiveCharter(book);
-        return new StoryMemoryContextService.FiveLayerContext(charter, fallbackPrev, "", "", fallbackPrev);
+        long precedingUnits = chapter == null || chapter.getChapterNo() == null ? 0L : chapter.getChapterNo() - 1L;
+        return new StoryMemoryContextService.FiveLayerContext(charter, fallbackPrev, "", "", fallbackPrev,
+                StoryMemoryContextService.determinePrecisionMode(book, precedingUnits));
+    }
+
+    private ChapterSectionEntity requireSection(UUID bookId, UUID sectionId, UUID chapterId) {
+        ChapterSectionEntity section = chapterSectionMapper == null ? null : chapterSectionMapper.selectById(sectionId);
+        if (section == null || !bookId.equals(section.getBookId())
+                || (chapterId != null && !chapterId.equals(section.getChapterId()))) {
+            throw BizException.notFound("SECTION_NOT_FOUND", "目标小节不存在");
+        }
+        return section;
+    }
+
+    private ChapterSectionEntity findActiveSection(ChapterEntity chapter) {
+        if (chapter == null || chapterSectionMapper == null) return null;
+        return chapterSectionMapper.selectOne(ChapterSectionMapper.inChapter(chapter.getId())
+                .orderByDesc(!StructureService.MULTI_SECTION.equals(chapter.getStructureMode()), ChapterSectionEntity::getIsDefault)
+                .orderByDesc(ChapterSectionEntity::getSectionNo)
+                .last("LIMIT 1"));
+    }
+
+    private static void addSectionContext(
+            Map<String, Object> body, AgentRunEntity run, ChapterEntity chapter,
+            ChapterSectionEntity section, StoryMemoryContextService.FiveLayerContext context
+    ) {
+        body.put("section_id", run.getSectionId() == null ? null : run.getSectionId().toString());
+        long order = StoryMemoryContextService.currentNarrativeOrder(chapter, section);
+        body.put("narrative_order", order > 0 ? order : null);
+        body.put("precision_mode", context.effectivePrecisionMode());
     }
 
     public String buildPreviousChaptersContext(UUID bookId, ChapterEntity currentChapter) {
@@ -501,7 +555,9 @@ public class AgentRunService {
                 new LambdaQueryWrapper<ChapterEntity>()
                         .eq(ChapterEntity::getBookId, bookId)
                         .lt(ChapterEntity::getChapterNo, currentChapter.getChapterNo())
-                        .orderByAsc(ChapterEntity::getChapterNo)
+                        .gt(ChapterEntity::getWordCount, 0)
+                        .orderByDesc(ChapterEntity::getChapterNo)
+                        .last("LIMIT 7")
         );
         if (earlier == null || earlier.isEmpty()) {
             return "";
@@ -509,6 +565,7 @@ public class AgentRunService {
 
         List<ChapterEntity> nonEmpty = earlier.stream()
                 .filter(c -> c.getContent() != null && !c.getContent().isBlank())
+                .sorted(Comparator.comparing(ChapterEntity::getChapterNo))
                 .toList();
         if (nonEmpty.isEmpty()) {
             return "";

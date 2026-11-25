@@ -12,6 +12,9 @@ class RunStartRequest(BaseModel):
     owner_id: str = ""
     book_id: str = ""
     chapter_no: int | None = None
+    section_id: str | None = None
+    narrative_order: int | None = None
+    precision_mode: str = "AUTO"
     mode: RunMode = "AGENT"
     trace_id: str | None = None
     action: RunAction = "CONTINUE"
@@ -34,6 +37,9 @@ class RunResumeRequest(BaseModel):
     owner_id: str = ""
     book_id: str = ""
     chapter_no: int | None = None
+    section_id: str | None = None
+    narrative_order: int | None = None
+    precision_mode: str = "AUTO"
     mode: RunMode = "AGENT"
     trace_id: str | None = None
     action: RunAction = "CONTINUE"

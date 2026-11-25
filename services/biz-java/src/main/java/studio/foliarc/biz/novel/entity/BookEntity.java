@@ -24,6 +24,7 @@ public class BookEntity {
     private String autoCharter;
     private String charterSource;
     private Integer charterChapterCount;
+    private String precisionMode;
     private String status;
 
     @Version
@@ -105,6 +106,14 @@ public class BookEntity {
 
     public void setCharterChapterCount(Integer charterChapterCount) {
         this.charterChapterCount = charterChapterCount;
+    }
+
+    public String getPrecisionMode() {
+        return precisionMode;
+    }
+
+    public void setPrecisionMode(String precisionMode) {
+        this.precisionMode = precisionMode;
     }
 
     public String getStatus() {

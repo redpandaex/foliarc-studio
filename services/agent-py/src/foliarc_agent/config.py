@@ -53,7 +53,8 @@ class Settings(BaseSettings):
 
     milvus_host: str = "localhost"
     milvus_port: int = 19530
-    milvus_collection: str = "foliarc_novel_chunks"
+    milvus_collection: str = "foliarc_novel_chunks_v2"
+    milvus_summary_collection: str = "foliarc_summary_vectors"
 
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_api_key: str = ""

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -8,7 +9,11 @@ import httpx
 
 from foliarc_agent.config import Settings
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankCandidate, RerankProvider
-from foliarc_agent.rag.vector_store import VectorSearchHit, VectorStore
+from foliarc_agent.rag.vector_store import (
+    SummaryVectorStore,
+    VectorSearchHit,
+    VectorStore,
+)
 
 SCOPE_WEIGHTS: dict[str, float] = {
     "BOOK": 1.25,
@@ -16,6 +21,9 @@ SCOPE_WEIGHTS: dict[str, float] = {
     "ASSIGNED": 1.05,
     "GLOBAL": 1.00,
 }
+
+HOT_ZONE_ORDER_SPAN = 300_000
+HOT_ZONE_BOOST = 1.15
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +38,7 @@ class RetrievedPassage:
     matched_snippet: str
     parent_context: str
     scope: str = "BOOK"
+    narrative_order: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,16 +52,19 @@ class RetrievedPassage:
             "matched_snippet": self.matched_snippet,
             "parent_context": self.parent_context,
             "scope": self.scope,
+            "narrative_order": self.narrative_order,
         }
 
 
 class HybridRagRetriever:
     """
-    Full Novel-Grade Hybrid RAG Pipeline:
+    Full Novel-Grade Hybrid RAG Pipeline (upgraded for 10,000-chapter Coarse-to-Fine routing):
     1. Optional Query Transformation (pronoun resolution + multi-query expansion)
-    2. Milvus Hybrid Search (Dense HNSW + Native BM25 + RRF Fusion + Anti-Spoiler Filter `chapter_no <= N`)
-    3. Small-to-Big Parent Expansion via Java PG authoritative lookup (double-verifies non-deleted doc_version!)
-    4. Cross-Encoder / Local Cross-Feature Rerank
+    2. For <=300 units (PRECISE): single-stage Milvus Hybrid Search with section-level narrative_order anti-spoiler
+       For >300 units (EPIC / AUTO): parallel Hot-Zone direct search (recent 300 units, x1.15 boost)
+       + Cold-Zone Coarse-to-Fine (Stage 1 summary_vectors routing -> Stage 2 targeted order_ranges drill-down)
+    3. Small-to-Big Parent Expansion via Java PG authoritative lookup
+    4. Cross-Encoder Rerank + Multi-Scope precedence (`BOOK > USER > ASSIGNED > GLOBAL`)
     """
 
     def __init__(
@@ -62,11 +74,13 @@ class HybridRagRetriever:
         vector_store: VectorStore,
         embedder: EmbeddingProvider,
         reranker: RerankProvider,
+        summary_store: SummaryVectorStore | None = None,
     ) -> None:
         self._settings = settings
         self._store = vector_store
         self._embedder = embedder
         self._reranker = reranker
+        self._summary_store = summary_store
 
     async def search(
         self,
@@ -76,6 +90,8 @@ class HybridRagRetriever:
         query: str,
         top_k: int = 5,
         max_chapter_no: int | None = None,
+        max_narrative_order: int | None = None,
+        precision_mode: str = "AUTO",
         doc_type: str | None = None,
         rewrite_query: bool = False,
         chapter_context: str = "",
@@ -97,26 +113,27 @@ class HybridRagRetriever:
                 if q and q not in queries:
                     queries.append(q)
 
-        # Multi-query hybrid search + RRF fusion across expanded queries
+        effective_max_order = max_narrative_order
+        if effective_max_order is None and max_chapter_no is not None and max_chapter_no > 0:
+            effective_max_order = max_chapter_no * 1000 + 999
+
+        mode_upper = (precision_mode or "AUTO").upper()
+        use_coarse_to_fine = (
+            self._summary_store is not None
+            and effective_max_order is not None
+            and effective_max_order > HOT_ZONE_ORDER_SPAN
+            and mode_upper in ("AUTO", "EPIC")
+        )
+
         vectors = await self._embedder.embed_texts(queries)
         fused_hits: dict[str, tuple[VectorSearchHit, float]] = {}
+        cold_routes: list[dict[str, Any]] = []
         fetch_k = max(top_k * 3, 12)
-        for q_text, q_vec in zip(queries, vectors, strict=True):
-            sub_hits = await self._store.hybrid_search(
-                owner_id=owner_id,
-                book_id=book_id,
-                query_text=q_text,
-                query_vector=q_vec,
-                top_k=fetch_k,
-                max_chapter_no=max_chapter_no,
-                doc_type=doc_type,
-                user_doc_ids=user_doc_ids,
-                assigned_doc_ids=assigned_doc_ids,
-                global_doc_ids=global_doc_ids,
-            )
+
+        def _merge_hits(sub_hits: list[VectorSearchHit], boost: float = 1.0) -> None:
             for rank, hit in enumerate(sub_hits, start=1):
                 key = hit.parent_chunk_id or hit.chunk_id
-                add_score = 1.0 / (60.0 + rank)
+                add_score = (1.0 / (60.0 + rank)) * boost
                 if key not in fused_hits:
                     fused_hits[key] = (hit, add_score)
                 else:
@@ -124,11 +141,97 @@ class HybridRagRetriever:
                     best = hit if hit.score > prev_hit.score else prev_hit
                     fused_hits[key] = (best, prev_score + add_score)
 
+        if use_coarse_to_fine and effective_max_order is not None and self._summary_store is not None:
+            hot_cutoff = effective_max_order - HOT_ZONE_ORDER_SPAN
+            primary_q = queries[0]
+            primary_vec = vectors[0]
+
+            async def _run_hot() -> list[list[VectorSearchHit]]:
+                tasks = [
+                    self._store.hybrid_search(
+                        owner_id=owner_id,
+                        book_id=book_id,
+                        query_text=q_text,
+                        query_vector=q_vec,
+                        top_k=fetch_k,
+                        max_narrative_order=effective_max_order,
+                        min_narrative_order=hot_cutoff + 1,
+                        doc_type=doc_type,
+                        user_doc_ids=user_doc_ids,
+                        assigned_doc_ids=assigned_doc_ids,
+                        global_doc_ids=global_doc_ids,
+                    )
+                    for q_text, q_vec in zip(queries, vectors, strict=True)
+                ]
+                return list(await asyncio.gather(*tasks))
+
+            async def _run_cold() -> tuple[list[dict[str, Any]], list[VectorSearchHit]]:
+                summary_hits = await self._summary_store.search_summaries(
+                    owner_id=owner_id,
+                    book_id=book_id,
+                    query_text=primary_q,
+                    query_vector=primary_vec,
+                    top_k=4,
+                    max_order=hot_cutoff,
+                )
+                if not summary_hits:
+                    return [], []
+                ranges: list[tuple[int, int]] = []
+                routes: list[dict[str, Any]] = []
+                for s in summary_hits:
+                    lo = max(1, s.start_order)
+                    hi = min(hot_cutoff, max(s.end_order, lo))
+                    ranges.append((lo, hi))
+                    routes.append(
+                        {
+                            "node_id": s.node_id,
+                            "tier_level": s.tier_level,
+                            "start_order": lo,
+                            "end_order": hi,
+                            "score": s.score,
+                        }
+                    )
+                drilled = await self._store.hybrid_search(
+                    owner_id=owner_id,
+                    book_id=book_id,
+                    query_text=primary_q,
+                    query_vector=primary_vec,
+                    top_k=max(top_k, 6),
+                    order_ranges=ranges,
+                    doc_type=doc_type,
+                )
+                return routes, drilled
+
+            hot_batches, (cold_routes, cold_hits) = await asyncio.gather(_run_hot(), _run_cold())
+            for batch in hot_batches:
+                _merge_hits(batch, boost=HOT_ZONE_BOOST)
+            _merge_hits(cold_hits, boost=1.0)
+        else:
+            for q_text, q_vec in zip(queries, vectors, strict=True):
+                sub_hits = await self._store.hybrid_search(
+                    owner_id=owner_id,
+                    book_id=book_id,
+                    query_text=q_text,
+                    query_vector=q_vec,
+                    top_k=fetch_k,
+                    max_chapter_no=max_chapter_no,
+                    max_narrative_order=max_narrative_order,
+                    doc_type=doc_type,
+                    user_doc_ids=user_doc_ids,
+                    assigned_doc_ids=assigned_doc_ids,
+                    global_doc_ids=global_doc_ids,
+                )
+                _merge_hits(sub_hits, boost=1.0)
+
+        strategy = "coarse_to_fine" if use_coarse_to_fine else "direct_hybrid"
         if not fused_hits:
             return {
                 "query": query,
                 "expanded_queries": queries,
                 "max_chapter_no": max_chapter_no,
+                "max_narrative_order": effective_max_order,
+                "retrieval_strategy": strategy,
+                "cold_summary_routes": cold_routes,
                 "embedding_mode": self._embedder.mode,
                 "rerank_mode": self._reranker.mode,
                 "hits": [],
@@ -142,7 +245,6 @@ class HybridRagRetriever:
         meta_by_key: dict[str, tuple[VectorSearchHit, dict[str, Any] | None]] = {}
         for key, (hit, rrf_score) in fused_hits.items():
             parent_row = parent_map.get(hit.parent_chunk_id) if parent_map is not None else None
-            # If PG parent lookup ran and document was deleted/superseded, drop stale Milvus hit!
             if parent_map is not None and hit.parent_chunk_id and parent_row is None:
                 continue
             parent_text = (parent_row or {}).get("content") or hit.content
@@ -176,10 +278,10 @@ class HybridRagRetriever:
                     matched_snippet=hit.content[:280],
                     parent_context=(parent_row or {}).get("content") or hit.content,
                     scope=effective_scope,
+                    narrative_order=hit.narrative_order,
                 )
             )
 
-        # Enforce precedence ordering: BOOK > USER > ASSIGNED > GLOBAL weighted score
         weighted_passages.sort(key=lambda p: p.score, reverse=True)
         passages = [p.to_dict() for p in weighted_passages[:top_k]]
 
@@ -187,6 +289,9 @@ class HybridRagRetriever:
             "query": query,
             "expanded_queries": queries,
             "max_chapter_no": max_chapter_no,
+            "max_narrative_order": effective_max_order,
+            "retrieval_strategy": strategy,
+            "cold_summary_routes": cold_routes,
             "embedding_mode": self._embedder.mode,
             "rerank_mode": self._reranker.mode,
             "hits": passages,

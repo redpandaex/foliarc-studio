@@ -137,6 +137,9 @@ class RunManager:
                 owner_id=req.owner_id,
                 book_id=req.book_id,
                 chapter_no=req.chapter_no,
+                section_id=req.section_id,
+                narrative_order=req.narrative_order,
+                precision_mode=req.precision_mode,
                 mode=req.mode,
                 trace_id=req.trace_id,
                 action=req.action,
@@ -174,6 +177,9 @@ class RunManager:
                 owner_id=req.owner_id,
                 book_id=req.book_id,
                 chapter_no=req.chapter_no,
+                section_id=req.section_id,
+                narrative_order=req.narrative_order,
+                precision_mode=req.precision_mode,
                 mode=req.mode,
                 trace_id=req.trace_id,
                 action=req.action,
@@ -259,6 +265,9 @@ class RunManager:
         owner_id: str,
         book_id: str,
         chapter_no: int | None,
+        section_id: str | None = None,
+        narrative_order: int | None = None,
+        precision_mode: str = "AUTO",
         mode: RunMode,
         trace_id: str | None,
         action: Any,
@@ -403,6 +412,9 @@ class RunManager:
                         owner_id=owner_id,
                         book_id=book_id,
                         chapter_no=chapter_no,
+                        section_id=section_id,
+                        narrative_order=narrative_order,
+                        precision_mode=precision_mode,
                         action=str(action),
                         book_title=book_title,
                         genre=genre,
@@ -449,7 +461,7 @@ class RunManager:
                         user_parts.append(f"当前章节：{ch_label}{chapter_title}".strip())
                     if rolling_summary_context.strip():
                         user_parts.append(
-                            f"【前文卷级里程碑与近期章摘（L2）】\n{rolling_summary_context.strip()[:2600]}"
+                            f"【前文卷级里程碑与近期章摘（L2）】\n{rolling_summary_context.strip()[:4200]}"
                         )
                     if active_state_brief.strip():
                         user_parts.append(

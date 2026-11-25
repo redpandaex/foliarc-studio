@@ -15,11 +15,18 @@ from minio.error import S3Error
 
 from foliarc_agent.config import Settings
 from foliarc_agent.rag.chunker import build_parent_child_chunks
+from foliarc_agent.rag.distiller import ChapterDistiller
 from foliarc_agent.rag.embeddings import EmbeddingProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
 from foliarc_agent.rag.parsers import parse_document_bytes
 from foliarc_agent.rag.summarizer import HierarchicalSummarizer
-from foliarc_agent.rag.vector_store import VectorChunkRow, VectorStore
+from foliarc_agent.rag.vector_store import (
+    SummaryVectorRow,
+    SummaryVectorStore,
+    VectorChunkRow,
+    VectorStore,
+    derive_narrative_order,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,18 +38,24 @@ CHAPTER_INGEST_QUEUE = "foliarc.rag.chapter.ingest.queue"
 DELETE_QUEUE = "foliarc.rag.delete.queue"
 MEMORY_QUEUE = "foliarc.memory.extract.queue"
 SUMMARY_QUEUE = "foliarc.memory.summary.queue"
+DISTILL_QUEUE = "foliarc.memory.distill.queue"
+ROLLUP_QUEUE = "foliarc.memory.rollup.queue"
 
 INGEST_DLQ = "foliarc.rag.ingest.dlq"
 CHAPTER_INGEST_DLQ = "foliarc.rag.chapter.ingest.dlq"
 DELETE_DLQ = "foliarc.rag.delete.dlq"
 MEMORY_DLQ = "foliarc.memory.extract.dlq"
 SUMMARY_DLQ = "foliarc.memory.summary.dlq"
+DISTILL_DLQ = "foliarc.memory.distill.dlq"
+ROLLUP_DLQ = "foliarc.memory.rollup.dlq"
 
 RK_INGEST = "rag.ingest"
 RK_CHAPTER_INGEST = "rag.chapter.ingest"
 RK_DELETE = "rag.delete"
 RK_MEMORY = "memory.extract"
 RK_SUMMARY = "memory.summary"
+RK_DISTILL = "memory.distill"
+RK_ROLLUP = "memory.rollup"
 
 
 class RagIngestionWorker:
@@ -63,12 +76,16 @@ class RagIngestionWorker:
         embedder: EmbeddingProvider,
         memory_extractor: StructuredMemoryExtractor,
         summarizer: HierarchicalSummarizer | None = None,
+        distiller: ChapterDistiller | None = None,
+        summary_store: SummaryVectorStore | None = None,
     ) -> None:
         self._settings = settings
         self._store = vector_store
         self._embedder = embedder
         self._extractor = memory_extractor
         self._summarizer = summarizer or HierarchicalSummarizer(settings)
+        self._distiller = distiller or ChapterDistiller(settings)
+        self._summary_store = summary_store
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._connected = False
@@ -131,6 +148,8 @@ class RagIngestionWorker:
                     (fast_channel, DELETE_QUEUE, DELETE_DLQ, RK_DELETE, self._on_delete_message),
                     (fast_channel, MEMORY_QUEUE, MEMORY_DLQ, RK_MEMORY, self._on_memory_message),
                     (fast_channel, SUMMARY_QUEUE, SUMMARY_DLQ, RK_SUMMARY, self._on_summary_message),
+                    (fast_channel, DISTILL_QUEUE, DISTILL_DLQ, RK_DISTILL, self._on_distill_message),
+                    (bulk_channel, ROLLUP_QUEUE, ROLLUP_DLQ, RK_ROLLUP, self._on_rollup_message),
                 ):
                     dlq = await ch.declare_queue(dlq_name, durable=True)
                     await dlq.bind(dlx, routing_key=dlq_name)
@@ -241,6 +260,34 @@ class RagIngestionWorker:
             logger.exception("Failed to process hierarchical summary message (routing to DLQ)")
             await message.reject(requeue=False)
 
+    async def _on_distill_message(self, message: AbstractIncomingMessage) -> None:
+        try:
+            payload = json.loads(message.body.decode("utf-8"))
+            idem_key = str(payload.get("idempotency_key") or message.headers.get("x-idempotency-key") or "")
+            if idem_key and not await self._claim_idempotency(idem_key, "section-distill-worker"):
+                await message.ack()
+                return
+
+            await self.process_distill_payload(payload)
+            await message.ack()
+        except Exception:
+            logger.exception("Failed to process unified section distill message (routing to DLQ)")
+            await message.reject(requeue=False)
+
+    async def _on_rollup_message(self, message: AbstractIncomingMessage) -> None:
+        try:
+            payload = json.loads(message.body.decode("utf-8"))
+            idem_key = str(payload.get("idempotency_key") or message.headers.get("x-idempotency-key") or "")
+            if idem_key and not await self._claim_idempotency(idem_key, "memory-rollup-worker"):
+                await message.ack()
+                return
+
+            await self.process_rollup_payload(payload)
+            await message.ack()
+        except Exception:
+            logger.exception("Failed to process logarithmic rollup message (routing to DLQ)")
+            await message.reject(requeue=False)
+
     # --- Core Pipelines (also directly callable in unit/integration tests) ---
 
     async def process_ingest_payload(self, payload: dict[str, Any]) -> int:
@@ -299,6 +346,8 @@ class RagIngestionWorker:
             progress=75,
             chunk_count=len(children),
         )
+        section_id = str(payload.get("section_id") or "")
+        narrative_order = int(payload.get("narrative_order") or 0)
         vectors = await self._embedder.embed_texts([c.content for c in children])
         rows = [
             VectorChunkRow(
@@ -314,6 +363,8 @@ class RagIngestionWorker:
                 content=c.content,
                 dense_vec=vec,
                 scope=scope,
+                narrative_order=narrative_order or derive_narrative_order(c.chapter_no),
+                section_id=section_id,
             )
             for c, vec in zip(children, vectors, strict=True)
         ]
@@ -434,6 +485,262 @@ class RagIngestionWorker:
 
         logger.info("Processed hierarchical summary for book %s ch.%s: %s", book_id, chapter_data["chapterNo"], save_resp)
         return save_resp
+
+    async def process_distill_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Phase 5.8A unified single-pass section compilation (Summary + Memory + summary_vectors)."""
+        book_id = str(payload["book_id"])
+        owner_id = str(payload["owner_id"])
+        section_id = str(payload["section_id"])
+
+        section_data = await self._fetch_section(section_id)
+        bible = await self._fetch_bible(owner_id, book_id)
+        known_chars = [str(c.get("name", "")) for c in (bible or {}).get("characters", []) if c.get("name")]
+        open_clues = [
+            f"{f.get('title', '')}：{f.get('description', '')}"
+            for f in (bible or {}).get("foreshadowings", [])
+            if str(f.get("status", "")).upper() in ("OPEN", "PLANNED", "PLANTED", "HINTED")
+        ]
+
+        distilled = await self._distiller.distill_section(
+            chapter_no=int(section_data.get("chapterNo", 1)),
+            section_no=int(section_data.get("sectionNo", 1)),
+            chapter_title=str(section_data.get("chapterTitle") or ""),
+            section_title=str(section_data.get("sectionTitle") or ""),
+            content=str(section_data.get("content") or ""),
+            volume_arc_goal=str(section_data.get("volumeArcGoal") or ""),
+            prev_ending_hook=str(section_data.get("prevEndingHook") or ""),
+            known_characters=known_chars,
+            open_foreshadowings=open_clues,
+            genre=section_data.get("genre"),
+        )
+        summary = distilled["summary"]
+        ch_no = int(section_data.get("chapterNo", 1))
+        narrative_order = int(
+            section_data.get("narrativeOrder")
+            or derive_narrative_order(ch_no)
+        )
+        raw_mem = distilled.get("memory") or {}
+        projected_memory = {
+            "chapterNo": ch_no,
+            "characterUpdates": [
+                {
+                    "name": str(c.get("name") or "").strip(),
+                    "currentLocation": str(c.get("currentLocation") or "").strip() or None,
+                    "statusNotes": str(c.get("statusNotes") or "").strip() or None,
+                    "inventory": str(c.get("inventoryDelta") or c.get("inventory") or "").strip() or None,
+                }
+                for c in (raw_mem.get("characterUpdates") or [])
+                if str(c.get("name") or "").strip()
+            ],
+            "foreshadowingUpdates": [
+                {
+                    "title": str(f.get("title") or "").strip(),
+                    "description": str(f.get("description") or f.get("quote") or "").strip() or None,
+                    "plantedChapterNo": ch_no if str(f.get("action", "")).upper() != "RESOLVED" else None,
+                    "resolvedChapterNo": ch_no if str(f.get("action", "")).upper() == "RESOLVED" else None,
+                    "status": "RESOLVED" if str(f.get("action", "")).upper() == "RESOLVED" else "OPEN",
+                }
+                for f in (raw_mem.get("foreshadowingSignals") or [])
+                if str(f.get("title") or "").strip()
+            ],
+            "relations": [
+                {
+                    "sourceCharacter": str(r.get("sourceCharacter") or "").strip(),
+                    "targetCharacter": str(r.get("targetCharacter") or "").strip(),
+                    "relationType": str(r.get("relationType") or "关联").strip(),
+                    "description": str(r.get("description") or "").strip() or None,
+                    "sinceChapterNo": ch_no,
+                }
+                for r in (raw_mem.get("relations") or [])
+                if str(r.get("sourceCharacter") or "").strip() and str(r.get("targetCharacter") or "").strip()
+            ],
+            "timelineEvents": [
+                {
+                    "chapterNo": ch_no,
+                    "eventTitle": str(t.get("eventTitle") or "").strip(),
+                    "summary": str(t.get("summary") or "").strip() or None,
+                    "involvedCharacters": str(t.get("involvedCharacters") or "").strip() or None,
+                    "location": str(t.get("location") or "").strip() or None,
+                }
+                for t in (raw_mem.get("timelineEvents") or [])
+                if str(t.get("eventTitle") or "").strip()
+            ],
+        }
+
+        apply_resp = await self._apply_section_distill(
+            owner_id=owner_id,
+            book_id=book_id,
+            payload={
+                "sectionId": section_id,
+                "contentHash": str(section_data.get("contentHash") or ""),
+                "summary": summary,
+                "memory": projected_memory,
+            },
+        )
+
+        # Index Tier-0 section summary into foliarc_summary_vectors for Coarse-to-Fine routing
+        if self._summary_store is not None and summary.get("summaryText"):
+            summary_doc = f"第{section_data.get('chapterNo')}章第{section_data.get('sectionNo', 1)}节：{summary['summaryText']}"
+            if summary.get("stateChanges"):
+                summary_doc += f" 硬事实：{summary['stateChanges']}"
+            if summary.get("clueSignals"):
+                summary_doc += f" 伏笔：{summary['clueSignals']}"
+            vecs = await self._embedder.embed_texts([summary_doc])
+            await self._summary_store.upsert_summaries(
+                [
+                    SummaryVectorRow(
+                        node_id=f"sec:{section_id}",
+                        book_id=book_id,
+                        owner_id=owner_id,
+                        tier_level=0,
+                        start_order=narrative_order,
+                        end_order=narrative_order,
+                        chapter_no=int(section_data.get("chapterNo", 1)),
+                        content=summary_doc,
+                        dense_vec=vecs[0],
+                    )
+                ]
+            )
+
+        logger.info("Compiled unified section distill for book %s sec %s: %s", book_id, section_id, apply_resp)
+        return apply_resp
+
+    async def process_rollup_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Phase 5.8A logarithmic Tier 1/2/3 rollup synthesis + prose-sampled L0 auto-charter refresh."""
+        book_id = str(payload["book_id"])
+        owner_id = str(payload.get("owner_id") or "")
+        rollups_data = await self._fetch_book_rollups(book_id)
+        if not owner_id:
+            owner_id = str(rollups_data.get("ownerId") or "")
+
+        section_sums: list[dict[str, Any]] = list(rollups_data.get("sectionSummaries") or [])
+        saved_nodes: list[dict[str, Any]] = []
+
+        # Tier 1: every 10 sections (or target seq_no from payload)
+        target_tier = int(payload.get("tier_level") or 1)
+        seq_no = int(payload.get("seq_no") or 1)
+        if target_tier == 1:
+            start_order = int(payload.get("start_order") or 0)
+            end_order = int(payload.get("end_order") or 0)
+            group = [
+                s
+                for s in section_sums
+                if (start_order <= 0 or int(s.get("narrativeOrder", 0)) >= start_order)
+                and (end_order <= 0 or int(s.get("narrativeOrder", 0)) <= end_order)
+            ]
+            if not group:
+                group = section_sums[(seq_no - 1) * 10 : seq_no * 10]
+            if group:
+                res = await self._distiller.summarize_rollup(
+                    tier_level=1,
+                    seq_no=seq_no,
+                    start_chapter_no=int(group[0].get("chapterNo", 1)),
+                    end_chapter_no=int(group[-1].get("chapterNo", 1)),
+                    items=group,
+                    title=str(payload.get("title") or f"第 {seq_no} 卷"),
+                )
+                saved = await self._save_rollup(
+                    book_id=book_id,
+                    payload={
+                        "tierLevel": 1,
+                        "seqNo": seq_no,
+                        "volumeId": payload.get("volume_id"),
+                        "startOrder": int(group[0].get("narrativeOrder", 1001)),
+                        "endOrder": int(group[-1].get("narrativeOrder", 1001)),
+                        "startChapterNo": int(group[0].get("chapterNo", 1)),
+                        "endChapterNo": int(group[-1].get("chapterNo", 1)),
+                        "title": str(payload.get("title") or f"第 {seq_no} 卷"),
+                        "summaryText": res["summaryText"],
+                        "openThreads": res["openThreads"],
+                        "sourceHash": res["sourceHash"],
+                    },
+                )
+                saved_nodes.append(saved)
+                await self._index_rollup_vector(book_id, owner_id, saved, res["summaryText"])
+        elif target_tier in (2, 3):
+            lower_tier = target_tier - 1
+            lower_items = [
+                r
+                for r in (rollups_data.get("rollups") or [])
+                if int(r.get("tierLevel", 0)) == lower_tier
+            ]
+            group_size = 10 if target_tier == 2 else 5
+            chunk = lower_items[(seq_no - 1) * group_size : seq_no * group_size]
+            if chunk:
+                res = await self._distiller.summarize_rollup(
+                    tier_level=target_tier,
+                    seq_no=seq_no,
+                    start_chapter_no=int(chunk[0].get("startChapterNo", 1)),
+                    end_chapter_no=int(chunk[-1].get("endChapterNo", 1)),
+                    items=chunk,
+                    title=str(payload.get("title") or f"第 {seq_no} {'篇' if target_tier == 2 else '纪元'}"),
+                )
+                saved = await self._save_rollup(
+                    book_id=book_id,
+                    payload={
+                        "tierLevel": target_tier,
+                        "seqNo": seq_no,
+                        "startOrder": int(chunk[0].get("startOrder", 1001)),
+                        "endOrder": int(chunk[-1].get("endOrder", 1001)),
+                        "startChapterNo": int(chunk[0].get("startChapterNo", 1)),
+                        "endChapterNo": int(chunk[-1].get("endChapterNo", 1)),
+                        "title": str(payload.get("title") or f"第 {seq_no} {'篇' if target_tier == 2 else '纪元'}"),
+                        "summaryText": res["summaryText"],
+                        "openThreads": res["openThreads"],
+                        "sourceHash": res["sourceHash"],
+                    },
+                )
+                saved_nodes.append(saved)
+                await self._index_rollup_vector(book_id, owner_id, saved, res["summaryText"])
+
+        if payload.get("refresh_auto_charter") and rollups_data.get("charterSource") != "AUTHOR_DEFINED":
+            bible = await self._fetch_bible(owner_id, book_id) if owner_id else None
+            known_chars = [str(c.get("name", "")) for c in (bible or {}).get("characters", []) if c.get("name")]
+            charter_text = await self._distiller.infer_story_charter(
+                book_title=str(rollups_data.get("bookTitle") or ""),
+                genre=rollups_data.get("genre"),
+                existing_synopsis=rollups_data.get("synopsis"),
+                existing_auto_charter=str(rollups_data.get("existingAutoCharter") or ""),
+                rollup_summaries=list(rollups_data.get("rollups") or []),
+                recent_summaries=section_sums[-3:],
+                first_section_sample=str(rollups_data.get("firstSectionSample") or ""),
+                latest_section_sample=str(rollups_data.get("latestSectionSample") or ""),
+                known_characters=known_chars,
+            )
+            await self._save_auto_charter(
+                book_id=book_id,
+                auto_charter=charter_text,
+                chapter_count=len(section_sums) or 1,
+            )
+
+        return {"savedNodes": saved_nodes}
+
+    async def _index_rollup_vector(
+        self,
+        book_id: str,
+        owner_id: str,
+        saved: dict[str, Any],
+        summary_text: str,
+    ) -> None:
+        if self._summary_store is None or not summary_text:
+            return
+        vecs = await self._embedder.embed_texts([summary_text])
+        node_id = str(saved.get("nodeId") or f"t{saved.get('tierLevel', 1)}:{saved.get('seqNo', 1)}")
+        await self._summary_store.upsert_summaries(
+            [
+                SummaryVectorRow(
+                    node_id=node_id,
+                    book_id=book_id,
+                    owner_id=owner_id,
+                    tier_level=int(saved.get("tierLevel", 1)),
+                    start_order=int(saved.get("startOrder", 1001)),
+                    end_order=int(saved.get("endOrder", 1001)),
+                    chapter_no=int(saved.get("startChapterNo", 1)),
+                    content=summary_text,
+                    dense_vec=vecs[0],
+                )
+            ]
+        )
 
     # --- Internal HTTP & MinIO Helpers ---
 
@@ -573,3 +880,33 @@ class RagIngestionWorker:
                 json={"autoCharter": auto_charter, "chapterCount": chapter_count},
             )
             resp.raise_for_status()
+
+    async def _fetch_section(self, section_id: str) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/sections/{section_id}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=self._internal_headers())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _apply_section_distill(
+        self, *, owner_id: str, book_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/distill/apply"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, headers=self._internal_headers(owner_id), json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _fetch_book_rollups(self, book_id: str) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/rollups"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=self._internal_headers())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _save_rollup(self, *, book_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/rollups/save"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, headers=self._internal_headers(), json=payload)
+            resp.raise_for_status()
+            return resp.json()

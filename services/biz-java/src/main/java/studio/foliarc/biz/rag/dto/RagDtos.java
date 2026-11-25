@@ -5,7 +5,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import studio.foliarc.biz.lore.dto.LoreDtos;
 
@@ -69,8 +74,17 @@ public final class RagDtos {
             String sceneTitle,
             String content,
             Integer tokenCount,
-            String metadataJson
-    ) {}
+            String metadataJson,
+            @JsonAlias("narrative_order") Long narrativeOrder,
+            @JsonAlias("section_id") UUID sectionId
+    ) {
+        public InternalChunkInput(
+                UUID id, String chunkLevel, UUID parentChunkId, Integer chunkIndex, Integer chapterNo,
+                String sceneTitle, String content, Integer tokenCount, String metadataJson
+        ) {
+            this(id, chunkLevel, parentChunkId, chunkIndex, chapterNo, sceneTitle, content, tokenCount, metadataJson, null, null);
+        }
+    }
 
     public record InternalSaveChunksRequest(
             Integer docVersion,
@@ -159,7 +173,7 @@ public final class RagDtos {
     public record ApplyExtractedMemoryRequest(
             Integer chapterNo,
             List<LoreDtos.UpsertCharacterRequest> characterUpdates,
-            List<LoreDtos.UpsertForeshadowingRequest> foreshadowingUpdates,
+            @JsonAlias("foreshadowingSignals") List<LoreDtos.UpsertForeshadowingRequest> foreshadowingUpdates,
             List<UpsertRelationRequest> relations,
             List<UpsertTimelineEventRequest> timelineEvents
     ) {}
@@ -240,6 +254,69 @@ public final class RagDtos {
             String autoCharter,
             Integer chapterCount
     ) {}
+
+    public record InternalSectionPayload(
+            UUID sectionId, UUID chapterId, UUID volumeId, UUID bookId, UUID ownerId,
+            int chapterNo, int sectionNo, long narrativeOrder, String chapterTitle, String sectionTitle,
+            String content, String contentHash, String volumeArcGoal, String prevEndingHook, String firstSectionSample,
+            String latestSectionSample, String bookTitle, String genre, String synopsis
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DistilledSectionSummary(
+            @Size(max = 255) String timeAndPlace,
+            @NotBlank String summaryText,
+            String stateChanges, String clueSignals, String povNotes, String involvedCharacters, String endingHook
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record InternalApplyDistillRequest(
+            @NotNull UUID sectionId,
+            @NotNull @Size(max = 64) String contentHash,
+            @NotNull @Valid DistilledSectionSummary summary,
+            ApplyExtractedMemoryRequest memory
+    ) {}
+
+    public record InternalApplyDistillResponse(
+            boolean saved, UUID sectionId, UUID summaryId, boolean rollupQueued,
+            boolean refreshAutoCharter, ApplyExtractedMemoryResponse memory
+    ) {}
+
+    public record SectionSummaryItem(
+            UUID id, UUID sectionId, UUID chapterId, int chapterNo, int sectionNo, long narrativeOrder,
+            String chapterTitle, String sectionTitle, String contentHash, String timeAndPlace, String summaryText,
+            String stateChanges, String clueSignals, String povNotes, String involvedCharacters, String endingHook,
+            String status
+    ) {}
+
+    public record StoryRollupItem(
+            UUID nodeId, int tierLevel, int seqNo, UUID volumeId, long startOrder, long endOrder,
+            int startChapterNo, int endChapterNo, String title, String summaryText, String openThreads,
+            String sourceHash, String status
+    ) {}
+
+    public record RollupVolumeItem(
+            UUID id, int volumeNo, String title, String arcGoal, String pacingNotes, String realmScope,
+            Integer startChapterNo, Integer endChapterNo, String status
+    ) {}
+
+    public record InternalBookRollupsPayload(
+            UUID bookId, UUID ownerId, String bookTitle, String genre, String synopsis,
+            List<SectionSummaryItem> sectionSummaries, List<StoryRollupItem> rollups,
+            List<RollupVolumeItem> volumes, String firstSectionSample, String latestSectionSample,
+            String existingAutoCharter, String charterSource
+    ) {}
+
+    public record InternalSaveRollupRequest(
+            int tierLevel, int seqNo, UUID volumeId, long startOrder, long endOrder,
+            Integer startChapterNo, Integer endChapterNo,
+            @Size(max = 200) String title,
+            @NotBlank String summaryText,
+            String openThreads,
+            @Size(max = 64) String sourceHash
+    ) {}
+
+    public record InternalSaveRollupResponse(UUID nodeId, int tierLevel, int seqNo, long startOrder, long endOrder) {}
 
     public record LibraryDocumentResponse(
             UUID id,

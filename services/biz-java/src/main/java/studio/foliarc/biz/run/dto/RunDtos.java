@@ -33,8 +33,14 @@ public final class RunDtos {
 
             String chapterContext,
 
-            Boolean requireOutlineApproval
+            Boolean requireOutlineApproval,
+
+            UUID sectionId
     ) {
+        public StartRunRequest(UUID bookId, UUID chapterId, String mode, String action, String modelAlias,
+                               String instruction, String chapterContext, Boolean requireOutlineApproval) {
+            this(bookId, chapterId, mode, action, modelAlias, instruction, chapterContext, requireOutlineApproval, null);
+        }
     }
 
     public record ResumeRunRequest(

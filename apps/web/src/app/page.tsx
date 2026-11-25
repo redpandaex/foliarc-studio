@@ -10,7 +10,8 @@ const PHASES = [
   { id: "Phase 4", title: "多 Agent 协同编排 + 路由 + HITL 中断恢复", status: "已完成" },
   { id: "Phase 5", title: "企业级网关 + 分布式计费账本 + 安全护栏与硬化 Docker 沙箱", status: "已完成" },
   { id: "Phase 5.5", title: "百章级 5 层长程记忆 + 零配置自动底座 + 三层作用域 RAG + VIP 权益中台", status: "已完成" },
-  { id: "Phase 5.8", title: "万章对数记忆树 + 卷/章/小节 + 伏笔导演台 + 6 大题材包 + 双向蝴蝶效应", status: "下一步" },
+  { id: "Phase 5.8A", title: "卷/章/小节柔性结构 + 10万字Map-Reduce + 万章4层对数记忆树 + Coarse-to-Fine检索", status: "已完成" },
+  { id: "Phase 5.8B~D", title: "伏笔导演台与连续性防线 + 6大题材档案包 + 双向自选蝴蝶效应引擎", status: "下一步" },
   { id: "Phase 6", title: "独立运营后台（apps/admin + admin-java 多模块拆分）+ OTel/Langfuse + Eval 评测", status: "规划中" },
 ];
 
@@ -20,7 +21,7 @@ export default function HomePage() {
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
           <div className="inline-flex items-center rounded-full border border-border px-3 py-1 font-mono text-xs text-muted-foreground">
-            FoliarcStudio · Phase 5.5 Ready
+            FoliarcStudio · Phase 5.8A Ready
           </div>
           <h1 className="text-3xl font-bold tracking-tight">卷弧工坊 · FoliarcStudio</h1>
           <p className="text-sm text-muted-foreground">

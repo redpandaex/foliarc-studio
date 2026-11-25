@@ -33,8 +33,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import studio.foliarc.biz.common.BizException;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
+import studio.foliarc.biz.novel.entity.ChapterSectionEntity;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
+import studio.foliarc.biz.novel.mapper.ChapterSectionMapper;
 import studio.foliarc.biz.novel.service.BookService;
+import studio.foliarc.biz.novel.service.StructureService;
 import studio.foliarc.biz.outbox.RabbitMqTopologyConfig;
 import studio.foliarc.biz.outbox.service.OutboxService;
 import studio.foliarc.biz.rag.dto.RagDtos;
@@ -74,6 +77,7 @@ public class KnowledgeDocumentService {
     private final OutboxService outboxService;
     private final RestClient agentRestClient;
     private VipEntitlementService vipEntitlementService;
+    private ChapterSectionMapper chapterSectionMapper;
 
     public KnowledgeDocumentService(
             BookService bookService,
@@ -100,6 +104,11 @@ public class KnowledgeDocumentService {
     @Autowired(required = false)
     public void setVipEntitlementService(VipEntitlementService vipEntitlementService) {
         this.vipEntitlementService = vipEntitlementService;
+    }
+
+    @Autowired(required = false)
+    public void setChapterSectionMapper(ChapterSectionMapper chapterSectionMapper) {
+        this.chapterSectionMapper = chapterSectionMapper;
     }
 
     public List<RagDtos.KnowledgeDocumentResponse> listDocuments(UUID ownerId, UUID bookId) {
@@ -582,11 +591,14 @@ public class KnowledgeDocumentService {
             boolean extractMemory
     ) {
         bookService.requireOwnedBook(ownerId, bookId);
+        if (chapterSectionMapper != null) {
+            chapterMapper.lockForStructure(bookId, chapterId);
+        }
         ChapterEntity chapter = chapterMapper.selectById(chapterId);
         if (chapter == null || !bookId.equals(chapter.getBookId())) {
             throw BizException.notFound("CHAPTER_NOT_FOUND", "章节不存在");
         }
-        String text = chapter.getContent() == null ? "" : chapter.getContent();
+        String text = chapterContent(chapter);
         if (text.isBlank()) {
             throw BizException.badRequest("EMPTY_CHAPTER_CONTENT", "章节正文为空，无法同步索引或抽取记忆");
         }
@@ -638,7 +650,7 @@ public class KnowledgeDocumentService {
             doc = existing;
         }
 
-        enqueueIngestEvent(doc);
+        enqueueIngestEvent(doc, findSingleSectionForIngest(chapter));
 
         if (extractMemory) {
             enqueueMemoryExtractEvent(ownerId, bookId, chapter, doc.getDocVersion());
@@ -652,34 +664,27 @@ public class KnowledgeDocumentService {
      * has meaningful new/changed content, keeping RAG fully automatic for writers.
      */
     public void syncChapterInBackgroundIfNeeded(UUID ownerId, UUID bookId, ChapterEntity chapter) {
-        if (chapter == null || chapter.getContent() == null) {
-            return;
-        }
-        String text = chapter.getContent().trim();
-        if (text.length() < 60) {
+        if (chapter == null) {
             return;
         }
         try {
-            long byteLen = chapter.getContent().getBytes(StandardCharsets.UTF_8).length;
+            String content = chapterContent(chapter);
             KnowledgeDocumentEntity existing = documentMapper.selectOne(
                     new LambdaQueryWrapper<KnowledgeDocumentEntity>()
                             .eq(KnowledgeDocumentEntity::getBookId, bookId)
                             .eq(KnowledgeDocumentEntity::getSourceChapterId, chapter.getId())
                             .isNull(KnowledgeDocumentEntity::getDeletedAt)
             );
-            if (existing != null) {
-                String st = existing.getStatus() == null ? "" : existing.getStatus();
-                boolean inFlight = Set.of("QUEUED", "PARSING", "CHUNKING", "EMBEDDING").contains(st);
-                if (inFlight && existing.getUpdatedAt() != null
-                        && existing.getUpdatedAt().isAfter(OffsetDateTime.now().minusSeconds(30))) {
-                    return;
-                }
-                long prevSize = existing.getFileSize() == null ? 0L : existing.getFileSize();
-                if (!"FAILED".equals(st) && Math.abs(byteLen - prevSize) < 180) {
-                    return;
-                }
+            if (content.isBlank()) {
+                if (existing != null) softDeleteAndEnqueue(existing);
+                return;
             }
-            syncChapter(ownerId, bookId, chapter.getId(), true);
+            if (existing == null && content.trim().length() < 60) return;
+            String hash = sha256Hex(content.getBytes(StandardCharsets.UTF_8));
+            if (existing != null && !"FAILED".equals(existing.getStatus()) && hash.equals(existing.getContentSha256())) {
+                return;
+            }
+            syncChapter(ownerId, bookId, chapter.getId(), chapterSectionMapper == null);
         } catch (Exception ex) {
             log.warn("Background chapter RAG/memory sync skipped for chapter {}: {}", chapter.getId(), ex.getMessage());
         }
@@ -850,9 +855,27 @@ public class KnowledgeDocumentService {
                 book.getOwnerId(),
                 chapter.getChapterNo(),
                 chapter.getTitle(),
-                chapter.getContent() == null ? "" : chapter.getContent(),
+                chapterContent(chapter),
                 chapter.getStatus()
         );
+    }
+
+    private String chapterContent(ChapterEntity chapter) {
+        if (chapterSectionMapper != null && StructureService.MULTI_SECTION.equals(chapter.getStructureMode())) {
+            List<ChapterSectionEntity> sections = chapterSectionMapper.selectList(
+                    ChapterSectionMapper.inChapter(chapter.getId()).orderByAsc(ChapterSectionEntity::getSectionNo));
+            if (!sections.isEmpty()) return StructureService.combineSections(sections);
+        }
+        return chapter.getContent() == null ? "" : chapter.getContent();
+    }
+
+    private ChapterSectionEntity findSingleSectionForIngest(ChapterEntity chapter) {
+        if (chapterSectionMapper == null || StructureService.MULTI_SECTION.equals(chapter.getStructureMode())) {
+            return null;
+        }
+        return chapterSectionMapper.selectOne(ChapterSectionMapper.inChapter(chapter.getId())
+                .select(ChapterSectionEntity::getId, ChapterSectionEntity::getNarrativeOrder)
+                .eq(ChapterSectionEntity::getIsDefault, true).last("LIMIT 1"));
     }
 
     public KnowledgeDocumentEntity loadDocumentUnchecked(UUID docId) {
@@ -928,6 +951,8 @@ public class KnowledgeDocumentService {
         row.setParentChunkId(c.parentChunkId());
         row.setChunkIndex(c.chunkIndex() != null ? c.chunkIndex() : 0);
         row.setChapterNo(c.chapterNo() != null ? c.chapterNo() : doc.getChapterNo());
+        row.setNarrativeOrder(c.narrativeOrder() != null ? c.narrativeOrder() : 0L);
+        row.setSectionId(c.sectionId());
         row.setSceneTitle(c.sceneTitle() != null ? c.sceneTitle() : "");
         row.setContent(c.content() != null ? c.content() : "");
         row.setTokenCount(c.tokenCount() != null ? c.tokenCount() : 0);
@@ -969,6 +994,10 @@ public class KnowledgeDocumentService {
     }
 
     private void enqueueIngestEvent(KnowledgeDocumentEntity doc) {
+        enqueueIngestEvent(doc, null);
+    }
+
+    private void enqueueIngestEvent(KnowledgeDocumentEntity doc, ChapterSectionEntity section) {
         String idempotencyKey = "DOC_INGEST:" + doc.getId() + ":v" + doc.getDocVersion();
         String scope = doc.getScope() != null ? doc.getScope() : "BOOK";
         String partitionKey = resolveMilvusPartitionBookId(doc.getBookId(), scope);
@@ -989,6 +1018,10 @@ public class KnowledgeDocumentService {
         payload.put("minio_object_key", doc.getMinioObjectKey());
         payload.put("doc_version", doc.getDocVersion());
         payload.put("idempotency_key", idempotencyKey);
+        if (section != null) {
+            payload.put("section_id", section.getId().toString());
+            payload.put("narrative_order", section.getNarrativeOrder());
+        }
 
         // Priority queue isolation: real-time chapter indexing uses dedicated high-priority lane
         // so large uploaded PDFs never block ongoing writing continuity.

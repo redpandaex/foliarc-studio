@@ -105,6 +105,44 @@ public class InternalRagController {
         return documentService.loadChapterForWorker(chapterId);
     }
 
+    @GetMapping("/sections/{sectionId}")
+    public RagDtos.InternalSectionPayload loadSection(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID sectionId
+    ) {
+        verifyToken(token);
+        return storyMemoryContextService.loadSectionForWorker(sectionId);
+    }
+
+    @PostMapping("/books/{bookId}/distill/apply")
+    public RagDtos.InternalApplyDistillResponse applyDistill(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID bookId,
+            @Valid @RequestBody RagDtos.InternalApplyDistillRequest body
+    ) {
+        verifyToken(token);
+        return storyMemoryContextService.applySectionDistill(bookId, body);
+    }
+
+    @GetMapping("/books/{bookId}/rollups")
+    public RagDtos.InternalBookRollupsPayload loadRollups(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID bookId
+    ) {
+        verifyToken(token);
+        return storyMemoryContextService.loadBookRollupsForWorker(bookId);
+    }
+
+    @PostMapping("/books/{bookId}/rollups/save")
+    public RagDtos.InternalSaveRollupResponse saveRollup(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID bookId,
+            @Valid @RequestBody RagDtos.InternalSaveRollupRequest body
+    ) {
+        verifyToken(token);
+        return storyMemoryContextService.saveRollup(bookId, body);
+    }
+
     @GetMapping("/books/{bookId}/memory")
     public RagDtos.StructuredMemoryResponse getMemory(
             @RequestHeader(value = "X-Internal-Token", required = false) String token,

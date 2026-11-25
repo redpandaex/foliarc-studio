@@ -19,6 +19,7 @@ import {
 interface AiCopilotPanelProps {
   bookId: string;
   chapterId: string | null;
+  sectionId?: string | null;
   chapterNo?: number | null;
   chapterContent: string;
   onAppendText: (text: string) => void;
@@ -131,6 +132,7 @@ function parseOutlineApprovalFromRun(run: AgentRunItem): OutlineApprovalState | 
 export function AiCopilotPanel({
   bookId,
   chapterId,
+  sectionId,
   chapterNo,
   chapterContent,
   onAppendText,
@@ -790,6 +792,7 @@ export function AiCopilotPanel({
       const created = await runsApi.start({
         bookId,
         chapterId: chapterId ?? undefined,
+        sectionId: sectionId ?? undefined,
         mode: effectiveMode,
         action,
         modelAlias,

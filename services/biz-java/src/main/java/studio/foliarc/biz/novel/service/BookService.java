@@ -119,6 +119,10 @@ public class BookService {
         return book;
     }
 
+    void lockStructure(UUID bookId) {
+        bookMapper.lockForStructure(bookId);
+    }
+
     private static BookResponse toResponse(BookEntity book, BookChapterStats stats) {
         int chapterCount = stats == null ? 0 : stats.getChapterCount();
         long totalWords = stats == null ? 0L : stats.getTotalWordCount();

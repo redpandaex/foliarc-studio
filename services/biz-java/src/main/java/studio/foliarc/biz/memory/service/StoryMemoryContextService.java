@@ -3,47 +3,61 @@ package studio.foliarc.biz.memory.service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
+import studio.foliarc.biz.common.BizException;
 import studio.foliarc.biz.lore.dto.LoreDtos;
 import studio.foliarc.biz.lore.service.LoreService;
 import studio.foliarc.biz.memory.entity.ChapterSummaryEntity;
 import studio.foliarc.biz.memory.entity.CharacterRelationEntity;
+import studio.foliarc.biz.memory.entity.SectionSummaryEntity;
+import studio.foliarc.biz.memory.entity.StoryRollupSummaryEntity;
 import studio.foliarc.biz.memory.entity.VolumeSummaryEntity;
 import studio.foliarc.biz.memory.mapper.ChapterSummaryMapper;
 import studio.foliarc.biz.memory.mapper.CharacterRelationMapper;
+import studio.foliarc.biz.memory.mapper.SectionSummaryMapper;
+import studio.foliarc.biz.memory.mapper.StoryRollupSummaryMapper;
 import studio.foliarc.biz.memory.mapper.VolumeSummaryMapper;
 import studio.foliarc.biz.novel.dto.NovelDtos;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
+import studio.foliarc.biz.novel.entity.ChapterSectionEntity;
+import studio.foliarc.biz.novel.entity.VolumeEntity;
 import studio.foliarc.biz.novel.mapper.BookMapper;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
+import studio.foliarc.biz.novel.mapper.ChapterSectionMapper;
+import studio.foliarc.biz.novel.mapper.VolumeMapper;
 import studio.foliarc.biz.novel.service.BookService;
+import studio.foliarc.biz.novel.service.StructureService;
+import studio.foliarc.biz.novel.service.WordCounter;
 import studio.foliarc.biz.outbox.RabbitMqTopologyConfig;
 import studio.foliarc.biz.outbox.service.OutboxService;
 import studio.foliarc.biz.rag.dto.RagDtos;
 
 /**
- * Phase 5.5 Hierarchical Long-Term Memory & Five-Layer Context Pyramid Engine:
- * - L0 Static Charter (author_defined > auto_inferred, low-frequency refresh to preserve KV Cache)
- * - L1 Hot Window (immediate previous chapter verbatim tail)
- * - L2 Hierarchical Rolling Summaries (10-chapter Volume Milestones + recent 10 Chapter Summaries)
- * - L3 Entity-Scoped Dynamic State (protagonists + active mentioned characters + relations + OPEN foreshadowings)
- * - Cascade dirty invalidation when historical chapters are edited
+ * Builds story context from the charter, preceding prose, rollup tree and active story entities.
+ * Keeps legacy chapter and volume summaries available to older workers and books without sections.
  */
 @Service
 public class StoryMemoryContextService {
@@ -51,6 +65,7 @@ public class StoryMemoryContextService {
     private static final Logger log = LoggerFactory.getLogger(StoryMemoryContextService.class);
     public static final int CHAPTERS_PER_VOLUME = 10;
     public static final int RECENT_SUMMARY_WINDOW = 10;
+    private static final long EAGER_ROLLUP_DISTANCE = 500_000L;
 
     private final BookService bookService;
     private final BookMapper bookMapper;
@@ -60,6 +75,11 @@ public class StoryMemoryContextService {
     private final LoreService loreService;
     private final CharacterRelationMapper relationMapper;
     private final OutboxService outboxService;
+    private ChapterSectionMapper chapterSectionMapper;
+    private VolumeMapper volumeMapper;
+    private SectionSummaryMapper sectionSummaryMapper;
+    private StoryRollupSummaryMapper storyRollupSummaryMapper;
+    private MemoryService memoryService;
 
     public StoryMemoryContextService(
             BookService bookService,
@@ -81,13 +101,64 @@ public class StoryMemoryContextService {
         this.outboxService = outboxService;
     }
 
+    @Autowired(required = false)
+    public void setChapterSectionMapper(ChapterSectionMapper chapterSectionMapper) {
+        this.chapterSectionMapper = chapterSectionMapper;
+    }
+
+    @Autowired(required = false)
+    public void setVolumeMapper(VolumeMapper volumeMapper) {
+        this.volumeMapper = volumeMapper;
+    }
+
+    @Autowired(required = false)
+    public void setSectionSummaryMapper(SectionSummaryMapper sectionSummaryMapper) {
+        this.sectionSummaryMapper = sectionSummaryMapper;
+    }
+
+    @Autowired(required = false)
+    public void setStoryRollupSummaryMapper(StoryRollupSummaryMapper storyRollupSummaryMapper) {
+        this.storyRollupSummaryMapper = storyRollupSummaryMapper;
+    }
+
+    @Autowired(required = false)
+    public void setMemoryService(MemoryService memoryService) {
+        this.memoryService = memoryService;
+    }
+
     public record FiveLayerContext(
             String storyCharter,
             String hotWindowContext,
             String rollingSummaryContext,
             String activeStateBrief,
-            String previousChaptersCombined
-    ) {}
+            String previousChaptersCombined,
+            String effectivePrecisionMode
+    ) {
+        public FiveLayerContext(String storyCharter, String hotWindowContext, String rollingSummaryContext,
+                                String activeStateBrief, String previousChaptersCombined) {
+            this(storyCharter, hotWindowContext, rollingSummaryContext, activeStateBrief, previousChaptersCombined, "PRECISE");
+        }
+    }
+
+    public static String configuredPrecisionMode(BookEntity book) {
+        String mode = book == null ? "" : safe(book.getPrecisionMode()).toUpperCase(Locale.ROOT);
+        return switch (mode) {
+            case "PRECISE", "EXPEDITION", "EPIC" -> mode;
+            default -> "AUTO";
+        };
+    }
+
+    public static String determinePrecisionMode(BookEntity book, long totalUnits) {
+        String override = configuredPrecisionMode(book);
+        if (!"AUTO".equals(override)) return override;
+        if (totalUnits <= 300) return "PRECISE";
+        return totalUnits <= 1_000 ? "EXPEDITION" : "EPIC";
+    }
+
+    public static long currentNarrativeOrder(ChapterEntity chapter, ChapterSectionEntity section) {
+        if (section != null) return section.getNarrativeOrder();
+        return chapter == null || chapter.getChapterNo() == null ? 0L : StructureService.narrativeOrder(chapter.getChapterNo(), 1);
+    }
 
     public static String sha256Hex(String text) {
         String normalized = text == null ? "" : text.trim();
@@ -107,12 +178,24 @@ public class StoryMemoryContextService {
     }
 
     /**
-     * Marks a chapter's summary and its parent volume summary as STALE on content edit,
-     * and enqueues an async CHAPTER_SUMMARY event on the dedicated high-priority summary queue.
+     * Invalidates the compatibility section for chapter edits and supports the legacy worker
+     * for earlier deployments without a section for the chapter.
      */
     public void invalidateAndEnqueueSummary(UUID ownerId, UUID bookId, ChapterEntity chapter) {
-        if (chapter == null || chapter.getContent() == null || chapter.getContent().trim().length() < 60) {
+        if (chapter == null || chapter.getContent() == null) {
             return;
+        }
+        boolean distillable = WordCounter.count(chapter.getContent()) >= 60;
+        if (chapterSectionMapper != null) {
+            ChapterSectionEntity section = chapterSectionMapper.selectOne(ChapterSectionMapper.inChapter(chapter.getId())
+                    .eq(ChapterSectionEntity::getIsDefault, true).last("LIMIT 1"));
+            if (section != null) {
+                if (Boolean.TRUE.equals(section.getSummaryDirty())) {
+                    markSectionSummariesStale(bookId, section);
+                    if (distillable) enqueueSectionDistill(ownerId, bookId, section);
+                }
+                return;
+            }
         }
         try {
             String contentHash = (chapter.getContentHash() != null && !chapter.getContentHash().isBlank())
@@ -131,6 +214,7 @@ public class StoryMemoryContextService {
                 chapterSummaryMapper.updateById(existing);
             }
 
+            if (!distillable && existing == null) return;
             int volNo = volumeNoForChapter(chapter.getChapterNo());
             VolumeSummaryEntity existingVol = volumeSummaryMapper.selectOne(
                     new LambdaQueryWrapper<VolumeSummaryEntity>()
@@ -141,9 +225,9 @@ public class StoryMemoryContextService {
                 existingVol.setStatus("STALE");
                 volumeSummaryMapper.updateById(existingVol);
             }
+            if (!distillable) return;
 
-            String shortHash = contentHash.length() >= 12 ? contentHash.substring(0, 12) : contentHash;
-            String idempotencyKey = "CHAPTER_SUMMARY:" + chapter.getId() + ":" + shortHash;
+            String idempotencyKey = "CHAPTER_SUMMARY:" + chapter.getId() + ":v" + chapter.getVersion() + ":" + contentHash;
             Map<String, Object> payload = new HashMap<>();
             payload.put("book_id", bookId.toString());
             payload.put("owner_id", ownerId.toString());
@@ -166,11 +250,88 @@ public class StoryMemoryContextService {
         }
     }
 
-    /**
-     * Assembles the fixed-budget 5-Layer Context Pyramid (L0 Charter, L1 Hot Window,
-     * L2 Hierarchical Volume + Chapter Summaries, L3 Entity-Scoped Active State).
-     * Scales to Chapter 100+ with O(1) prompt size.
-     */
+    public void invalidateAndEnqueueSectionDistill(UUID ownerId, UUID bookId, ChapterSectionEntity section) {
+        invalidateAndEnqueueSectionDistill(ownerId, bookId, section, true);
+    }
+
+    private void invalidateAndEnqueueSectionDistill(
+            UUID ownerId, UUID bookId, ChapterSectionEntity section, boolean invalidate
+    ) {
+        if (invalidate) markSectionSummariesStale(bookId, section);
+        enqueueSectionDistill(ownerId, bookId, section);
+    }
+
+    private void enqueueSectionDistill(UUID ownerId, UUID bookId, ChapterSectionEntity section) {
+        String key = "SECTION_DISTILL:" + section.getId() + ":v" + section.getVersion();
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("book_id", bookId.toString());
+        payload.put("owner_id", ownerId.toString());
+        payload.put("chapter_id", section.getChapterId().toString());
+        payload.put("section_id", section.getId().toString());
+        payload.put("chapter_no", section.getChapterNo());
+        payload.put("section_no", section.getSectionNo());
+        payload.put("narrative_order", section.getNarrativeOrder());
+        payload.put("content_hash", safe(section.getContentHash()));
+        payload.put("idempotency_key", key);
+        outboxService.enqueue("SECTION", section.getId(), "SECTION_DISTILL", RabbitMqTopologyConfig.RK_DISTILL, key, payload);
+    }
+
+    private void markSectionSummariesStale(UUID bookId, ChapterSectionEntity section) {
+        if (sectionSummaryMapper != null) {
+            sectionSummaryMapper.update(null, new LambdaUpdateWrapper<SectionSummaryEntity>()
+                    .eq(SectionSummaryEntity::getSectionId, section.getId())
+                    .ne(SectionSummaryEntity::getStatus, "STALE")
+                    .set(SectionSummaryEntity::getStatus, "STALE")
+                    .set(SectionSummaryEntity::getUpdatedAt, OffsetDateTime.now()));
+        }
+        markRollupsStaleForSection(bookId, section);
+    }
+
+    public void markRollupsStaleForSection(UUID bookId, ChapterSectionEntity section) {
+        markStoryRollupsStale(bookId, section.getNarrativeOrder(), section.getNarrativeOrder());
+        if (Boolean.TRUE.equals(section.getIsDefault())) {
+            chapterSummaryMapper.update(null, new LambdaUpdateWrapper<ChapterSummaryEntity>()
+                    .eq(ChapterSummaryEntity::getChapterId, section.getChapterId())
+                    .ne(ChapterSummaryEntity::getStatus, "STALE")
+                    .set(ChapterSummaryEntity::getStatus, "STALE")
+                    .set(ChapterSummaryEntity::getUpdatedAt, OffsetDateTime.now()));
+            markLegacyVolumeSummariesStale(bookId, section.getChapterNo());
+        }
+    }
+
+    public void markRollupsStaleForChapter(UUID bookId, int chapterNo) {
+        markStoryRollupsStale(bookId, StructureService.narrativeOrder(chapterNo, 1),
+                StructureService.narrativeOrder(chapterNo, 999));
+        markLegacyVolumeSummariesStale(bookId, chapterNo);
+    }
+
+    private void markStoryRollupsStale(UUID bookId, long start, long end) {
+        markStoryRollupsStale(bookId, start, end, 0);
+    }
+
+    private void markStoryRollupsStale(UUID bookId, long start, long end, int lowerTier) {
+        if (storyRollupSummaryMapper != null) {
+            storyRollupSummaryMapper.update(null, new LambdaUpdateWrapper<StoryRollupSummaryEntity>()
+                    .eq(StoryRollupSummaryEntity::getBookId, bookId)
+                    .gt(lowerTier > 0, StoryRollupSummaryEntity::getTierLevel, lowerTier)
+                    .le(StoryRollupSummaryEntity::getStartOrder, end)
+                    .ge(StoryRollupSummaryEntity::getEndOrder, start)
+                    .ne(StoryRollupSummaryEntity::getStatus, "STALE")
+                    .set(StoryRollupSummaryEntity::getStatus, "STALE")
+                    .set(StoryRollupSummaryEntity::getUpdatedAt, OffsetDateTime.now()));
+        }
+    }
+
+    private void markLegacyVolumeSummariesStale(UUID bookId, int chapterNo) {
+        volumeSummaryMapper.update(null, new LambdaUpdateWrapper<VolumeSummaryEntity>()
+                .eq(VolumeSummaryEntity::getBookId, bookId)
+                .le(VolumeSummaryEntity::getStartChapterNo, chapterNo)
+                .ge(VolumeSummaryEntity::getEndChapterNo, chapterNo)
+                .ne(VolumeSummaryEntity::getStatus, "STALE")
+                .set(VolumeSummaryEntity::getStatus, "STALE")
+                .set(VolumeSummaryEntity::getUpdatedAt, OffsetDateTime.now()));
+    }
+
     public FiveLayerContext buildFiveLayerContext(
             UUID ownerId,
             BookEntity book,
@@ -178,39 +339,115 @@ public class StoryMemoryContextService {
             String currentDraft,
             String instruction
     ) {
-        // L0: Author-defined Charter > Auto-inferred Charter (stable prefix for KV Cache)
+        return buildAdaptiveContext(ownerId, book, currentChapter, null, currentDraft, instruction);
+    }
+
+    public FiveLayerContext buildAdaptiveContext(
+            UUID ownerId, BookEntity book, ChapterEntity currentChapter, ChapterSectionEntity currentSection,
+            String currentDraft, String instruction
+    ) {
+        if (chapterSectionMapper == null) {
+            return buildLegacyContext(ownerId, book, currentChapter, currentDraft, instruction);
+        }
+        UUID bookId = book.getId();
+        long currentOrder = currentNarrativeOrder(currentChapter, currentSection);
+        long totalUnits = chapterSectionMapper.selectCount(new LambdaQueryWrapper<ChapterSectionEntity>()
+                .eq(ChapterSectionEntity::getBookId, bookId)
+                .lt(currentOrder > 0, ChapterSectionEntity::getNarrativeOrder, currentOrder));
+        String mode = determinePrecisionMode(book, totalUnits);
+        if (currentOrder == 0) {
+            return new FiveLayerContext(resolveEffectiveCharter(book), "", "",
+                    buildEntityScopedState(ownerId, bookId, 1, "", currentDraft, instruction, ""), "", mode);
+        }
+        if (totalUnits == 0 && currentSection == null && chapterSectionMapper.selectOne(
+                new LambdaQueryWrapper<ChapterSectionEntity>().select(ChapterSectionEntity::getId)
+                        .eq(ChapterSectionEntity::getBookId, bookId).last("LIMIT 1")) == null) {
+            return buildLegacyContext(ownerId, book, currentChapter, currentDraft, instruction);
+        }
+
+        ChapterSectionEntity preceding = chapterSectionMapper.selectOne(new LambdaQueryWrapper<ChapterSectionEntity>()
+                .eq(ChapterSectionEntity::getBookId, bookId)
+                .lt(ChapterSectionEntity::getNarrativeOrder, currentOrder)
+                .gt(ChapterSectionEntity::getWordCount, 0)
+                .orderByDesc(ChapterSectionEntity::getNarrativeOrder)
+                .last("LIMIT 1"));
+        String hotTail = preceding == null ? "" : hotTail(preceding.getContent());
+        String hotWindow = "";
+        if (preceding != null) {
+            hotWindow = "【上一节（第 " + preceding.getChapterNo() + " 章 / 第 " + preceding.getSectionNo()
+                    + " 节《" + preceding.getTitle() + "》）原文衔接】\n" + hotTail;
+            if (Boolean.TRUE.equals(preceding.getSummaryDirty())) {
+                // The edit already invalidated covering summaries. A reader can safely re-request the job.
+                invalidateAndEnqueueSectionDistill(ownerId, bookId, preceding, false);
+            }
+        }
+
+        List<SectionSummaryEntity> recent = sectionSummaryMapper == null ? List.of() : sectionSummaryMapper.selectList(
+                new LambdaQueryWrapper<SectionSummaryEntity>()
+                        .select(SectionSummaryEntity::getNarrativeOrder, SectionSummaryEntity::getSummaryText,
+                                SectionSummaryEntity::getChapterNo, SectionSummaryEntity::getSectionNo,
+                                SectionSummaryEntity::getInvolvedCharacters)
+                        .eq(SectionSummaryEntity::getBookId, bookId)
+                        .eq(SectionSummaryEntity::getStatus, "READY")
+                        .lt(SectionSummaryEntity::getNarrativeOrder, currentOrder)
+                        .orderByDesc(SectionSummaryEntity::getNarrativeOrder)
+                        .last("LIMIT " + RECENT_SUMMARY_WINDOW));
+        String previousCharacters = preceding == null ? "" : recent.stream()
+                .filter(s -> s.getNarrativeOrder().equals(preceding.getNarrativeOrder()))
+                .map(s -> safe(s.getInvolvedCharacters())).findFirst().orElse("");
+        VolumeEntity volume = findVolume(bookId, currentChapter == null ? null : currentChapter.getVolumeId());
+        String rolling = AdaptiveMemoryAssembler.assemble(storyRollupSummaryMapper, bookId, currentOrder, mode,
+                volume == null ? "" : volume.getArcGoal(), recent);
+        int maxChapterNo = preceding == null ? (int) (currentOrder / 1000) - 1 : preceding.getChapterNo();
+        String activeState = buildEntityScopedState(ownerId, bookId, Math.max(1, maxChapterNo),
+                hotTail, currentDraft, instruction, previousCharacters);
+        return new FiveLayerContext(resolveEffectiveCharter(book), hotWindow, rolling, activeState,
+                combineContext(rolling, hotWindow), mode);
+    }
+
+    private VolumeEntity findVolume(UUID bookId, UUID volumeId) {
+        if (volumeMapper == null) return null;
+        if (volumeId != null) return volumeMapper.selectById(volumeId);
+        return volumeMapper.selectOne(new LambdaQueryWrapper<VolumeEntity>()
+                .eq(VolumeEntity::getBookId, bookId).eq(VolumeEntity::getVolumeNo, 1));
+    }
+
+    private FiveLayerContext buildLegacyContext(
+            UUID ownerId, BookEntity book, ChapterEntity currentChapter, String currentDraft, String instruction
+    ) {
         String storyCharter = resolveEffectiveCharter(book);
 
         if (currentChapter == null || currentChapter.getChapterNo() == null || currentChapter.getChapterNo() <= 1) {
             String l3 = buildEntityScopedState(ownerId, book.getId(), 1, "", currentDraft, instruction, "");
-            return new FiveLayerContext(storyCharter, "", "", l3, "");
+            return new FiveLayerContext(storyCharter, "", "", l3, "", determinePrecisionMode(book, 0));
         }
 
         int currentNo = currentChapter.getChapterNo();
+        String precisionMode = determinePrecisionMode(book, currentNo - 1L);
 
-        // Fetch earlier chapters metadata + content only for immediate prev & unsummarized fallbacks
+        // Legacy books need some prose for unsummarized fallback entries. Keep this window bounded as well.
         List<ChapterEntity> earlierChapters = chapterMapper.selectList(
                 new LambdaQueryWrapper<ChapterEntity>()
                         .eq(ChapterEntity::getBookId, book.getId())
                         .lt(ChapterEntity::getChapterNo, currentNo)
-                        .orderByAsc(ChapterEntity::getChapterNo)
+                        .gt(ChapterEntity::getWordCount, 0)
+                        .orderByDesc(ChapterEntity::getChapterNo)
+                        .last("LIMIT 22")
         );
         List<ChapterEntity> nonEmptyEarlier = (earlierChapters == null ? List.<ChapterEntity>of() : earlierChapters)
                 .stream()
                 .filter(c -> c.getContent() != null && !c.getContent().isBlank())
+                .sorted(Comparator.comparing(ChapterEntity::getChapterNo))
                 .toList();
 
         if (nonEmptyEarlier.isEmpty()) {
             String l3 = buildEntityScopedState(ownerId, book.getId(), currentNo - 1, "", currentDraft, instruction, "");
-            return new FiveLayerContext(storyCharter, "", "", l3, "");
+            return new FiveLayerContext(storyCharter, "", "", l3, "", precisionMode);
         }
 
         // L1 Hot Window: verbatim tail of immediately preceding non-empty chapter (N-1)
         ChapterEntity immediatePrev = nonEmptyEarlier.getLast();
-        String prevBody = immediatePrev.getContent().trim();
-        String hotTail = prevBody.length() <= 2400
-                ? prevBody
-                : "……\n" + prevBody.substring(prevBody.length() - 2200);
+        String hotTail = hotTail(immediatePrev.getContent());
         String hotWindow = "【上一章（第 " + immediatePrev.getChapterNo() + " 章《" + immediatePrev.getTitle() + "》）原文衔接】\n" + hotTail;
 
         // L2 Hierarchical Rolling Summaries:
@@ -222,7 +459,8 @@ public class StoryMemoryContextService {
                 new LambdaQueryWrapper<ChapterSummaryEntity>()
                         .eq(ChapterSummaryEntity::getBookId, book.getId())
                         .lt(ChapterSummaryEntity::getChapterNo, currentNo)
-                        .orderByAsc(ChapterSummaryEntity::getChapterNo)
+                        .orderByDesc(ChapterSummaryEntity::getChapterNo)
+                        .last("LIMIT 22")
         );
         Map<Integer, ChapterSummaryEntity> summaryByNo = new HashMap<>();
         if (storedSummaries != null) {
@@ -234,18 +472,16 @@ public class StoryMemoryContextService {
         List<VolumeSummaryEntity> storedVolumes = volumeSummaryMapper.selectList(
                 new LambdaQueryWrapper<VolumeSummaryEntity>()
                         .eq(VolumeSummaryEntity::getBookId, book.getId())
-                        .lt(VolumeSummaryEntity::getStartChapterNo, recentStartNo)
-                        .orderByAsc(VolumeSummaryEntity::getVolumeNo)
+                        .lt(VolumeSummaryEntity::getEndChapterNo, recentStartNo)
+                        .orderByDesc(VolumeSummaryEntity::getEndChapterNo)
+                        .last("LIMIT 28")
         );
 
         StringBuilder l2 = new StringBuilder();
         if (storedVolumes != null && !storedVolumes.isEmpty()) {
             l2.append("【前卷主线里程碑】\n");
             int coveredUntil = 0;
-            for (VolumeSummaryEntity v : storedVolumes) {
-                if (v.getEndChapterNo() >= recentStartNo && storedVolumes.size() > 1) {
-                    // Volume overlaps recent chapter window; still include concisely for arc framing
-                }
+            for (VolumeSummaryEntity v : storedVolumes.stream().sorted(Comparator.comparing(VolumeSummaryEntity::getEndChapterNo)).toList()) {
                 l2.append("- 第 ").append(v.getVolumeNo()).append(" 卷（第 ")
                         .append(v.getStartChapterNo()).append("~").append(v.getEndChapterNo()).append(" 章）：")
                         .append(v.getSummaryText().trim()).append("\n");
@@ -315,11 +551,7 @@ public class StoryMemoryContextService {
                         + briefFallbackExcerpt(ch.getContent(), 220));
             }
         }
-        if (!recentLines.isEmpty()) {
-            l2.append("【近期章节摘要】\n").append(String.join("\n", recentLines));
-        }
-
-        String rollingSummary = l2.toString().trim();
+        String rollingSummary = AdaptiveMemoryAssembler.assembleLegacy(l2.toString().trim(), recentLines);
 
         // L3 Entity-Scoped Dynamic State (Protagonists + characters appearing in N-1/draft/instruction + OPEN foreshadowings)
         String activeState = buildEntityScopedState(
@@ -332,11 +564,21 @@ public class StoryMemoryContextService {
                 prevInvolvedChars
         );
 
-        String combined = rollingSummary.isBlank()
-                ? hotWindow
-                : rollingSummary + "\n\n" + hotWindow;
+        return new FiveLayerContext(storyCharter, hotWindow, rollingSummary, activeState,
+                combineContext(rollingSummary, hotWindow), precisionMode);
+    }
 
-        return new FiveLayerContext(storyCharter, hotWindow, rollingSummary, activeState, combined);
+    private static String hotTail(String content) {
+        String body = content.trim();
+        if (body.length() <= 2400) return body;
+        int start = body.length() - 2200;
+        if (Character.isLowSurrogate(body.charAt(start))) start++;
+        return "……\n" + body.substring(start);
+    }
+
+    private static String combineContext(String rolling, String hotWindow) {
+        if (rolling.isBlank()) return hotWindow;
+        return hotWindow.isBlank() ? rolling : rolling + "\n\n" + hotWindow;
     }
 
     private String buildEntityScopedState(
@@ -490,44 +732,292 @@ public class StoryMemoryContextService {
 
     // --- Internal Worker Callbacks (Chapter Summary, Volume Summary, Auto Charter) ---
 
+    public RagDtos.InternalSectionPayload loadSectionForWorker(UUID sectionId) {
+        requireSectionMemory();
+        ChapterSectionEntity section = requireSection(sectionId);
+        BookEntity book = bookService.getBookByIdUnchecked(section.getBookId());
+        ChapterEntity chapter = requireSectionChapter(section);
+        VolumeEntity volume = findVolume(book.getId(), chapter.getVolumeId());
+        return new RagDtos.InternalSectionPayload(
+                sectionId, chapter.getId(), chapter.getVolumeId(), book.getId(), book.getOwnerId(),
+                section.getChapterNo(), section.getSectionNo(), section.getNarrativeOrder(),
+                chapter.getTitle(), section.getTitle(), section.getContent(), section.getContentHash(),
+                volume == null ? "" : volume.getArcGoal(),
+                safe(sectionSummaryMapper.findPreviousEndingHook(book.getId(), section.getNarrativeOrder())),
+                emptyIfNull(chapterSectionMapper.firstSectionSample(book.getId())),
+                sectionSample(section.getContent()), book.getTitle(), book.getGenre(), book.getSynopsis()
+        );
+    }
+
+    @Transactional
+    public RagDtos.InternalApplyDistillResponse applySectionDistill(UUID bookId, RagDtos.InternalApplyDistillRequest req) {
+        requireSectionMemory();
+        // Serialize readiness milestones across concurrent completions for this book.
+        bookMapper.lockForStructure(bookId);
+        BookEntity book = bookService.getBookByIdUnchecked(bookId);
+        ChapterSectionEntity section = requireSection(req.sectionId());
+        if (!bookId.equals(section.getBookId())) {
+            throw BizException.notFound("SECTION_NOT_FOUND", "小节不存在");
+        }
+        chapterMapper.lockForStructure(bookId, section.getChapterId());
+        section = requireSection(req.sectionId());
+        ChapterEntity chapter = requireSectionChapter(section);
+        UUID sectionId = section.getId();
+        if (!safe(section.getContentHash()).equals(safe(req.contentHash()))) {
+            return new RagDtos.InternalApplyDistillResponse(false, sectionId, null, false, false, null);
+        }
+
+        SectionSummaryEntity summary = sectionSummaryMapper.selectOne(new LambdaQueryWrapper<SectionSummaryEntity>()
+                .eq(SectionSummaryEntity::getSectionId, sectionId));
+        if (summary != null && "READY".equals(summary.getStatus())
+                && safe(section.getContentHash()).equals(summary.getContentHash())
+                && !Boolean.TRUE.equals(section.getSummaryDirty())) {
+            return new RagDtos.InternalApplyDistillResponse(true, sectionId, summary.getId(), false, false, null);
+        }
+
+        summary = upsertSectionSummary(book, chapter, section, req.summary(), summary);
+        chapterSectionMapper.update(null, new LambdaUpdateWrapper<ChapterSectionEntity>()
+                .eq(ChapterSectionEntity::getId, sectionId)
+                .set(ChapterSectionEntity::getSummaryDirty, false));
+        if (Boolean.TRUE.equals(section.getIsDefault())) {
+            upsertChapterSummary(book, new RagDtos.InternalSaveChapterSummaryRequest(
+                    chapter.getId(), section.getChapterNo(), chapter.getTitle(), summary.getContentHash(),
+                    summary.getSummaryText(), summary.getStateChanges(), summary.getInvolvedCharacters(), summary.getEndingHook()
+            ));
+            chapterMapper.update(null, new LambdaUpdateWrapper<ChapterEntity>()
+                    .eq(ChapterEntity::getId, chapter.getId())
+                    .eq(ChapterEntity::getContentHash, summary.getContentHash())
+                    .set(ChapterEntity::getSummaryDirty, false));
+        }
+
+        RagDtos.ApplyExtractedMemoryResponse appliedMemory = null;
+        if (req.memory() != null && memoryService != null) {
+            RagDtos.ApplyExtractedMemoryRequest memory = req.memory();
+            if (!section.getChapterNo().equals(memory.chapterNo())) {
+                memory = new RagDtos.ApplyExtractedMemoryRequest(section.getChapterNo(), memory.characterUpdates(),
+                        memory.foreshadowingUpdates(), memory.relations(), memory.timelineEvents());
+            }
+            appliedMemory = memoryService.applyExtractedMemory(book.getOwnerId(), bookId, memory);
+        }
+
+        long order = section.getNarrativeOrder();
+        markStoryRollupsStale(bookId, order, order);
+        ChapterSectionEntity latest = chapterSectionMapper.selectOne(new LambdaQueryWrapper<ChapterSectionEntity>()
+                .select(ChapterSectionEntity::getNarrativeOrder)
+                .eq(ChapterSectionEntity::getBookId, bookId)
+                .orderByDesc(ChapterSectionEntity::getNarrativeOrder).last("LIMIT 1"));
+        if (latest != null && latest.getNarrativeOrder() - order > EAGER_ROLLUP_DISTANCE) {
+            return new RagDtos.InternalApplyDistillResponse(true, sectionId, summary.getId(), false, false, appliedMemory);
+        }
+
+        long totalReady = sectionSummaryMapper.selectCount(new LambdaQueryWrapper<SectionSummaryEntity>()
+                .eq(SectionSummaryEntity::getBookId, bookId).eq(SectionSummaryEntity::getStatus, "READY"));
+        int lastCharterCount = book.getCharterChapterCount() == null ? 0 : book.getCharterChapterCount();
+        boolean refreshCharter = !"AUTHOR_DEFINED".equals(book.getCharterSource())
+                && ((totalReady >= 1 && lastCharterCount == 0)
+                || (totalReady >= 3 && lastCharterCount < 3)
+                || totalReady >= (long) lastCharterCount + CHAPTERS_PER_VOLUME);
+        VolumeEntity volume = chapter.getVolumeId() == null ? null : findVolume(bookId, chapter.getVolumeId());
+        boolean queueRollup = rollupScheduler().afterDistill(book, order, volume, totalReady, refreshCharter);
+        return new RagDtos.InternalApplyDistillResponse(true, sectionId, summary.getId(), queueRollup, refreshCharter, appliedMemory);
+    }
+
+    private SectionSummaryEntity upsertSectionSummary(
+            BookEntity book, ChapterEntity chapter, ChapterSectionEntity section, RagDtos.DistilledSectionSummary input,
+            SectionSummaryEntity summary
+    ) {
+        boolean insert = summary == null;
+        if (insert) {
+            summary = new SectionSummaryEntity();
+            summary.setId(UUID.randomUUID());
+            summary.setSectionId(section.getId());
+            summary.setChapterId(chapter.getId());
+            summary.setBookId(book.getId());
+            summary.setOwnerId(book.getOwnerId());
+        }
+        summary.setChapterNo(section.getChapterNo());
+        summary.setSectionNo(section.getSectionNo());
+        summary.setNarrativeOrder(section.getNarrativeOrder());
+        summary.setChapterTitle(safe(chapter.getTitle()));
+        summary.setSectionTitle(safe(section.getTitle()));
+        summary.setContentHash(safe(section.getContentHash()));
+        summary.setTimeAndPlace(safe(input.timeAndPlace()));
+        summary.setSummaryText(safe(input.summaryText()));
+        summary.setStateChanges(safe(input.stateChanges()));
+        summary.setClueSignals(safe(input.clueSignals()));
+        summary.setPovNotes(safe(input.povNotes()));
+        summary.setInvolvedCharacters(safe(input.involvedCharacters()));
+        summary.setEndingHook(safe(input.endingHook()));
+        summary.setStatus("READY");
+        if (insert) {
+            sectionSummaryMapper.insert(summary);
+        } else {
+            summary.setUpdatedAt(OffsetDateTime.now());
+            sectionSummaryMapper.updateById(summary);
+        }
+        return summary;
+    }
+
+    private StoryRollupScheduler rollupScheduler() {
+        return new StoryRollupScheduler(sectionSummaryMapper, storyRollupSummaryMapper, outboxService);
+    }
+
+    @Transactional(readOnly = true)
+    public RagDtos.InternalBookRollupsPayload loadBookRollupsForWorker(UUID bookId) {
+        requireSectionMemory();
+        BookEntity book = bookService.getBookByIdUnchecked(bookId);
+        List<RagDtos.SectionSummaryItem> summaries = sectionSummaryMapper.selectList(new LambdaQueryWrapper<SectionSummaryEntity>()
+                        .eq(SectionSummaryEntity::getBookId, bookId)
+                        .eq(SectionSummaryEntity::getStatus, "READY")
+                        .orderByAsc(SectionSummaryEntity::getNarrativeOrder))
+                .stream().map(StoryMemoryContextService::toSectionSummaryItem).toList();
+        List<RagDtos.StoryRollupItem> rollups = storyRollupSummaryMapper.selectList(
+                        new LambdaQueryWrapper<StoryRollupSummaryEntity>().eq(StoryRollupSummaryEntity::getBookId, bookId)
+                                .orderByAsc(StoryRollupSummaryEntity::getTierLevel, StoryRollupSummaryEntity::getSeqNo))
+                .stream().map(StoryMemoryContextService::toRollupItem).toList();
+        List<RagDtos.RollupVolumeItem> volumes = List.of();
+        if (volumeMapper != null) {
+            Map<UUID, ChapterMapper.VolumeChapterRange> ranges = chapterMapper.findVolumeChapterRanges(bookId)
+                    .stream().collect(Collectors.toMap(ChapterMapper.VolumeChapterRange::getVolumeId, range -> range));
+            volumes = volumeMapper.selectList(new LambdaQueryWrapper<VolumeEntity>()
+                            .eq(VolumeEntity::getBookId, bookId).orderByAsc(VolumeEntity::getVolumeNo))
+                    .stream().map(v -> toRollupVolumeItem(v, ranges.get(v.getId()))).toList();
+        }
+        return new RagDtos.InternalBookRollupsPayload(
+                bookId, book.getOwnerId(), book.getTitle(), book.getGenre(), book.getSynopsis(),
+                summaries, rollups, volumes, emptyIfNull(chapterSectionMapper.firstSectionSample(bookId)),
+                emptyIfNull(chapterSectionMapper.latestSectionSample(bookId)), safe(book.getAutoCharter()), book.getCharterSource()
+        );
+    }
+
+    @Transactional
+    public RagDtos.InternalSaveRollupResponse saveRollup(UUID bookId, RagDtos.InternalSaveRollupRequest req) {
+        requireSectionMemory();
+        long startChapter = req.startOrder() / 1000;
+        long endChapter = req.endOrder() / 1000;
+        if (req.tierLevel() < 1 || req.tierLevel() > 3 || req.seqNo() < 1
+                || startChapter < 1 || req.endOrder() < req.startOrder() || endChapter > Integer.MAX_VALUE
+                || (req.startChapterNo() != null && req.startChapterNo() != startChapter)
+                || (req.endChapterNo() != null && req.endChapterNo() != endChapter)) {
+            throw BizException.badRequest("INVALID_ROLLUP_RANGE", "归并层级、序号或叙事范围无效");
+        }
+        bookMapper.lockForStructure(bookId);
+        BookEntity book = bookService.getBookByIdUnchecked(bookId);
+        if (req.volumeId() != null) {
+            VolumeEntity volume = findVolume(bookId, req.volumeId());
+            if (volume == null || !bookId.equals(volume.getBookId())) {
+                throw BizException.notFound("VOLUME_NOT_FOUND", "卷不存在");
+            }
+        }
+        StoryRollupSummaryEntity row = storyRollupSummaryMapper.selectOne(
+                new LambdaQueryWrapper<StoryRollupSummaryEntity>()
+                        .eq(StoryRollupSummaryEntity::getBookId, bookId)
+                        .eq(StoryRollupSummaryEntity::getTierLevel, req.tierLevel())
+                        .eq(StoryRollupSummaryEntity::getSeqNo, req.seqNo()));
+        if (row != null && "READY".equals(row.getStatus())
+                && row.getStartOrder() == req.startOrder() && row.getEndOrder() == req.endOrder()
+                && Objects.equals(row.getVolumeId(), req.volumeId())
+                && Objects.equals(row.getTitle(), safe(req.title()))
+                && Objects.equals(row.getSummaryText(), safe(req.summaryText()))
+                && Objects.equals(row.getOpenThreads(), safe(req.openThreads()))
+                && Objects.equals(row.getSourceHash(), safe(req.sourceHash()))) {
+            return rollupSavedResponse(row);
+        }
+        boolean insert = row == null;
+        if (insert) {
+            row = new StoryRollupSummaryEntity();
+            row.setId(UUID.randomUUID());
+            row.setBookId(bookId);
+            row.setOwnerId(book.getOwnerId());
+            row.setTierLevel(req.tierLevel());
+            row.setSeqNo(req.seqNo());
+        }
+        row.setVolumeId(req.volumeId());
+        row.setStartOrder(req.startOrder());
+        row.setEndOrder(req.endOrder());
+        row.setStartChapterNo((int) startChapter);
+        row.setEndChapterNo((int) endChapter);
+        row.setTitle(safe(req.title()));
+        row.setSummaryText(safe(req.summaryText()));
+        row.setOpenThreads(safe(req.openThreads()));
+        row.setSourceHash(safe(req.sourceHash()));
+        row.setStatus("READY");
+        if (insert) {
+            storyRollupSummaryMapper.insert(row);
+        } else {
+            row.setUpdatedAt(OffsetDateTime.now());
+            storyRollupSummaryMapper.updateById(row);
+        }
+        if (req.tierLevel() < 3) {
+            markStoryRollupsStale(bookId, req.startOrder(), req.endOrder(), req.tierLevel());
+            rollupScheduler().afterRollupSaved(book, row);
+        }
+        return rollupSavedResponse(row);
+    }
+
+    private static RagDtos.InternalSaveRollupResponse rollupSavedResponse(StoryRollupSummaryEntity row) {
+        return new RagDtos.InternalSaveRollupResponse(row.getId(), row.getTierLevel(), row.getSeqNo(),
+                row.getStartOrder(), row.getEndOrder());
+    }
+
+    private void requireSectionMemory() {
+        if (chapterSectionMapper == null || sectionSummaryMapper == null || storyRollupSummaryMapper == null) {
+            throw BizException.serviceUnavailable("SECTION_MEMORY_UNAVAILABLE", "小节记忆暂不可用");
+        }
+    }
+
+    private ChapterSectionEntity requireSection(UUID sectionId) {
+        ChapterSectionEntity section = chapterSectionMapper.selectById(sectionId);
+        if (section == null) throw BizException.notFound("SECTION_NOT_FOUND", "小节不存在");
+        return section;
+    }
+
+    private ChapterEntity requireSectionChapter(ChapterSectionEntity section) {
+        ChapterEntity chapter = chapterMapper.selectById(section.getChapterId());
+        if (chapter == null || !section.getBookId().equals(chapter.getBookId())) {
+            throw BizException.notFound("CHAPTER_NOT_FOUND", "章节不存在");
+        }
+        return chapter;
+    }
+
+    private static RagDtos.SectionSummaryItem toSectionSummaryItem(SectionSummaryEntity s) {
+        return new RagDtos.SectionSummaryItem(s.getId(), s.getSectionId(), s.getChapterId(), s.getChapterNo(),
+                s.getSectionNo(), s.getNarrativeOrder(), s.getChapterTitle(), s.getSectionTitle(), s.getContentHash(),
+                s.getTimeAndPlace(), s.getSummaryText(), s.getStateChanges(), s.getClueSignals(), s.getPovNotes(),
+                s.getInvolvedCharacters(), s.getEndingHook(), s.getStatus());
+    }
+
+    private static RagDtos.StoryRollupItem toRollupItem(StoryRollupSummaryEntity r) {
+        return new RagDtos.StoryRollupItem(r.getId(), r.getTierLevel(), r.getSeqNo(), r.getVolumeId(),
+                r.getStartOrder(), r.getEndOrder(), r.getStartChapterNo(), r.getEndChapterNo(), r.getTitle(),
+                r.getSummaryText(), r.getOpenThreads(), r.getSourceHash(), r.getStatus());
+    }
+
+    private static RagDtos.RollupVolumeItem toRollupVolumeItem(VolumeEntity v, ChapterMapper.VolumeChapterRange range) {
+        return new RagDtos.RollupVolumeItem(v.getId(), v.getVolumeNo(), v.getTitle(), v.getArcGoal(), v.getPacingNotes(),
+                v.getRealmScope(), range == null ? v.getStartChapterNo() : range.getStartChapterNo(),
+                range == null ? v.getEndChapterNo() : range.getEndChapterNo(), v.getStatus());
+    }
+
+    private static String sectionSample(String content) {
+        if (content == null) return "";
+        int end = Math.min(500, content.length());
+        if (end < content.length() && Character.isHighSurrogate(content.charAt(end - 1))) end--;
+        return content.substring(0, end);
+    }
+
+    private static String emptyIfNull(String value) {
+        return value == null ? "" : value;
+    }
+
     @Transactional
     public RagDtos.InternalSaveChapterSummaryResponse saveChapterSummary(
             UUID bookId,
             RagDtos.InternalSaveChapterSummaryRequest req
     ) {
         BookEntity book = bookService.getBookByIdUnchecked(bookId);
-        ChapterSummaryEntity existing = chapterSummaryMapper.selectOne(
-                new LambdaQueryWrapper<ChapterSummaryEntity>()
-                        .eq(ChapterSummaryEntity::getChapterId, req.chapterId())
-        );
-
         int chapterNo = req.chapterNo() != null ? req.chapterNo() : 1;
-        if (existing == null) {
-            ChapterSummaryEntity entity = new ChapterSummaryEntity();
-            entity.setId(UUID.randomUUID());
-            entity.setBookId(bookId);
-            entity.setOwnerId(book.getOwnerId());
-            entity.setChapterId(req.chapterId());
-            entity.setChapterNo(chapterNo);
-            entity.setChapterTitle(safe(req.chapterTitle()));
-            entity.setContentHash(safe(req.contentHash()));
-            entity.setSummaryText(safe(req.summaryText()));
-            entity.setKeyEvents(safe(req.keyEvents()));
-            entity.setInvolvedCharacters(safe(req.involvedCharacters()));
-            entity.setEndingHook(safe(req.endingHook()));
-            entity.setStatus("READY");
-            chapterSummaryMapper.insert(entity);
-        } else {
-            existing.setChapterNo(chapterNo);
-            existing.setChapterTitle(safe(req.chapterTitle()));
-            existing.setContentHash(safe(req.contentHash()));
-            existing.setSummaryText(safe(req.summaryText()));
-            existing.setKeyEvents(safe(req.keyEvents()));
-            existing.setInvolvedCharacters(safe(req.involvedCharacters()));
-            existing.setEndingHook(safe(req.endingHook()));
-            existing.setStatus("READY");
-            chapterSummaryMapper.updateById(existing);
-        }
+        upsertChapterSummary(book, req);
 
         // Clear chapter dirty flag if hashes match
         ChapterEntity chapter = chapterMapper.selectById(req.chapterId());
@@ -594,6 +1084,33 @@ public class StoryMemoryContextService {
                 refreshAutoCharter,
                 totalSummaries
         );
+    }
+
+    private void upsertChapterSummary(BookEntity book, RagDtos.InternalSaveChapterSummaryRequest req) {
+        ChapterSummaryEntity summary = chapterSummaryMapper.selectOne(new LambdaQueryWrapper<ChapterSummaryEntity>()
+                .eq(ChapterSummaryEntity::getChapterId, req.chapterId()));
+        boolean insert = summary == null;
+        if (insert) {
+            summary = new ChapterSummaryEntity();
+            summary.setId(UUID.randomUUID());
+            summary.setBookId(book.getId());
+            summary.setOwnerId(book.getOwnerId());
+            summary.setChapterId(req.chapterId());
+        }
+        summary.setChapterNo(req.chapterNo() == null ? 1 : req.chapterNo());
+        summary.setChapterTitle(safe(req.chapterTitle()));
+        summary.setContentHash(safe(req.contentHash()));
+        summary.setSummaryText(safe(req.summaryText()));
+        summary.setKeyEvents(safe(req.keyEvents()));
+        summary.setInvolvedCharacters(safe(req.involvedCharacters()));
+        summary.setEndingHook(safe(req.endingHook()));
+        summary.setStatus("READY");
+        if (insert) {
+            chapterSummaryMapper.insert(summary);
+        } else {
+            summary.setUpdatedAt(OffsetDateTime.now());
+            chapterSummaryMapper.updateById(summary);
+        }
     }
 
     @Transactional

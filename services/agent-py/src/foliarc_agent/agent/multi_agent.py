@@ -36,6 +36,9 @@ class EditorialBlackboard(BaseModel):
     owner_id: str = ""
     book_id: str = ""
     chapter_no: int | None = None
+    section_id: str | None = None
+    narrative_order: int | None = None
+    precision_mode: str = "AUTO"
     action: str = "CONTINUE"
     book_title: str = ""
     genre: str | None = None
@@ -784,6 +787,8 @@ class EditorialTeamOrchestrator:
                     query=query_seed[:300],
                     top_k=4,
                     max_chapter_no=state.chapter_no,
+                    max_narrative_order=state.narrative_order,
+                    precision_mode=state.precision_mode,
                     rewrite_query=False,
                 )
                 hits = rag_res.get("hits", [])
@@ -924,7 +929,7 @@ class EditorialTeamOrchestrator:
         if state.chapter_no or state.chapter_title:
             user_parts.append(f"目标章节：第 {state.chapter_no or '?'} 章 {state.chapter_title}")
         if state.rolling_summary_context.strip():
-            user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:2400]}")
+            user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:4200]}")
         if state.active_state_brief.strip():
             user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1500]}")
         elif state.director_lore_brief.strip():
@@ -969,7 +974,7 @@ class EditorialTeamOrchestrator:
             f"【设定管家核验简报（L4 强约束）】\n{state.lore_brief[:3000]}",
         ]
         if state.rolling_summary_context.strip():
-            user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:2400]}")
+            user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:4200]}")
         if state.active_state_brief.strip():
             user_parts.append(f"【当前活跃人物状态与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1500]}")
         if state.previous_chapters_context.strip():

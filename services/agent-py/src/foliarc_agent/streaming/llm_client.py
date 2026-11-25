@@ -98,7 +98,7 @@ def build_novel_messages(
     if chapter_title:
         user_parts.append(f"当前章节：{chapter_title}")
     if rolling_summary_context.strip():
-        user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{rolling_summary_context.strip()[:2600]}")
+        user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{rolling_summary_context.strip()[:4200]}")
     if active_state_brief.strip():
         user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{active_state_brief.strip()[:1600]}")
     if previous_chapters_context.strip():

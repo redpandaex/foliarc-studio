@@ -26,18 +26,24 @@ public class RabbitMqTopologyConfig {
     public static final String DELETE_QUEUE = "foliarc.rag.delete.queue";
     public static final String MEMORY_QUEUE = "foliarc.memory.extract.queue";
     public static final String SUMMARY_QUEUE = "foliarc.memory.summary.queue";
+    public static final String DISTILL_QUEUE = "foliarc.memory.distill.queue";
+    public static final String ROLLUP_QUEUE = "foliarc.memory.rollup.queue";
 
     public static final String INGEST_DLQ = "foliarc.rag.ingest.dlq";
     public static final String CHAPTER_INGEST_DLQ = "foliarc.rag.chapter.ingest.dlq";
     public static final String DELETE_DLQ = "foliarc.rag.delete.dlq";
     public static final String MEMORY_DLQ = "foliarc.memory.extract.dlq";
     public static final String SUMMARY_DLQ = "foliarc.memory.summary.dlq";
+    public static final String DISTILL_DLQ = "foliarc.memory.distill.dlq";
+    public static final String ROLLUP_DLQ = "foliarc.memory.rollup.dlq";
 
     public static final String RK_INGEST = "rag.ingest";
     public static final String RK_CHAPTER_INGEST = "rag.chapter.ingest";
     public static final String RK_DELETE = "rag.delete";
     public static final String RK_MEMORY = "memory.extract";
     public static final String RK_SUMMARY = "memory.summary";
+    public static final String RK_DISTILL = "memory.distill";
+    public static final String RK_ROLLUP = "memory.rollup";
 
     @Bean
     public TopicExchange ragExchange() {
@@ -90,6 +96,22 @@ public class RabbitMqTopologyConfig {
     }
 
     @Bean
+    public Queue memoryDistillQueue() {
+        return QueueBuilder.durable(DISTILL_QUEUE)
+                .withArgument("x-dead-letter-exchange", RAG_DLX)
+                .withArgument("x-dead-letter-routing-key", DISTILL_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Queue memoryRollupQueue() {
+        return QueueBuilder.durable(ROLLUP_QUEUE)
+                .withArgument("x-dead-letter-exchange", RAG_DLX)
+                .withArgument("x-dead-letter-routing-key", ROLLUP_DLQ)
+                .build();
+    }
+
+    @Bean
     public Queue ragIngestDlq() {
         return QueueBuilder.durable(INGEST_DLQ).build();
     }
@@ -112,6 +134,16 @@ public class RabbitMqTopologyConfig {
     @Bean
     public Queue memorySummaryDlq() {
         return QueueBuilder.durable(SUMMARY_DLQ).build();
+    }
+
+    @Bean
+    public Queue memoryDistillDlq() {
+        return QueueBuilder.durable(DISTILL_DLQ).build();
+    }
+
+    @Bean
+    public Queue memoryRollupDlq() {
+        return QueueBuilder.durable(ROLLUP_DLQ).build();
     }
 
     @Bean
@@ -140,6 +172,16 @@ public class RabbitMqTopologyConfig {
     }
 
     @Bean
+    public Binding memoryDistillBinding(Queue memoryDistillQueue, TopicExchange ragExchange) {
+        return BindingBuilder.bind(memoryDistillQueue).to(ragExchange).with(RK_DISTILL);
+    }
+
+    @Bean
+    public Binding memoryRollupBinding(Queue memoryRollupQueue, TopicExchange ragExchange) {
+        return BindingBuilder.bind(memoryRollupQueue).to(ragExchange).with(RK_ROLLUP);
+    }
+
+    @Bean
     public Binding ragIngestDlqBinding(Queue ragIngestDlq, DirectExchange ragDeadLetterExchange) {
         return BindingBuilder.bind(ragIngestDlq).to(ragDeadLetterExchange).with(INGEST_DLQ);
     }
@@ -162,5 +204,15 @@ public class RabbitMqTopologyConfig {
     @Bean
     public Binding memorySummaryDlqBinding(Queue memorySummaryDlq, DirectExchange ragDeadLetterExchange) {
         return BindingBuilder.bind(memorySummaryDlq).to(ragDeadLetterExchange).with(SUMMARY_DLQ);
+    }
+
+    @Bean
+    public Binding memoryDistillDlqBinding(Queue memoryDistillDlq, DirectExchange ragDeadLetterExchange) {
+        return BindingBuilder.bind(memoryDistillDlq).to(ragDeadLetterExchange).with(DISTILL_DLQ);
+    }
+
+    @Bean
+    public Binding memoryRollupDlqBinding(Queue memoryRollupDlq, DirectExchange ragDeadLetterExchange) {
+        return BindingBuilder.bind(memoryRollupDlq).to(ragDeadLetterExchange).with(ROLLUP_DLQ);
     }
 }
