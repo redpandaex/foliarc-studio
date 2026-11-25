@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -122,7 +124,9 @@ public class BillingService {
             acct.setMonthlySpentMicros(0L);
             acct.setBudgetMonth(month);
             acct.setVersion(0L);
-            accountMapper.insert(acct);
+            if (accountMapper.insertIfAbsent(acct) == 0) {
+                return accountMapper.selectById(userId);
+            }
 
             insertLedger(
                     userId,
@@ -140,7 +144,7 @@ public class BillingService {
                     0,
                     "新用户初始赠送额度 (" + ModelPricing.toCredits(starterGrantMicros) + " Credits)"
             );
-            return acct;
+            return accountMapper.selectById(userId);
         }));
     }
 
@@ -148,28 +152,39 @@ public class BillingService {
      * Phase 1: Idempotent Pre-Freeze before dispatching an Agent run.
      */
     public long freezeForRun(UUID userId, UUID runId, String mode, String modelAlias) {
-        String reqId = "FREEZE:" + runId;
-        BillingLedgerEntryEntity existing = findByRequestId(reqId);
+        long amount = ModelPricing.estimatePreFreezeMicros(mode, modelAlias);
+        return freeze(userId, runId, "FREEZE:" + runId, amount, modelAlias,
+                "任务启动预冻结 (" + mode + " / " + modelAlias + ")", false);
+    }
+
+    public long freezeCustom(UUID userId, String requestId, long amountMicros, String modelAlias, String description) {
+        if (amountMicros <= 0) {
+            return 0L;
+        }
+        return freeze(userId, null, requestId, amountMicros, modelAlias,
+                Objects.requireNonNullElse(description, "任务预冻结"), true);
+    }
+
+    private long freeze(UUID userId, UUID runId, String reqId, long freezeAmount,
+                        String modelAlias, String description, boolean custom) {
+        BillingLedgerEntryEntity existing = findBillingReplay(userId, reqId, custom, "FREEZE");
         if (existing != null) {
             return Math.abs(existing.getAmountMicros());
         }
-        ensureAccount(userId);
-        long freezeAmount = ModelPricing.estimatePreFreezeMicros(mode, modelAlias);
 
-        return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() -> txTemplate.execute(status -> {
-            BillingLedgerEntryEntity dup = findByRequestId(reqId);
+        return updateAccount(userId, custom, acct -> {
+            BillingLedgerEntryEntity dup = findBillingReplay(userId, reqId, custom, "FREEZE");
             if (dup != null) {
                 return Math.abs(dup.getAmountMicros());
             }
 
-            BillingAccountEntity acct = accountMapper.selectById(userId);
             if (acct == null) {
                 throw BizException.notFound("BILLING_ACCOUNT_MISSING", "计费账户不存在");
             }
             rolloverMonthIfNeeded(acct);
 
-            long projectedMonthly = acct.getMonthlySpentMicros() + acct.getFrozenMicros() + freezeAmount;
-            if (projectedMonthly > acct.getMonthlyBudgetMicros()) {
+            long remainingBudget = acct.getMonthlyBudgetMicros() - acct.getMonthlySpentMicros();
+            if (remainingBudget < acct.getFrozenMicros() || freezeAmount > remainingBudget - acct.getFrozenMicros()) {
                 throw BizException.paymentRequired(
                         "MONTHLY_BUDGET_EXCEEDED",
                         "已触发月度预算硬熔断（上限 " + ModelPricing.toCredits(acct.getMonthlyBudgetMicros())
@@ -204,10 +219,10 @@ public class BillingService {
                     0,
                     0L,
                     0,
-                    "任务启动预冻结 (" + mode + " / " + modelAlias + ")"
+                    description
             );
             return freezeAmount;
-        })));
+        });
     }
 
     /**
@@ -224,22 +239,37 @@ public class BillingService {
             int sandboxCalls,
             String reasonSuffix
     ) {
-        if (frozenAmountMicros <= 0 && inputTokens <= 0 && outputTokens <= 0 && sandboxCalls <= 0) {
+        return settle(userId, runId, "SETTLE:" + runId, frozenAmountMicros, modelAlias,
+                inputTokens, cachedTokens, outputTokens, sandboxCalls, reasonSuffix, false);
+    }
+
+    public long settleCustom(UUID userId, String requestId, long frozenAmountMicros, String modelAlias,
+                             int inputTokens, int cachedTokens, int outputTokens, String description) {
+        return settle(userId, null, requestId, frozenAmountMicros, modelAlias,
+                inputTokens, cachedTokens, outputTokens, 0, description, true);
+    }
+
+    private long settle(UUID userId, UUID runId, String reqId, long frozenAmountMicros, String modelAlias,
+                        int inputTokens, int cachedTokens, int outputTokens, int sandboxCalls,
+                        String reasonSuffix, boolean custom) {
+        boolean hasUsageOrFreeze = frozenAmountMicros > 0 || inputTokens > 0 || outputTokens > 0 || sandboxCalls > 0;
+        if (!custom && !hasUsageOrFreeze) {
             return 0L;
         }
-        String reqId = "SETTLE:" + runId;
-        BillingLedgerEntryEntity existing = findByRequestId(reqId);
+        BillingLedgerEntryEntity existing = findBillingReplay(userId, reqId, custom, "SETTLE", "RELEASE");
         if (existing != null) {
             return existing.getAmountMicros();
         }
-        ensureAccount(userId);
+        if (!hasUsageOrFreeze) {
+            return 0L;
+        }
 
         ModelPricing.CostBreakdown cost = ModelPricing.calculateActualCost(
                 modelAlias, inputTokens, cachedTokens, outputTokens, sandboxCalls
         );
         int discountBps = 10000;
         String discountPlan = null;
-        if (vipEntitlementService != null) {
+        if (vipEntitlementService != null && (!custom || cost.totalMicros() > 0)) {
             VipDtos.ResolvedUserEntitlements resolved = vipEntitlementService.resolveForUser(userId);
             if (resolved != null && resolved.creditDiscountBps() > 0 && resolved.creditDiscountBps() < 10000) {
                 discountBps = resolved.creditDiscountBps();
@@ -253,13 +283,12 @@ public class BillingService {
                 ? " (" + discountPlan + " " + (discountBps / 1000.0) + "折)"
                 : "";
 
-        return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() -> txTemplate.execute(status -> {
-            BillingLedgerEntryEntity dup = findByRequestId(reqId);
+        return updateAccount(userId, custom, acct -> {
+            BillingLedgerEntryEntity dup = findBillingReplay(userId, reqId, custom, "SETTLE", "RELEASE");
             if (dup != null) {
                 return dup.getAmountMicros();
             }
 
-            BillingAccountEntity acct = accountMapper.selectById(userId);
             if (acct == null) {
                 return 0L;
             }
@@ -295,6 +324,9 @@ public class BillingService {
                             + (sandboxCalls > 0 ? " sandbox=" + sandboxCalls : "")
                             + discountNote
                             + (reasonSuffix != null ? " [" + reasonSuffix + "]" : "");
+            if (custom && reasonSuffix != null) {
+                desc = reasonSuffix;
+            }
 
             insertLedger(
                     userId,
@@ -313,7 +345,26 @@ public class BillingService {
                     desc
             );
             return charged;
-        })));
+        });
+    }
+
+    private <T> T updateAccount(UUID userId, boolean custom, Function<BillingAccountEntity, T> update) {
+        ensureAccount(userId);
+        if (custom) {
+            // The row lock lasts through the caller's transaction, including its outbox write.
+            return txTemplate.execute(status -> update.apply(accountMapper.selectForUpdate(userId)));
+        }
+        return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() ->
+                txTemplate.execute(status -> update.apply(accountMapper.selectById(userId)))));
+    }
+
+    private BillingLedgerEntryEntity findBillingReplay(UUID userId, String reqId, boolean custom, String... entryTypes) {
+        BillingLedgerEntryEntity existing = findByRequestId(reqId);
+        if (custom && existing != null && (!userId.equals(existing.getUserId())
+                || existing.getRunId() != null || !List.of(entryTypes).contains(existing.getEntryType()))) {
+            throw BizException.conflict("BILLING_REQUEST_CONFLICT", "计费请求编号已被其他操作使用");
+        }
+        return existing;
     }
 
     public BillingDtos.AccountSummary topUp(UUID userId, double amountCredits, String clientRequestId) {

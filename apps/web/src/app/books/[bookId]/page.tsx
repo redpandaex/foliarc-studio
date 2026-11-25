@@ -15,6 +15,7 @@ import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel } from "@/components/ai-copilot-panel";
 import { BookStructureTree } from "@/components/book-structure-tree";
 import { LorePanel } from "@/components/lore-panel";
+import { RippleEditDrawer } from "@/components/ripple-edit-drawer";
 import { Button } from "@/components/ui/button";
 import {
   ApiClientError,
@@ -99,6 +100,7 @@ function BookWorkbenchContent() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [rippleOpen, setRippleOpen] = useState(false);
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(null);
   const [snapshotSummary, setSnapshotSummary] = useState("");
@@ -623,6 +625,15 @@ function BookWorkbenchContent() {
                   整章预览
                 </Button>
               )}
+              {effectiveSectionId && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setRippleOpen(true)}
+                >
+                  同步前后文
+                </Button>
+              )}
               {!isMultiSectionEditing && (
                 <Button
                   size="sm"
@@ -898,6 +909,26 @@ function BookWorkbenchContent() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeChapter && effectiveSectionId && (
+        <RippleEditDrawer
+          open={rippleOpen}
+          bookId={bookId}
+          sectionId={effectiveSectionId}
+          chapterNo={activeChapter.chapterNo}
+          chapterTitle={activeChapter.title}
+          currentContent={draftContent}
+          tree={tree}
+          versions={versions}
+          onClose={() => setRippleOpen(false)}
+          onAppliedSections={(appliedIds) => {
+            void refreshTree();
+            if (effectiveSectionId && appliedIds.includes(effectiveSectionId)) {
+              void loadChapterDetail(activeChapter.id, activeSection?.id);
+            }
+          }}
+        />
       )}
 
       {/* On-Demand Version History Slide-Over Drawer */}

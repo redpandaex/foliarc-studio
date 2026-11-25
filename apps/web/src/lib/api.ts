@@ -1352,6 +1352,170 @@ export const memoryApi = {
   },
 };
 
+export interface FactDeltaItem {
+  type: string;
+  entity: string;
+  oldFact: string;
+  newFact: string;
+  searchKeywords: string[];
+}
+
+export interface PatchHunkItem {
+  originalParagraph: string;
+  patchedParagraph: string;
+  reason: string;
+}
+
+export interface RippleJobItem {
+  id: string;
+  bookId: string;
+  sourceSectionId: string;
+  sourceChapterNo: number;
+  sourceNarrativeOrder: number;
+  vipPlanCode: string;
+  rangeMode: "FORWARD" | "BACKWARD" | "BIDIRECTIONAL" | "CUSTOM_RANGE" | "FULL_BOOK" | string;
+  rangeStartChapter: number;
+  rangeEndChapter: number;
+  maxCandidatesCap: number;
+  maxPatchBatchLimit: number;
+  status:
+    | "ANALYZING"
+    | "NO_CHANGE"
+    | "READY_TO_PATCH"
+    | "BLAST_RADIUS_EXCEEDED"
+    | "PATCHING"
+    | "READY_FOR_REVIEW"
+    | "PARTIALLY_APPLIED"
+    | "APPLIED"
+    | "FAILED"
+    | "CANCELLED"
+    | string;
+  changeSummary: string;
+  scannedSectionCount: number;
+  candidateSectionCount: number;
+  backwardConflictCount: number;
+  forwardConflictCount: number;
+  minorMentionCount: number;
+  estimatedCostMicros: number;
+  estimatedCostCredits: number;
+  actualCostMicros: number;
+  actualCostCredits: number;
+  errorMessage: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface RippleImpactItem {
+  id: string;
+  jobId: string;
+  targetSectionId: string;
+  chapterNo: number;
+  sectionNo: number;
+  narrativeOrder: number;
+  chapterTitle: string;
+  direction: "BACKWARD" | "FORWARD" | string;
+  severity: "STRONG_CONFLICT" | "MINOR_MENTION" | "UNAFFECTED" | string;
+  conflictReason: string;
+  matchedExcerpt: string;
+  patchStatus: string;
+}
+
+export interface RipplePatchItem {
+  id: string;
+  jobId: string;
+  impactId: string;
+  targetSectionId: string;
+  chapterNo: number;
+  sectionNo: number;
+  chapterTitle: string;
+  direction: string;
+  batchNo: number;
+  baseVersion: number;
+  hunks: PatchHunkItem[];
+  status: string;
+  updatedAt: string | null;
+}
+
+export interface RippleJobDetail {
+  job: RippleJobItem;
+  factDeltas: FactDeltaItem[];
+  backwardImpacts: RippleImpactItem[];
+  forwardImpacts: RippleImpactItem[];
+  patches: RipplePatchItem[];
+}
+
+export interface ApplyRipplePatchesResult {
+  jobStatus: string;
+  appliedCount: number;
+  conflictCount: number;
+  manualReviewCount: number;
+  rejectedCount: number;
+  appliedSectionIds: string[];
+}
+
+export const rippleApi = {
+  analyze(
+    bookId: string,
+    sectionId: string,
+    payload: {
+      rangeMode?: "FORWARD" | "BACKWARD" | "BIDIRECTIONAL" | "CUSTOM_RANGE" | "FULL_BOOK";
+      rangeStartChapter?: number;
+      rangeEndChapter?: number;
+      volumeIds?: string[];
+      oldVersionId?: string;
+      oldContent?: string;
+      newContent?: string;
+      changeNote?: string;
+    },
+  ): Promise<RippleJobItem> {
+    return request<RippleJobItem>(
+      `/api/v1/books/${bookId}/sections/${sectionId}/ripple-analyze`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+  listJobs(bookId: string): Promise<RippleJobItem[]> {
+    return request<RippleJobItem[]>(`/api/v1/books/${bookId}/ripple-jobs`);
+  },
+  getJob(bookId: string, jobId: string): Promise<RippleJobDetail> {
+    return request<RippleJobDetail>(`/api/v1/books/${bookId}/ripple-jobs/${jobId}`);
+  },
+  generatePatches(
+    bookId: string,
+    jobId: string,
+    impactIds: string[],
+  ): Promise<RippleJobDetail> {
+    return request<RippleJobDetail>(
+      `/api/v1/books/${bookId}/ripple-jobs/${jobId}/generate-patches`,
+      {
+        method: "POST",
+        body: JSON.stringify({ impactIds }),
+      },
+    );
+  },
+  applyPatches(
+    bookId: string,
+    jobId: string,
+    payload: { patchIds: string[]; rejectedPatchIds?: string[] },
+  ): Promise<ApplyRipplePatchesResult> {
+    return request<ApplyRipplePatchesResult>(
+      `/api/v1/books/${bookId}/ripple-jobs/${jobId}/apply`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+  cancelJob(bookId: string, jobId: string): Promise<RippleJobItem> {
+    return request<RippleJobItem>(
+      `/api/v1/books/${bookId}/ripple-jobs/${jobId}/cancel`,
+      { method: "POST" },
+    );
+  },
+};
+
 export const billingApi = {
   dashboard(): Promise<BillingDashboardData> {
     return request<BillingDashboardData>("/api/v1/billing/dashboard");

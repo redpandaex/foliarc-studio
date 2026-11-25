@@ -15,6 +15,7 @@ from foliarc_agent.rag.distiller import ChapterDistiller
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
 from foliarc_agent.rag.retriever import HybridRagRetriever
+from foliarc_agent.rag.ripple_engine import RippleEngine
 from foliarc_agent.rag.summarizer import HierarchicalSummarizer
 from foliarc_agent.rag.vector_store import MilvusSummaryVectorStore, MilvusVectorStore
 from foliarc_agent.rag.worker import RagIngestionWorker
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
     memory_extractor = StructuredMemoryExtractor(settings)
     summarizer = HierarchicalSummarizer(settings)
     distiller = ChapterDistiller(settings)
+    ripple_engine = RippleEngine(settings)
     rag_worker = RagIngestionWorker(
         settings=settings,
         vector_store=vector_store,
@@ -76,6 +78,7 @@ async def lifespan(app: FastAPI):
         summarizer=summarizer,
         distiller=distiller,
         summary_store=summary_store,
+        ripple_engine=ripple_engine,
     )
     guardrails = GuardrailEngine(settings)
     sandbox = create_sandbox_provider(settings)

@@ -13,8 +13,8 @@ const PHASES = [
   { id: "Phase 5.8A", title: "卷/章/小节柔性结构 + 10万字Map-Reduce + 万章4层对数记忆树 + Coarse-to-Fine检索", status: "已完成" },
   { id: "Phase 5.8B", title: "伏笔全生命周期导演台 + 双层防剧透隔离 + 别名锁/快照回滚/POV边界与高危提案闸门", status: "已完成" },
   { id: "Phase 5.8C", title: "6大题材档案包 + 分层Skill路由 + 动态人物表单 + 黄金文风锚点 + 公共RAG题材匹配", status: "已完成" },
-  { id: "Phase 5.8D", title: "双向自选范围蝴蝶效应引擎（Fact Diff → Impact Radar → 分批稀疏补丁审阅）", status: "下一步" },
-  { id: "Phase 6", title: "独立运营后台（apps/admin + admin-java 多模块拆分）+ OTel/Langfuse + Eval 评测", status: "规划中" },
+  { id: "Phase 5.8D", title: "双向自选范围蝴蝶效应引擎（Fact Diff → Impact Radar → 分批稀疏补丁审阅）", status: "已完成" },
+  { id: "Phase 6", title: "独立运营后台（apps/admin + admin-java 多模块拆分）+ OTel/Langfuse + Eval 评测", status: "下一步" },
 ];
 
 export default function HomePage() {
@@ -23,7 +23,7 @@ export default function HomePage() {
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
           <div className="inline-flex items-center rounded-full border border-border px-3 py-1 font-mono text-xs text-muted-foreground">
-            FoliarcStudio · Phase 5.8C Ready
+            FoliarcStudio · Phase 5.8 Complete
           </div>
           <h1 className="text-3xl font-bold tracking-tight">卷弧工坊 · FoliarcStudio</h1>
           <p className="text-sm text-muted-foreground">

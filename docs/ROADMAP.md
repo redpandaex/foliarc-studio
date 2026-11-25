@@ -156,8 +156,9 @@ flowchart LR
 - [x] **2.6.2C 6 大题材档案包、分层 Skill 路由与少样本黄金文风锚点（Phase 5.8C，已完成）** `★`
   - **两级题材分类体系与 6 处全链路联动**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签（支持“古典 + 民俗恐怖”跨界叠加）；升级 11 个分层写作技能包（`genres`/`sub_tags` 过滤路由），消除跨题材误触发；人物扩展属性收口至 `characters.custom_attributes JSONB`（前端按题材动态渲染表单、仙侠 `realm` 双向兼容）；`Director` 节拍骨架、`Writer` 反 AI 味禁忌词与 `Critic` 差异化审稿 Rubric 全链路按题材自适应；公共 RAG 资料库升级 `genre_codes` + `genre_tags` 标准化匹配。
   - **少样本黄金文风锚点（Style Anchors）**：新增 `style_anchors` 表与增删启停接口（联动 VIP `maxStyleAnchors` 配额与总字数 ≤ 900 字硬上限），固定注入 L0 静态 System Prefix 100% 复用 KV Cache，支持编辑器划词一键收藏为本书文风参考，根治长篇续写“AI 味自噬”。
-- [ ] **2.6.2D 双向自选范围蝴蝶效应引擎（Phase 5.8D，详见 [`docs/architecture/04-RIPPLE-EDIT-ENGINE.md`](./architecture/04-RIPPLE-EDIT-ENGINE.md)）** `★`
-  - 原生对接 Phase 5.5 已落地的 VIP 动态权益中台，支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）。
+- [x] **2.6.2D 双向自选范围蝴蝶效应引擎（Phase 5.8D，已完成，详见 [`docs/architecture/04-RIPPLE-EDIT-ENGINE.md`](./architecture/04-RIPPLE-EDIT-ENGINE.md)）** `★`
+  - 原生对接 Phase 5.5 已落地的 VIP 动态权益中台与分布式计费账本，支持 5 种自由范围模式（`BIDIRECTIONAL / FORWARD / BACKWARD / CUSTOM_RANGE(按章/按卷) / FULL_BOOK`），并严格执行 VIP 跨度、日扫次数与单批补丁上限以及 `BLAST_RADIUS_EXCEEDED` 爆炸半径熔断。
+  - 全闭环四阶段流水线：`Stage 1 Fact Diff`（过滤纯错别字/润色，提取原子事实变更）→ `Stage 2 Impact Radar`（PG 别名索引 + Milvus 区间/Coarse-to-Fine 混合粗筛 + 区分 `BACKWARD` 前文铺垫矛盾与 `FORWARD` 后文剧情穿帮）→ `Stage 3 Sparse Surgical Patch`（分批预冻结 + 段落级逐字锚定局部补丁）→ `Stage 4 人工逐章 Diff 审阅采纳`（乐观锁防并发覆盖 + 自动打快照 + 仅对采纳节定向重算记忆与索引）。
 - [x] **2.7 多 Agent 架构与协作编排**
   - 设计“小说编辑部”多 Agent 团队：
     - `Director（总编/规划师）`：拆解章节大纲与场景节拍（Beat Sheet）。

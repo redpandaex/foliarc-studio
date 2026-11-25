@@ -19,6 +19,7 @@ from foliarc_agent.rag.distiller import ChapterDistiller
 from foliarc_agent.rag.embeddings import EmbeddingProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
 from foliarc_agent.rag.parsers import parse_document_bytes
+from foliarc_agent.rag.ripple_engine import RippleEngine
 from foliarc_agent.rag.summarizer import HierarchicalSummarizer
 from foliarc_agent.rag.vector_store import (
     SummaryVectorRow,
@@ -40,6 +41,8 @@ MEMORY_QUEUE = "foliarc.memory.extract.queue"
 SUMMARY_QUEUE = "foliarc.memory.summary.queue"
 DISTILL_QUEUE = "foliarc.memory.distill.queue"
 ROLLUP_QUEUE = "foliarc.memory.rollup.queue"
+RIPPLE_ANALYZE_QUEUE = "foliarc.ripple.analyze.queue"
+RIPPLE_PATCH_QUEUE = "foliarc.ripple.patch.queue"
 
 INGEST_DLQ = "foliarc.rag.ingest.dlq"
 CHAPTER_INGEST_DLQ = "foliarc.rag.chapter.ingest.dlq"
@@ -48,6 +51,8 @@ MEMORY_DLQ = "foliarc.memory.extract.dlq"
 SUMMARY_DLQ = "foliarc.memory.summary.dlq"
 DISTILL_DLQ = "foliarc.memory.distill.dlq"
 ROLLUP_DLQ = "foliarc.memory.rollup.dlq"
+RIPPLE_ANALYZE_DLQ = "foliarc.ripple.analyze.dlq"
+RIPPLE_PATCH_DLQ = "foliarc.ripple.patch.dlq"
 
 RK_INGEST = "rag.ingest"
 RK_CHAPTER_INGEST = "rag.chapter.ingest"
@@ -56,6 +61,8 @@ RK_MEMORY = "memory.extract"
 RK_SUMMARY = "memory.summary"
 RK_DISTILL = "memory.distill"
 RK_ROLLUP = "memory.rollup"
+RK_RIPPLE_ANALYZE = "ripple.analyze"
+RK_RIPPLE_PATCH = "ripple.patch"
 
 
 class RagIngestionWorker:
@@ -78,6 +85,7 @@ class RagIngestionWorker:
         summarizer: HierarchicalSummarizer | None = None,
         distiller: ChapterDistiller | None = None,
         summary_store: SummaryVectorStore | None = None,
+        ripple_engine: RippleEngine | None = None,
     ) -> None:
         self._settings = settings
         self._store = vector_store
@@ -86,6 +94,7 @@ class RagIngestionWorker:
         self._summarizer = summarizer or HierarchicalSummarizer(settings)
         self._distiller = distiller or ChapterDistiller(settings)
         self._summary_store = summary_store
+        self._ripple = ripple_engine or RippleEngine(settings)
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._connected = False
@@ -150,6 +159,8 @@ class RagIngestionWorker:
                     (fast_channel, SUMMARY_QUEUE, SUMMARY_DLQ, RK_SUMMARY, self._on_summary_message),
                     (fast_channel, DISTILL_QUEUE, DISTILL_DLQ, RK_DISTILL, self._on_distill_message),
                     (bulk_channel, ROLLUP_QUEUE, ROLLUP_DLQ, RK_ROLLUP, self._on_rollup_message),
+                    (bulk_channel, RIPPLE_ANALYZE_QUEUE, RIPPLE_ANALYZE_DLQ, RK_RIPPLE_ANALYZE, self._on_ripple_analyze_message),
+                    (bulk_channel, RIPPLE_PATCH_QUEUE, RIPPLE_PATCH_DLQ, RK_RIPPLE_PATCH, self._on_ripple_patch_message),
                 ):
                     dlq = await ch.declare_queue(dlq_name, durable=True)
                     await dlq.bind(dlx, routing_key=dlq_name)
@@ -286,6 +297,65 @@ class RagIngestionWorker:
             await message.ack()
         except Exception:
             logger.exception("Failed to process logarithmic rollup message (routing to DLQ)")
+            await message.reject(requeue=False)
+
+    async def _on_ripple_analyze_message(self, message: AbstractIncomingMessage) -> None:
+        payload: dict[str, Any] = {}
+        try:
+            payload = json.loads(message.body.decode("utf-8"))
+            idem_key = str(payload.get("idempotency_key") or message.headers.get("x-idempotency-key") or "")
+            if idem_key and not await self._claim_idempotency(idem_key, "ripple-analyze-worker"):
+                await message.ack()
+                return
+            await self.process_ripple_analyze_payload(payload)
+            await message.ack()
+        except Exception as exc:
+            logger.exception("Failed to process ripple analyze message (routing to DLQ)")
+            job_id = payload.get("job_id")
+            if job_id:
+                with contextlib.suppress(Exception):
+                    await self._report_ripple_analysis(
+                        str(job_id),
+                        {
+                            "status": "FAILED",
+                            "changeSummary": "",
+                            "factDeltas": [],
+                            "scannedSectionCount": 0,
+                            "candidateSectionCount": 0,
+                            "impacts": [],
+                            "actualCostMicros": 0,
+                            "errorMessage": str(exc)[:500],
+                        },
+                    )
+            await message.reject(requeue=False)
+
+    async def _on_ripple_patch_message(self, message: AbstractIncomingMessage) -> None:
+        payload: dict[str, Any] = {}
+        try:
+            payload = json.loads(message.body.decode("utf-8"))
+            idem_key = str(payload.get("idempotency_key") or message.headers.get("x-idempotency-key") or "")
+            if idem_key and not await self._claim_idempotency(idem_key, "ripple-patch-worker"):
+                await message.ack()
+                return
+            await self.process_ripple_patch_payload(payload)
+            await message.ack()
+        except Exception as exc:
+            logger.exception("Failed to process ripple patch message (routing to DLQ)")
+            job_id = payload.get("job_id")
+            batch_no = int(payload.get("batch_no") or 1)
+            if job_id:
+                with contextlib.suppress(Exception):
+                    await self._report_ripple_patch_batch(
+                        str(job_id),
+                        batch_no,
+                        {
+                            "patches": [],
+                            "inputTokens": 0,
+                            "cachedTokens": 0,
+                            "outputTokens": 0,
+                            "errorMessage": str(exc)[:500],
+                        },
+                    )
             await message.reject(requeue=False)
 
     # --- Core Pipelines (also directly callable in unit/integration tests) ---
@@ -743,6 +813,167 @@ class RagIngestionWorker:
 
         return {"savedNodes": saved_nodes}
 
+    async def process_ripple_analyze_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Phase 5.8D Stage 1 (Fact Diff) + Stage 2 (Bidirectional Impact Radar)."""
+        job_id = str(payload["job_id"])
+        ctx = await self._fetch_ripple_context(job_id)
+
+        old_content = str(ctx.get("oldContent") or "")
+        new_content = str(ctx.get("newContent") or "")
+        change_note = str(ctx.get("changeNote") or "")
+        genre_code = str(ctx.get("genreCode") or "")
+        source_section_id = str(ctx.get("sourceSectionId") or "")
+        source_order = int(ctx.get("sourceNarrativeOrder") or 0)
+        range_start_order = int(ctx.get("rangeStartOrder") or 1)
+        range_end_order = int(ctx.get("rangeEndOrder") or 999_999_999)
+        max_candidates = max(1, int(ctx.get("maxCandidatesCap") or 50))
+
+        # Stage 1: Atomic Fact Diff
+        stage1 = await self._ripple.extract_fact_deltas(
+            old_content=old_content,
+            new_content=new_content,
+            change_note=change_note,
+            genre_code=genre_code,
+        )
+        if not stage1.get("hasSubstantiveFactChange"):
+            report = {
+                "status": "NO_CHANGE",
+                "changeSummary": stage1.get("changeSummary") or "未检测到实质事实变更",
+                "factDeltas": [],
+                "scannedSectionCount": 0,
+                "candidateSectionCount": 0,
+                "impacts": [],
+                "actualCostMicros": 0,
+                "errorMessage": None,
+            }
+            return await self._report_ripple_analysis(job_id, report)
+
+        fact_deltas: list[dict[str, Any]] = list(stage1.get("factDeltas") or [])
+        change_summary = str(stage1.get("changeSummary") or change_note)
+
+        # Stage 2a: PG entity/alias/summary coarse candidates strictly within [rangeStartOrder, rangeEndOrder]
+        entities = list(dict.fromkeys(str(d.get("entity") or "").strip() for d in fact_deltas if d.get("entity")))
+        keywords = list(
+            dict.fromkeys(
+                kw
+                for d in fact_deltas
+                for kw in (d.get("searchKeywords") or [])
+                if str(kw).strip()
+            )
+        )
+        cand_resp = await self._search_ripple_candidates(
+            job_id=job_id,
+            entities=entities,
+            keywords=keywords,
+            limit=max_candidates,
+        )
+        scanned_count = int(cand_resp.get("scannedSectionCount") or 0)
+        candidates_by_id: dict[str, dict[str, Any]] = {}
+        for c in cand_resp.get("candidates") or []:
+            sid = str(c.get("sectionId") or "")
+            if sid and sid != source_section_id:
+                candidates_by_id[sid] = dict(c)
+
+        # Stage 2b: Milvus range-filtered vector recall (Coarse-to-Fine when FULL_BOOK or > 1,000 chapters)
+        span_chapters = max(1, int(ctx.get("rangeEndChapter") or 1) - int(ctx.get("rangeStartChapter") or 1) + 1)
+        query_text = " ".join([change_summary, *entities[:4], *keywords[:6]]).strip()
+        if query_text and ctx.get("ownerId") and ctx.get("bookId"):
+            with contextlib.suppress(Exception):
+                q_vec = (await self._embedder.embed_texts([query_text]))[0]
+                order_ranges: list[tuple[int, int]] = [(range_start_order, range_end_order)]
+                if (
+                    (str(ctx.get("rangeMode") or "").upper() == "FULL_BOOK" or span_chapters > 1000)
+                    and self._summary_store is not None
+                ):
+                    sum_hits = await self._summary_store.search_summaries(
+                        owner_id=str(ctx["ownerId"]),
+                        book_id=str(ctx["bookId"]),
+                        query_text=query_text,
+                        query_vector=q_vec,
+                        top_k=12,
+                        max_order=range_end_order,
+                    )
+                    narrowed = [
+                        (max(range_start_order, h.start_order), min(range_end_order, h.end_order))
+                        for h in sum_hits
+                        if h.end_order >= range_start_order and h.start_order <= range_end_order
+                    ]
+                    if narrowed:
+                        order_ranges = narrowed
+
+                vec_hits = await self._store.hybrid_search(
+                    owner_id=str(ctx["ownerId"]),
+                    book_id=str(ctx["bookId"]),
+                    query_text=query_text,
+                    query_vector=q_vec,
+                    top_k=min(30, max_candidates),
+                    order_ranges=order_ranges,
+                    doc_type="CHAPTER",
+                )
+                for hit in vec_hits:
+                    sid = str(hit.section_id or "")
+                    if not sid or sid == source_section_id or sid in candidates_by_id:
+                        continue
+                    if len(candidates_by_id) >= max_candidates:
+                        break
+                    candidates_by_id[sid] = {
+                        "sectionId": sid,
+                        "chapterNo": hit.chapter_no,
+                        "sectionNo": 1,
+                        "narrativeOrder": hit.narrative_order or derive_narrative_order(hit.chapter_no),
+                        "chapterTitle": hit.scene_title or f"第{hit.chapter_no}章",
+                        "summaryText": "",
+                        "content": hit.content,
+                        "matchedVia": "MILVUS_RANGE",
+                    }
+
+        candidates = list(candidates_by_id.values())[:max_candidates]
+
+        # Stage 2c: Concurrent directional conflict classification
+        impacts, in_tok, out_tok = await self._ripple.evaluate_impacts(
+            fact_deltas=fact_deltas,
+            change_summary=change_summary,
+            source_order=source_order,
+            candidates=candidates,
+            genre_code=genre_code,
+        )
+        total_in = int(stage1.get("inputTokens") or 0) + in_tok
+        total_out = int(stage1.get("outputTokens") or 0) + out_tok
+        actual_micros = int(total_in * 2 + total_out * 6)
+
+        report = {
+            "status": "READY_TO_PATCH" if impacts else "NO_CHANGE",
+            "changeSummary": change_summary,
+            "factDeltas": fact_deltas,
+            "scannedSectionCount": max(scanned_count, len(candidates)),
+            "candidateSectionCount": len(candidates),
+            "impacts": impacts,
+            "actualCostMicros": actual_micros,
+            "errorMessage": None,
+        }
+        return await self._report_ripple_analysis(job_id, report)
+
+    async def process_ripple_patch_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Phase 5.8D Stage 3 (Sparse Surgical Patch batch generation)."""
+        job_id = str(payload["job_id"])
+        batch_no = int(payload.get("batch_no") or 1)
+        batch_ctx = await self._fetch_ripple_batch_targets(job_id, batch_no)
+        patches, in_tok, out_tok = await self._ripple.generate_surgical_patches(
+            fact_deltas=list(batch_ctx.get("factDeltas") or []),
+            change_summary=str(batch_ctx.get("changeSummary") or ""),
+            targets=list(batch_ctx.get("targets") or []),
+            genre_code=str(batch_ctx.get("genreCode") or ""),
+            style_anchors_text=str(batch_ctx.get("styleAnchorsText") or ""),
+        )
+        result = {
+            "patches": patches,
+            "inputTokens": in_tok,
+            "cachedTokens": 0,
+            "outputTokens": out_tok,
+            "errorMessage": None,
+        }
+        return await self._report_ripple_patch_batch(job_id, batch_no, result)
+
     async def _index_rollup_vector(
         self,
         book_id: str,
@@ -938,3 +1169,51 @@ class RagIngestionWorker:
             resp = await client.post(url, headers=self._internal_headers(), json=payload)
             resp.raise_for_status()
             return resp.json()
+
+    async def _fetch_ripple_context(self, job_id: str) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/ripple/jobs/{job_id}/context"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._internal_headers())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _search_ripple_candidates(
+        self,
+        *,
+        job_id: str,
+        entities: list[str],
+        keywords: list[str],
+        limit: int,
+    ) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/ripple/jobs/{job_id}/candidates"
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                url,
+                headers=self._internal_headers(),
+                json={"entities": entities, "keywords": keywords, "limit": limit},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _report_ripple_analysis(self, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/ripple/jobs/{job_id}/analysis-result"
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(url, headers=self._internal_headers(), json=payload)
+            resp.raise_for_status()
+            return resp.json() if resp.content else {"ok": True}
+
+    async def _fetch_ripple_batch_targets(self, job_id: str, batch_no: int) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/ripple/jobs/{job_id}/batches/{batch_no}/targets"
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(url, headers=self._internal_headers())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _report_ripple_patch_batch(
+        self, job_id: str, batch_no: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/ripple/jobs/{job_id}/batches/{batch_no}/patches-result"
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(url, headers=self._internal_headers(), json=payload)
+            resp.raise_for_status()
+            return resp.json() if resp.content else {"ok": True}
