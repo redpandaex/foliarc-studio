@@ -22,6 +22,8 @@ public class ChapterEntity {
     private String content;
     private Integer wordCount;
     private String status;
+    private String contentHash;
+    private Boolean summaryDirty;
 
     @Version
     private Long version;
@@ -86,6 +88,22 @@ public class ChapterEntity {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getContentHash() {
+        return contentHash;
+    }
+
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
+    }
+
+    public Boolean getSummaryDirty() {
+        return summaryDirty;
+    }
+
+    public void setSummaryDirty(Boolean summaryDirty) {
+        this.summaryDirty = summaryDirty;
     }
 
     public Long getVersion() {

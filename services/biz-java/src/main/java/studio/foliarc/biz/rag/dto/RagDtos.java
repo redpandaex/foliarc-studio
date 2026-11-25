@@ -94,7 +94,8 @@ public final class RagDtos {
             Integer docVersion,
             Integer chapterNo,
             String sceneTitle,
-            String content
+            String content,
+            String scope
     ) {}
 
     public record InternalChapterPayload(
@@ -172,5 +173,107 @@ public final class RagDtos {
 
     public record RawSearchProxyResponse(
             Map<String, Object> result
+    ) {}
+
+    // --- Phase 5.5: Hierarchical Summaries, Auto-Charter & Three-Scope Library DTOs ---
+
+    public record ChapterSummaryItem(
+            UUID chapterId,
+            int chapterNo,
+            String chapterTitle,
+            String summaryText,
+            String keyEvents,
+            String involvedCharacters,
+            String endingHook,
+            String status
+    ) {}
+
+    public record VolumeSummaryItem(
+            int volumeNo,
+            int startChapterNo,
+            int endChapterNo,
+            String summaryText,
+            String status
+    ) {}
+
+    public record InternalBookSummariesPayload(
+            UUID bookId,
+            UUID ownerId,
+            String bookTitle,
+            String genre,
+            String synopsis,
+            String charterSource,
+            List<ChapterSummaryItem> chapterSummaries,
+            List<VolumeSummaryItem> volumeSummaries
+    ) {}
+
+    public record InternalSaveChapterSummaryRequest(
+            UUID chapterId,
+            Integer chapterNo,
+            String chapterTitle,
+            String contentHash,
+            String summaryText,
+            String keyEvents,
+            String involvedCharacters,
+            String endingHook
+    ) {}
+
+    public record InternalSaveChapterSummaryResponse(
+            boolean saved,
+            boolean refreshVolumeSummary,
+            int volumeNo,
+            int volumeStartChapterNo,
+            int volumeEndChapterNo,
+            boolean refreshAutoCharter,
+            int totalSummariesCount
+    ) {}
+
+    public record InternalSaveVolumeSummaryRequest(
+            Integer volumeNo,
+            Integer startChapterNo,
+            Integer endChapterNo,
+            String summaryText,
+            String sourceHash
+    ) {}
+
+    public record InternalSaveAutoCharterRequest(
+            String autoCharter,
+            Integer chapterCount
+    ) {}
+
+    public record LibraryDocumentResponse(
+            UUID id,
+            UUID bookId,
+            String scope,
+            String accessType,
+            String docType,
+            String title,
+            String fileName,
+            Long fileSize,
+            String genreTags,
+            boolean readonly,
+            boolean enabled,
+            boolean boundToBook,
+            String status,
+            Integer progress,
+            Integer chunkCount,
+            String errorMessage,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt
+    ) {}
+
+    public record UpdateBookBindingRequest(
+            boolean enabled
+    ) {}
+
+    public record GrantDocumentRequest(
+            UUID granteeUserId,
+            String permission
+    ) {}
+
+    public record InternalAccessibleDocsResponse(
+            List<String> userDocIds,
+            List<String> assignedDocIds,
+            List<String> globalDocIds
     ) {}
 }

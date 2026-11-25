@@ -20,6 +20,10 @@ public class BookEntity {
     private String title;
     private String genre;
     private String synopsis;
+    private String authorCharter;
+    private String autoCharter;
+    private String charterSource;
+    private Integer charterChapterCount;
     private String status;
 
     @Version
@@ -69,6 +73,38 @@ public class BookEntity {
 
     public void setSynopsis(String synopsis) {
         this.synopsis = synopsis;
+    }
+
+    public String getAuthorCharter() {
+        return authorCharter;
+    }
+
+    public void setAuthorCharter(String authorCharter) {
+        this.authorCharter = authorCharter;
+    }
+
+    public String getAutoCharter() {
+        return autoCharter;
+    }
+
+    public void setAutoCharter(String autoCharter) {
+        this.autoCharter = autoCharter;
+    }
+
+    public String getCharterSource() {
+        return charterSource;
+    }
+
+    public void setCharterSource(String charterSource) {
+        this.charterSource = charterSource;
+    }
+
+    public Integer getCharterChapterCount() {
+        return charterChapterCount;
+    }
+
+    public void setCharterChapterCount(Integer charterChapterCount) {
+        this.charterChapterCount = charterChapterCount;
     }
 
     public String getStatus() {

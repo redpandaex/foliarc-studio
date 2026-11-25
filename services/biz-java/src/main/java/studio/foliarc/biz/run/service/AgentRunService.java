@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,7 @@ import studio.foliarc.biz.billing.ModelPricing;
 import studio.foliarc.biz.billing.service.BillingService;
 import studio.foliarc.biz.common.BizException;
 import studio.foliarc.biz.gateway.RedisRateLimiterService;
+import studio.foliarc.biz.memory.service.StoryMemoryContextService;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
 import studio.foliarc.biz.novel.mapper.ChapterMapper;
@@ -35,6 +37,8 @@ import studio.foliarc.biz.run.entity.AgentCheckpointEntity;
 import studio.foliarc.biz.run.entity.AgentRunEntity;
 import studio.foliarc.biz.run.mapper.AgentCheckpointMapper;
 import studio.foliarc.biz.run.mapper.AgentRunMapper;
+import studio.foliarc.biz.vip.dto.VipDtos;
+import studio.foliarc.biz.vip.service.VipEntitlementService;
 
 @Service
 public class AgentRunService {
@@ -53,6 +57,8 @@ public class AgentRunService {
     private final BillingService billingService;
     private final CircuitBreaker agentCircuitBreaker;
     private final Bulkhead agentBulkhead;
+    private final StoryMemoryContextService storyMemoryContextService;
+    private VipEntitlementService vipEntitlementService;
 
     public AgentRunService(
             AgentRunMapper runMapper,
@@ -66,6 +72,26 @@ public class AgentRunService {
             CircuitBreaker agentCircuitBreaker,
             Bulkhead agentBulkhead
     ) {
+        this(
+                runMapper, checkpointMapper, bookService, chapterMapper, agentWebClient, redis,
+                rateLimiter, billingService, agentCircuitBreaker, agentBulkhead, null
+        );
+    }
+
+    @Autowired
+    public AgentRunService(
+            AgentRunMapper runMapper,
+            AgentCheckpointMapper checkpointMapper,
+            BookService bookService,
+            ChapterMapper chapterMapper,
+            WebClient agentWebClient,
+            StringRedisTemplate redis,
+            RedisRateLimiterService rateLimiter,
+            BillingService billingService,
+            CircuitBreaker agentCircuitBreaker,
+            Bulkhead agentBulkhead,
+            StoryMemoryContextService storyMemoryContextService
+    ) {
         this.runMapper = runMapper;
         this.checkpointMapper = checkpointMapper;
         this.bookService = bookService;
@@ -76,6 +102,12 @@ public class AgentRunService {
         this.billingService = billingService;
         this.agentCircuitBreaker = agentCircuitBreaker;
         this.agentBulkhead = agentBulkhead;
+        this.storyMemoryContextService = storyMemoryContextService;
+    }
+
+    @Autowired(required = false)
+    public void setVipEntitlementService(VipEntitlementService vipEntitlementService) {
+        this.vipEntitlementService = vipEntitlementService;
     }
 
     public RunDtos.RunResponse startRun(UUID ownerId, RunDtos.StartRunRequest req) {
@@ -116,7 +148,14 @@ public class AgentRunService {
 
         // Phase 5 Gateway Guard 1: Atomic Redis + Lua RPM & TPM Dual-Dimension Rate Limit
         long estTokens = ModelPricing.estimatePromptTokens(mode, chapterContext, instruction);
-        rateLimiter.acquireOrThrow(ownerId, estTokens);
+        if (vipEntitlementService != null) {
+            VipDtos.ResolvedUserEntitlements resolved = vipEntitlementService.resolveForUser(ownerId);
+            rateLimiter.acquireOrThrow(
+                    ownerId, estTokens, resolved.entitlements().rpmLimit(), resolved.entitlements().tpmLimit()
+            );
+        } else {
+            rateLimiter.acquireOrThrow(ownerId, estTokens);
+        }
 
         AgentRunEntity run = new AgentRunEntity();
         run.setId(UUID.randomUUID());
@@ -153,7 +192,9 @@ public class AgentRunService {
             throw ex;
         }
 
-        String previousChaptersContext = buildPreviousChaptersContext(book.getId(), chapter);
+        StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
+                ownerId, book, chapter, chapterContext, instruction
+        );
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
@@ -166,9 +207,12 @@ public class AgentRunService {
         body.put("book_title", book.getTitle());
         body.put("genre", book.getGenre());
         body.put("synopsis", book.getSynopsis());
+        body.put("story_charter", fiveLayer.storyCharter());
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", chapterContext);
-        body.put("previous_chapters_context", previousChaptersContext);
+        body.put("previous_chapters_context", fiveLayer.hotWindowContext());
+        body.put("rolling_summary_context", fiveLayer.rollingSummaryContext());
+        body.put("active_state_brief", fiveLayer.activeStateBrief());
         body.put("instruction", instruction);
         body.put("require_outline_approval", requireOutlineApproval);
 
@@ -272,7 +316,13 @@ public class AgentRunService {
 
         redis.delete(RedisStreamSseBridge.controlKey(run.getId()));
 
-        String previousChaptersContext = buildPreviousChaptersContext(book.getId(), chapter);
+        StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
+                ownerId,
+                book,
+                chapter,
+                run.getChapterContext() == null ? "" : run.getChapterContext(),
+                run.getInstruction() == null ? "" : run.getInstruction()
+        );
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("run_id", run.getId().toString());
@@ -285,9 +335,12 @@ public class AgentRunService {
         body.put("book_title", book.getTitle());
         body.put("genre", book.getGenre());
         body.put("synopsis", book.getSynopsis());
+        body.put("story_charter", fiveLayer.storyCharter());
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", run.getChapterContext() == null ? "" : run.getChapterContext());
-        body.put("previous_chapters_context", previousChaptersContext);
+        body.put("previous_chapters_context", fiveLayer.hotWindowContext());
+        body.put("rolling_summary_context", fiveLayer.rollingSummaryContext());
+        body.put("active_state_brief", fiveLayer.activeStateBrief());
         body.put("instruction", run.getInstruction() == null ? "" : run.getInstruction());
         body.put("accumulated_text", run.getAccumulatedText() == null ? "" : run.getAccumulatedText());
         body.put("last_seq", run.getLastSeq() == null ? 0 : run.getLastSeq());
@@ -423,6 +476,21 @@ public class AgentRunService {
                         .last("LIMIT 1")
         );
         return latest == null ? null : toCheckpoint(latest);
+    }
+
+    private StoryMemoryContextService.FiveLayerContext resolveFiveLayerContext(
+            UUID ownerId,
+            BookEntity book,
+            ChapterEntity chapter,
+            String chapterContext,
+            String instruction
+    ) {
+        if (storyMemoryContextService != null) {
+            return storyMemoryContextService.buildFiveLayerContext(ownerId, book, chapter, chapterContext, instruction);
+        }
+        String fallbackPrev = buildPreviousChaptersContext(book.getId(), chapter);
+        String charter = StoryMemoryContextService.resolveEffectiveCharter(book);
+        return new StoryMemoryContextService.FiveLayerContext(charter, fallbackPrev, "", "", fallbackPrev);
     }
 
     public String buildPreviousChaptersContext(UUID bookId, ChapterEntity currentChapter) {

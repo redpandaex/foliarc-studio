@@ -1,11 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  booksApi,
+  libraryApi,
   loreApi,
+  type BookCharterItem,
   type CharacterItem,
   type ForeshadowingItem,
+  type LibraryDocumentItem,
   type WorldEntryItem,
 } from "@/lib/api";
 
@@ -29,9 +34,15 @@ interface LorePanelProps {
 }
 
 export function LorePanel({ bookId }: LorePanelProps) {
-  const [subTab, setSubTab] = useState<"characters" | "world" | "foreshadowing">(
+  const [subTab, setSubTab] = useState<"charter" | "characters" | "world" | "foreshadowing">(
     "characters",
   );
+  const [charter, setCharter] = useState<BookCharterItem | null>(null);
+  const [charterDraft, setCharterDraft] = useState("");
+  const [savingCharter, setSavingCharter] = useState(false);
+  const [charterNotice, setCharterNotice] = useState<string | null>(null);
+  const [libraryDocs, setLibraryDocs] = useState<LibraryDocumentItem[]>([]);
+
   const [characters, setCharacters] = useState<CharacterItem[]>([]);
   const [worldEntries, setWorldEntries] = useState<WorldEntryItem[]>([]);
   const [foreshadowings, setForeshadowings] = useState<ForeshadowingItem[]>([]);
@@ -61,12 +72,17 @@ export function LorePanel({ bookId }: LorePanelProps) {
       loreApi.listCharacters(bookId),
       loreApi.listWorldbook(bookId),
       loreApi.listForeshadowings(bookId),
+      booksApi.getCharter(bookId).catch(() => null),
+      libraryApi.list(bookId).catch(() => []),
     ])
-      .then(([chars, worlds, clues]) => {
+      .then(([chars, worlds, clues, charterData, libDocs]) => {
         if (!active) return;
         setCharacters(chars);
         setWorldEntries(worlds);
         setForeshadowings(clues);
+        setCharter(charterData);
+        setCharterDraft(charterData?.effectiveCharter ?? "");
+        setLibraryDocs(libDocs);
         setError(null);
       })
       .catch((err) => {
@@ -77,6 +93,37 @@ export function LorePanel({ bookId }: LorePanelProps) {
       active = false;
     };
   }, [bookId]);
+
+  async function handleSaveCharter(e: FormEvent) {
+    e.preventDefault();
+    setSavingCharter(true);
+    setError(null);
+    setCharterNotice(null);
+    try {
+      const updated = await booksApi.updateCharter(bookId, charterDraft);
+      setCharter(updated);
+      setCharterDraft(updated.effectiveCharter);
+      setCharterNotice(
+        updated.charterSource === "AUTHOR_DEFINED"
+          ? "已锁定故事档案，AI 后续创作将严格遵守且不会擅自覆盖。"
+          : "已清空手填档案，将按自动归纳或简介兜底。",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存故事档案失败");
+    } finally {
+      setSavingCharter(false);
+    }
+  }
+
+  async function handleToggleBookDoc(doc: LibraryDocumentItem) {
+    setError(null);
+    try {
+      const updated = await libraryApi.setBookBinding(bookId, doc.id, !doc.boundToBook);
+      setLibraryDocs((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新参考资料开关失败");
+    }
+  }
 
   async function handleAddCharacter(e: FormEvent) {
     e.preventDefault();
@@ -163,7 +210,18 @@ export function LorePanel({ bookId }: LorePanelProps) {
         维护人物、世界观与伏笔，AI 创作时会自动参考并保持前后一致
       </div>
 
-      <div className="grid grid-cols-3 border-b border-border text-[11px] font-medium">
+      <div className="grid grid-cols-4 border-b border-border text-[11px] font-medium">
+        <button
+          type="button"
+          onClick={() => setSubTab("charter")}
+          className={`py-2 ${
+            subTab === "charter"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground"
+          }`}
+        >
+          档案
+        </button>
         <button
           type="button"
           onClick={() => setSubTab("characters")}
@@ -206,6 +264,97 @@ export function LorePanel({ bookId }: LorePanelProps) {
       )}
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {subTab === "charter" && (
+          <>
+            <form
+              onSubmit={handleSaveCharter}
+              className="space-y-2 rounded-lg border border-border bg-background p-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">核心故事档案</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    charter?.charterSource === "AUTHOR_DEFINED"
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                      : charter?.charterSource === "AUTO_INFERRED"
+                        ? "bg-sky-500/15 text-sky-700 dark:text-sky-400"
+                        : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {charter?.charterSource === "AUTHOR_DEFINED"
+                    ? "作者已锁定"
+                    : charter?.charterSource === "AUTO_INFERRED"
+                      ? "AI 已从前文整理"
+                      : "未填写"}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                开书时可不填，写完前几章后系统会自动整理主线、人称与基调；你随时可修改并锁定，锁定后 AI 不会覆盖。
+              </p>
+              <textarea
+                rows={6}
+                value={charterDraft}
+                onChange={(e) => setCharterDraft(e.target.value)}
+                placeholder="例如：第三人称限知，冷峻武侠写实基调。主角林青为查清师门灭门真相携玄铁剑入世……"
+                className="w-full resize-none rounded border border-input bg-background p-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring"
+              />
+              {charterNotice && (
+                <div className="rounded bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                  {charterNotice}
+                </div>
+              )}
+              <Button type="submit" size="xs" className="w-full" disabled={savingCharter}>
+                {savingCharter
+                  ? "保存中..."
+                  : charter?.charterSource === "AUTO_INFERRED"
+                    ? "确认并锁定故事档案"
+                    : "保存故事档案"}
+              </Button>
+            </form>
+
+            <div className="space-y-2 rounded-lg border border-border bg-background p-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold">本书参考资料 ({libraryDocs.length})</span>
+                <Link href="/library" className="text-[11px] text-primary hover:underline">
+                  管理资料库 →
+                </Link>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                勾选允许 AI 在本书中参考的个人或平台资料（若与本书设定冲突，始终以本书为准）。
+              </p>
+              {libraryDocs.length === 0 ? (
+                <p className="py-2 text-center text-[11px] text-muted-foreground">
+                  暂无可用参考资料，可前往「我的资料库」上传。
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {libraryDocs.map((doc) => (
+                    <li
+                      key={doc.id}
+                      className="flex items-center justify-between gap-2 rounded border border-border/70 px-2 py-1.5"
+                    >
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={doc.boundToBook}
+                          onChange={() => void handleToggleBookDoc(doc)}
+                        />
+                        <span className="truncate text-[11px] font-medium">{doc.title}</span>
+                      </label>
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {doc.accessType === "USER"
+                          ? "个人"
+                          : doc.accessType === "ASSIGNED"
+                            ? "专属"
+                            : "公共"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
         {subTab === "characters" && (
           <>
             <form onSubmit={handleAddCharacter} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">

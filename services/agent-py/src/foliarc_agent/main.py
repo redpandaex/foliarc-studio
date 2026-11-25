@@ -14,6 +14,7 @@ from foliarc_agent.config import get_settings
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
 from foliarc_agent.rag.retriever import HybridRagRetriever
+from foliarc_agent.rag.summarizer import HierarchicalSummarizer
 from foliarc_agent.rag.vector_store import MilvusVectorStore
 from foliarc_agent.rag.worker import RagIngestionWorker
 from foliarc_agent.streaming.protocol import (
@@ -35,6 +36,9 @@ class InternalRagSearchRequest(BaseModel):
     doc_type: str | None = None
     rewrite_query: bool = False
     chapter_context: str = ""
+    user_doc_ids: list[str] | None = None
+    assigned_doc_ids: list[str] | None = None
+    global_doc_ids: list[str] | None = None
 
 
 class InternalSandboxExecRequest(BaseModel):
@@ -57,11 +61,13 @@ async def lifespan(app: FastAPI):
         reranker=reranker,
     )
     memory_extractor = StructuredMemoryExtractor(settings)
+    summarizer = HierarchicalSummarizer(settings)
     rag_worker = RagIngestionWorker(
         settings=settings,
         vector_store=vector_store,
         embedder=embedder,
         memory_extractor=memory_extractor,
+        summarizer=summarizer,
     )
     guardrails = GuardrailEngine(settings)
     sandbox = create_sandbox_provider(settings)
@@ -225,6 +231,9 @@ async def internal_rag_search(req: InternalRagSearchRequest) -> dict[str, Any]:
         doc_type=req.doc_type,
         rewrite_query=req.rewrite_query,
         chapter_context=req.chapter_context,
+        user_doc_ids=req.user_doc_ids,
+        assigned_doc_ids=req.assigned_doc_ids,
+        global_doc_ids=req.global_doc_ids,
     )
 
 

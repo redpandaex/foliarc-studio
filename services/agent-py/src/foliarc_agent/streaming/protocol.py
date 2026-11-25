@@ -19,9 +19,12 @@ class RunStartRequest(BaseModel):
     book_title: str = ""
     genre: str | None = None
     synopsis: str | None = None
+    story_charter: str = ""
     chapter_title: str = ""
     chapter_context: str = ""
     previous_chapters_context: str = ""
+    rolling_summary_context: str = ""
+    active_state_brief: str = ""
     instruction: str = ""
     require_outline_approval: bool = True
 
@@ -38,9 +41,12 @@ class RunResumeRequest(BaseModel):
     book_title: str = ""
     genre: str | None = None
     synopsis: str | None = None
+    story_charter: str = ""
     chapter_title: str = ""
     chapter_context: str = ""
     previous_chapters_context: str = ""
+    rolling_summary_context: str = ""
+    active_state_brief: str = ""
     instruction: str = ""
     accumulated_text: str = ""
     last_seq: int = Field(default=0, ge=0)

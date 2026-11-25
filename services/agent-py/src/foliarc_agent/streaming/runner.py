@@ -144,9 +144,12 @@ class RunManager:
                 book_title=req.book_title,
                 genre=req.genre,
                 synopsis=req.synopsis,
+                story_charter=req.story_charter,
                 chapter_title=req.chapter_title,
                 chapter_context=req.chapter_context,
                 previous_chapters_context=req.previous_chapters_context,
+                rolling_summary_context=req.rolling_summary_context,
+                active_state_brief=req.active_state_brief,
                 instruction=req.instruction,
                 accumulated_text="",
                 start_seq=0,
@@ -178,9 +181,12 @@ class RunManager:
                 book_title=req.book_title,
                 genre=req.genre,
                 synopsis=req.synopsis,
+                story_charter=req.story_charter,
                 chapter_title=req.chapter_title,
                 chapter_context=req.chapter_context,
                 previous_chapters_context=req.previous_chapters_context,
+                rolling_summary_context=req.rolling_summary_context,
+                active_state_brief=req.active_state_brief,
                 instruction=req.instruction,
                 accumulated_text=req.accumulated_text,
                 start_seq=req.last_seq,
@@ -260,9 +266,12 @@ class RunManager:
         book_title: str,
         genre: str | None,
         synopsis: str | None,
+        story_charter: str = "",
         chapter_title: str,
         chapter_context: str,
         previous_chapters_context: str = "",
+        rolling_summary_context: str = "",
+        active_state_brief: str = "",
         instruction: str,
         accumulated_text: str,
         start_seq: int,
@@ -398,9 +407,12 @@ class RunManager:
                         book_title=book_title,
                         genre=genre,
                         synopsis=synopsis,
+                        story_charter=story_charter,
                         chapter_title=chapter_title,
                         chapter_context=chapter_context,
                         previous_chapters_context=previous_chapters_context,
+                        rolling_summary_context=rolling_summary_context,
+                        active_state_brief=active_state_brief,
                         instruction=instruction,
                         requested_model_alias=model_alias,
                         require_outline_approval=require_outline_approval,
@@ -428,16 +440,24 @@ class RunManager:
                         action=action,
                         book_title=book_title,
                         genre=genre,
-                        synopsis=synopsis,
+                        synopsis=story_charter.strip() or synopsis,
                         skill_catalog=self._skills.render_catalog_prompt(),
                     )
                     user_parts = []
                     if chapter_no is not None or chapter_title:
                         ch_label = f"第 {chapter_no} 章 " if chapter_no else ""
                         user_parts.append(f"当前章节：{ch_label}{chapter_title}".strip())
+                    if rolling_summary_context.strip():
+                        user_parts.append(
+                            f"【前文卷级里程碑与近期章摘（L2）】\n{rolling_summary_context.strip()[:2600]}"
+                        )
+                    if active_state_brief.strip():
+                        user_parts.append(
+                            f"【当前活跃人物状态与未回收伏笔（L3）】\n{active_state_brief.strip()[:1600]}"
+                        )
                     if previous_chapters_context.strip():
                         user_parts.append(
-                            f"【前文章节承接（必须紧密衔接上一章结尾，禁止割裂剧情）】\n{previous_chapters_context.strip()[-4500:]}"
+                            f"【前文章节承接（L1 热窗口，必须紧密衔接上一章结尾，禁止割裂剧情）】\n{previous_chapters_context.strip()[-2800:]}"
                         )
                     elif chapter_no and chapter_no > 1 and not chapter_context.strip():
                         user_parts.append(
@@ -479,9 +499,12 @@ class RunManager:
                         book_title=book_title,
                         genre=genre,
                         synopsis=synopsis,
+                        story_charter=story_charter,
                         chapter_title=chapter_title,
                         chapter_context=chapter_context,
                         previous_chapters_context=previous_chapters_context,
+                        rolling_summary_context=rolling_summary_context,
+                        active_state_brief=active_state_brief,
                         instruction=instruction,
                         accumulated_text=accumulated_text,
                     )

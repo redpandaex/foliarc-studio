@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
 import studio.foliarc.biz.auth.AuthenticatedUser;
+import studio.foliarc.biz.memory.service.StoryMemoryContextService;
 import studio.foliarc.biz.novel.dto.NovelDtos;
 import studio.foliarc.biz.novel.service.BookService;
 
@@ -17,9 +18,11 @@ import studio.foliarc.biz.novel.service.BookService;
 public class BookController {
 
     private final BookService books;
+    private final StoryMemoryContextService memoryContextService;
 
-    public BookController(BookService books) {
+    public BookController(BookService books, StoryMemoryContextService memoryContextService) {
         this.books = books;
+        this.memoryContextService = memoryContextService;
     }
 
     @GetMapping
@@ -60,5 +63,22 @@ public class BookController {
             @PathVariable UUID bookId
     ) {
         books.deleteBook(actor.userId(), bookId);
+    }
+
+    @GetMapping("/{bookId}/charter")
+    public NovelDtos.BookCharterResponse getCharter(
+            @AuthenticationPrincipal AuthenticatedUser actor,
+            @PathVariable UUID bookId
+    ) {
+        return memoryContextService.getBookCharter(actor.userId(), bookId);
+    }
+
+    @PutMapping("/{bookId}/charter")
+    public NovelDtos.BookCharterResponse updateCharter(
+            @AuthenticationPrincipal AuthenticatedUser actor,
+            @PathVariable UUID bookId,
+            @Valid @RequestBody NovelDtos.UpdateBookCharterRequest body
+    ) {
+        return memoryContextService.saveAuthorCharter(actor.userId(), bookId, body.charter());
     }
 }

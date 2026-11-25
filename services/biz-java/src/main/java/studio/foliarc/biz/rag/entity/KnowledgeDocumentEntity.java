@@ -17,6 +17,12 @@ public class KnowledgeDocumentEntity {
 
     private UUID bookId;
     private UUID ownerId;
+    private String scope;
+    private UUID uploadedBy;
+    private String genreTags;
+    private String contentSha256;
+    private Boolean isReadonly;
+    private Boolean enabled;
     private String sourceType;
     private UUID sourceChapterId;
     private Integer chapterNo;
@@ -46,6 +52,18 @@ public class KnowledgeDocumentEntity {
     public void setBookId(UUID bookId) { this.bookId = bookId; }
     public UUID getOwnerId() { return ownerId; }
     public void setOwnerId(UUID ownerId) { this.ownerId = ownerId; }
+    public String getScope() { return scope; }
+    public void setScope(String scope) { this.scope = scope; }
+    public UUID getUploadedBy() { return uploadedBy; }
+    public void setUploadedBy(UUID uploadedBy) { this.uploadedBy = uploadedBy; }
+    public String getGenreTags() { return genreTags; }
+    public void setGenreTags(String genreTags) { this.genreTags = genreTags; }
+    public String getContentSha256() { return contentSha256; }
+    public void setContentSha256(String contentSha256) { this.contentSha256 = contentSha256; }
+    public Boolean getIsReadonly() { return isReadonly; }
+    public void setIsReadonly(Boolean isReadonly) { this.isReadonly = isReadonly; }
+    public Boolean getEnabled() { return enabled; }
+    public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     public String getSourceType() { return sourceType; }
     public void setSourceType(String sourceType) { this.sourceType = sourceType; }
     public UUID getSourceChapterId() { return sourceChapterId; }

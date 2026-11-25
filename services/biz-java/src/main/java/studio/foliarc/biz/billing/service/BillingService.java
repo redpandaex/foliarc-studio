@@ -11,6 +11,7 @@ import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,6 +33,8 @@ import studio.foliarc.biz.billing.mapper.BillingLedgerEntryMapper;
 import studio.foliarc.biz.billing.mapper.GuardrailAuditLogMapper;
 import studio.foliarc.biz.common.BizException;
 import studio.foliarc.biz.gateway.RedisRateLimiterService;
+import studio.foliarc.biz.vip.dto.VipDtos;
+import studio.foliarc.biz.vip.service.VipEntitlementService;
 
 /**
  * Enterprise Distributed Two-Phase Idempotent Token Billing Ledger:
@@ -66,6 +69,12 @@ public class BillingService {
     private final DefaultRedisScript<Long> unlockScript;
     private final long starterGrantMicros;
     private final long defaultMonthlyBudgetMicros;
+    private VipEntitlementService vipEntitlementService;
+
+    @Autowired(required = false)
+    public void setVipEntitlementService(VipEntitlementService vipEntitlementService) {
+        this.vipEntitlementService = vipEntitlementService;
+    }
 
     public BillingService(
             BillingAccountMapper accountMapper,
@@ -228,7 +237,21 @@ public class BillingService {
         ModelPricing.CostBreakdown cost = ModelPricing.calculateActualCost(
                 modelAlias, inputTokens, cachedTokens, outputTokens, sandboxCalls
         );
-        long actualCost = cost.totalMicros();
+        int discountBps = 10000;
+        String discountPlan = null;
+        if (vipEntitlementService != null) {
+            VipDtos.ResolvedUserEntitlements resolved = vipEntitlementService.resolveForUser(userId);
+            if (resolved != null && resolved.creditDiscountBps() > 0 && resolved.creditDiscountBps() < 10000) {
+                discountBps = resolved.creditDiscountBps();
+                discountPlan = resolved.planCode();
+            }
+        }
+        long actualCost = discountBps < 10000
+                ? Math.round(cost.totalMicros() * (discountBps / 10000.0))
+                : cost.totalMicros();
+        String discountNote = discountPlan != null
+                ? " (" + discountPlan + " " + (discountBps / 1000.0) + "折)"
+                : "";
 
         return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() -> txTemplate.execute(status -> {
             BillingLedgerEntryEntity dup = findByRequestId(reqId);
@@ -270,6 +293,7 @@ public class BillingService {
                     ? "全额解冻退还预扣额度" + (reasonSuffix != null ? " (" + reasonSuffix + ")" : "")
                     : "精准结算 in=" + inputTokens + " (cache=" + cachedTokens + ") out=" + outputTokens
                             + (sandboxCalls > 0 ? " sandbox=" + sandboxCalls : "")
+                            + discountNote
                             + (reasonSuffix != null ? " [" + reasonSuffix + "]" : "");
 
             insertLedger(
@@ -338,6 +362,69 @@ public class BillingService {
                 throw new OptimisticRetryException();
             }
             return toAccountSummary(acct);
+        })));
+    }
+
+    /**
+     * Atomically charges credits for VIP subscription purchase with request-level idempotency.
+     */
+    public long chargeForVipSubscription(UUID userId, long costMicros, String idempotencyKey, String description) {
+        if (costMicros <= 0L) {
+            return ensureAccount(userId).getBalanceMicros();
+        }
+        ensureAccount(userId);
+        String reqId = "VIP_SUB:" + idempotencyKey;
+        return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() -> txTemplate.execute(status -> {
+            BillingLedgerEntryEntity dup = findByRequestId(reqId);
+            BillingAccountEntity acct = accountMapper.selectById(userId);
+            if (dup != null) {
+                return acct.getBalanceMicros();
+            }
+            if (acct.getBalanceMicros() < costMicros) {
+                throw BizException.paymentRequired(
+                        "INSUFFICIENT_BALANCE",
+                        "账户积分不足（当前余额 " + ModelPricing.toCredits(acct.getBalanceMicros())
+                                + " Credits，开通该套餐需 " + ModelPricing.toCredits(costMicros) + " Credits），请先充值"
+                );
+            }
+            acct.setBalanceMicros(acct.getBalanceMicros() - costMicros);
+            if (accountMapper.updateById(acct) == 0) {
+                throw new OptimisticRetryException();
+            }
+            insertLedger(
+                    userId, null, reqId, "VIP_SUB", -costMicros,
+                    acct.getBalanceMicros(), acct.getFrozenMicros(),
+                    null, 0, 0, 0, 0L, 0, description
+            );
+            return acct.getBalanceMicros();
+        })));
+    }
+
+    /**
+     * Atomically grants VIP bonus credits with request-level idempotency.
+     */
+    public long grantVipCredits(UUID userId, long grantMicros, String idempotencyKey, String description) {
+        if (grantMicros <= 0L) {
+            return ensureAccount(userId).getBalanceMicros();
+        }
+        ensureAccount(userId);
+        String reqId = "VIP_GRANT:" + idempotencyKey;
+        return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() -> txTemplate.execute(status -> {
+            BillingLedgerEntryEntity dup = findByRequestId(reqId);
+            BillingAccountEntity acct = accountMapper.selectById(userId);
+            if (dup != null) {
+                return acct.getBalanceMicros();
+            }
+            acct.setBalanceMicros(acct.getBalanceMicros() + grantMicros);
+            if (accountMapper.updateById(acct) == 0) {
+                throw new OptimisticRetryException();
+            }
+            insertLedger(
+                    userId, null, reqId, "VIP_GRANT", grantMicros,
+                    acct.getBalanceMicros(), acct.getFrozenMicros(),
+                    null, 0, 0, 0, 0L, 0, description
+            );
+            return acct.getBalanceMicros();
         })));
     }
 

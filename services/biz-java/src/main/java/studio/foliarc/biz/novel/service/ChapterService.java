@@ -4,12 +4,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.memory.service.StoryMemoryContextService;
 import studio.foliarc.biz.novel.dto.NovelDtos;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
 import studio.foliarc.biz.novel.entity.ChapterVersionEntity;
@@ -26,6 +28,7 @@ public class ChapterService {
     private final ChapterMapper chapterMapper;
     private final ChapterVersionMapper versionMapper;
     private final KnowledgeDocumentService knowledgeDocumentService;
+    private final StoryMemoryContextService storyMemoryContextService;
 
     public ChapterService(
             BookService bookService,
@@ -33,10 +36,22 @@ public class ChapterService {
             ChapterVersionMapper versionMapper,
             KnowledgeDocumentService knowledgeDocumentService
     ) {
+        this(bookService, chapterMapper, versionMapper, knowledgeDocumentService, null);
+    }
+
+    @Autowired
+    public ChapterService(
+            BookService bookService,
+            ChapterMapper chapterMapper,
+            ChapterVersionMapper versionMapper,
+            KnowledgeDocumentService knowledgeDocumentService,
+            StoryMemoryContextService storyMemoryContextService
+    ) {
         this.bookService = bookService;
         this.chapterMapper = chapterMapper;
         this.versionMapper = versionMapper;
         this.knowledgeDocumentService = knowledgeDocumentService;
+        this.storyMemoryContextService = storyMemoryContextService;
     }
 
     public List<NovelDtos.ChapterSummaryResponse> listChapters(UUID ownerId, UUID bookId) {
@@ -76,6 +91,8 @@ public class ChapterService {
         entity.setContent(text);
         entity.setWordCount(WordCounter.count(text));
         entity.setStatus("DRAFT");
+        entity.setContentHash(StoryMemoryContextService.sha256Hex(text));
+        entity.setSummaryDirty(!text.isBlank());
         entity.setVersion(0L);
         chapterMapper.insert(entity);
 
@@ -84,7 +101,7 @@ public class ChapterService {
         }
 
         // Background auto-sync: when creating a new chapter (e.g. Chapter 2), ensure the immediately
-        // preceding chapter (e.g. Chapter 1) is indexed into RAG + structured memory automatically.
+        // preceding chapter (e.g. Chapter 1) is indexed into RAG + structured memory + hierarchical summary.
         if (seq > 1) {
             ChapterEntity prev = chapterMapper.selectOne(
                     new LambdaQueryWrapper<ChapterEntity>()
@@ -95,6 +112,9 @@ public class ChapterService {
             );
             if (prev != null) {
                 knowledgeDocumentService.syncChapterInBackgroundIfNeeded(ownerId, bookId, prev);
+                if (storyMemoryContextService != null) {
+                    storyMemoryContextService.invalidateAndEnqueueSummary(ownerId, bookId, prev);
+                }
             }
         }
         return mapDetail(entity);
@@ -121,11 +141,18 @@ public class ChapterService {
 
         int oldWordCount = row.getWordCount() == null ? 0 : row.getWordCount();
         int newWordCount = WordCounter.count(input.content());
+        String oldHash = row.getContentHash() == null ? "" : row.getContentHash();
+        String newHash = StoryMemoryContextService.sha256Hex(input.content());
+        boolean contentChanged = !newHash.equals(oldHash);
 
         row.setTitle(input.title().trim());
         row.setContent(input.content());
         row.setWordCount(newWordCount);
         row.setStatus(targetState);
+        row.setContentHash(newHash);
+        if (contentChanged) {
+            row.setSummaryDirty(true);
+        }
         row.setVersion(input.version());
 
         if (chapterMapper.updateById(row) == 0) {
@@ -139,13 +166,19 @@ public class ChapterService {
             saveSnapshotRow(chapterId, input.content(), note, ownerId);
         }
 
-        // Automatic background RAG + Structured Memory sync via Outbox (no manual user sync required)
+        // Automatic background RAG + Structured Memory + Hierarchical Summary sync (cascade invalidation on edits)
+        boolean majorEdit = contentChanged && newWordCount >= 80 && Math.abs(newWordCount - oldWordCount) >= 120;
         if ("PUBLISHED".equals(targetState) && input.content() != null && !input.content().isBlank()) {
             knowledgeDocumentService.syncChapter(ownerId, bookId, chapterId, true);
+            if (storyMemoryContextService != null) {
+                storyMemoryContextService.invalidateAndEnqueueSummary(ownerId, bookId, row);
+            }
         } else if (input.content() != null && !input.content().isBlank()
-                && ("REVIEWING".equals(targetState)
-                || (newWordCount >= 80 && Math.abs(newWordCount - oldWordCount) >= 150))) {
+                && ("REVIEWING".equals(targetState) || majorEdit)) {
             knowledgeDocumentService.syncChapterInBackgroundIfNeeded(ownerId, bookId, row);
+            if (storyMemoryContextService != null) {
+                storyMemoryContextService.invalidateAndEnqueueSummary(ownerId, bookId, row);
+            }
         }
 
         ChapterEntity latest = chapterMapper.selectById(chapterId);

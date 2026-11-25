@@ -26,13 +26,17 @@ class OutboxAndRagTests {
     void rabbitmqQueuesDeclareDeadLetterExchange() {
         RabbitMqTopologyConfig cfg = new RabbitMqTopologyConfig();
         Queue ingest = cfg.ragIngestQueue();
+        Queue chapterIngest = cfg.ragChapterIngestQueue();
         Queue delete = cfg.ragDeleteQueue();
         Queue memory = cfg.memoryExtractQueue();
+        Queue summary = cfg.memorySummaryQueue();
 
         assertThat(ingest.getArguments()).containsEntry("x-dead-letter-exchange", RabbitMqTopologyConfig.RAG_DLX);
         assertThat(ingest.getArguments()).containsEntry("x-dead-letter-routing-key", RabbitMqTopologyConfig.INGEST_DLQ);
+        assertThat(chapterIngest.getArguments()).containsEntry("x-dead-letter-routing-key", RabbitMqTopologyConfig.CHAPTER_INGEST_DLQ);
         assertThat(delete.getArguments()).containsEntry("x-dead-letter-routing-key", RabbitMqTopologyConfig.DELETE_DLQ);
         assertThat(memory.getArguments()).containsEntry("x-dead-letter-routing-key", RabbitMqTopologyConfig.MEMORY_DLQ);
+        assertThat(summary.getArguments()).containsEntry("x-dead-letter-routing-key", RabbitMqTopologyConfig.SUMMARY_DLQ);
     }
 
     @Test

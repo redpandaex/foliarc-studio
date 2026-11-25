@@ -113,8 +113,8 @@ flowchart LR
 - [ ] **1.6 小说编辑器与 AI 协作体验** `★`
   - 集成富文本编辑器（Tiptap / Lexical），支持划词改写/扩写、AI 生成内容 **Git 式 Diff 审阅（逐段 Accept / Reject）**、防抖自动保存 + 乐观锁版本冲突提示。
 - [x] **1.7 前后台解耦与创作工作台体验** `★`
-  - **前台（作者端）**：极简三栏写作台（章节目录 + 正文编辑 + 「AI 写作 / 故事设定」双栏 + 按需抽屉「历史版本」），完全隐藏计费、RAG/Milvus、Checkpoint 等工程概念；支持极简「我的资料库」上传个人参考文档与按书启用开关。
-  - **后台（`/admin` 运营/工程端）**：独立 `ROLE_ADMIN` 权限控制台，统一承载公共/定向 RAG 资料库、异步任务中心、Agent 会话执行日志时间轴、计费与网关监控及 Prompt 模板管理。
+  - **前台（`apps/web :3000`，作者端）**：极简三栏写作台（章节目录 + 正文编辑 + 「AI 写作 / 故事设定」双栏 + 按需抽屉「历史版本」），完全隐藏计费、RAG/Milvus、Checkpoint 等工程概念；支持极简「我的资料库」上传个人参考文档与按书启用开关。
+  - **独立运营后台（`apps/admin :3001` + `admin-java :8081`，详见 [`06-ADMIN-SYSTEM-SEPARATION.md`](./architecture/06-ADMIN-SYSTEM-SEPARATION.md)）**：前后端物理独立拆分，仅内网部署与独立 `aud=foliarc-admin` 管理员鉴权，统一承载公共/定向 RAG 资料库、异步任务中心、Agent 会话执行日志时间轴、计费/VIP 权益配置与 Prompt 模板管理。
 
 ---
 
@@ -142,11 +142,17 @@ flowchart LR
   - **Token 预算分配器**：精确计算（`tiktoken`）各区域配额（System + Skill + 长期记忆 + RAG 片段 + 近期对话 + 输出预留）。
   - **分层压缩策略**：滑动窗口 + 滚动摘要（Rolling Summary）+ 大工具输出截断与外置（Tool Output Offloading，只给摘要和引用 ID）。
   - **KV Cache 前缀优化（Prompt Caching）** `★`：将静态 System Prompt、固定世界观设定放在前缀最前面，动态指令放尾部，显著降低 TTFT 延迟与 50%~80% 的输入成本。
-- [ ] **2.6.1 百章级 5 层长程记忆与零配置自动底座（Phase 5.5）** `★`
+- [x] **2.6.1 百章级 5 层长程记忆与零配置自动底座（Phase 5.5）** `★`
   - **零配置自动涌现式 L0 静态底座**：作者未手填简介/世界观时，冷启动可直接开写第 1 章；在写完第 1 章、第 3 章及每满 10 章（每卷）时，后台异步归纳 `auto_inferred` 故事宪章（主线梗概、人称视角、文风基调、核心人物与规则），低频刷新以保住 KV Cache 命中率；严格遵守 `author_defined > auto_inferred`，作者随时可一键确认/编辑并锁定，AI 永不覆盖作者手填内容。
   - **5 层定额上下文金字塔（单次输入恒定 8k~12k Tokens）**：
     - `L0 静态底座`（~1k，KV Cache 前缀）+ `L1 热窗口`（当前章 + 上一章末尾 1500~2500 字原文，~2.5k）+ `L2 滚动摘要`（近期 5~10 章结构化单章摘要 `chapter_summaries` + 更早章节每 10~20 章归并卷级摘要 `volume_summaries`，~2.5k）+ `L3 实体感知动态账本`（仅注入当前章/上章提及的活跃角色状态 + `OPEN` 未回收伏笔，~1.5k）+ `L4 按需召回 RAG`（打捞百章前原场景父块，~2.5k）。
   - **修改前文的级联脏标记（Cascade Invalidation）**：`chapters` 维护 `content_hash` / `summary_dirty`，作者回头修改历史章节后自动触发异步重算：单章摘要 → 所属卷摘要 → Milvus 切片 → 结构化记忆。
+- [ ] **2.6.2 万章级跨体裁长篇架构演进（Phase 5.8，详见 [`docs/architecture/00-ARCHITECTURE-OVERVIEW.md`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）** `★`
+  - **三级柔性文学结构（Volume → Chapter → Section）**：支持网文隐式单节无感写作与古典/严肃文学大章制（单章聚合 10~20 万字、单节上限 10 万字，超 1.2 万字自动 Map-Reduce 摘要）；全链路切换为单调叙事刻度 `narrative_order`。
+  - **万章级 4 层对数摘要树 + 章节统一编译**：`story_rollup_summaries`（卷/篇/纪元）+ 三档自适应精度（1~300 / 301~1000 / 1000~10000+ 章）+ 单次 `ChapterDistiller` 统一编译（省 ~45% 后台成本）+ L3 冷热休眠/唤醒 + L4 Coarse-to-Fine 两阶段万章检索。
+  - **伏笔全生命周期导演台与连续性防线**：6 态伏笔状态机（策划/埋入/潜伏防剧透/照应/启用引爆/回收 + 原文精准回捞）、人物别名归一、POV 视角信息隔离、按节状态快照时间旅行与 `memory_proposals` 防污染闸门。
+  - **题材分类档案包（Genre Profile）**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签，联动分层 Skill 路由、人物 `JSONB` 动态表单、Critic 差异化 Rubric、少样本黄金文风锚点（Style Anchors）与公共 RAG 标准化匹配。
+  - **双向自选范围蝴蝶效应引擎 + VIP 动态权益中台**：支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）；引入 4 档 **VIP 会员权益中台（`FREE / VIP / SVIP / STUDIO`）**，统一治理蝴蝶效应最大可选章数（50 / 300 / 1,000 / 2,000~全书）、单批补丁上限（5 / 20 / 50 / 100 章）、万章记忆规模、个人资料库配额、网关 RPM/TPM 与积分折扣。
 - [x] **2.7 多 Agent 架构与协作编排**
   - 设计“小说编辑部”多 Agent 团队：
     - `Director（总编/规划师）`：拆解章节大纲与场景节拍（Beat Sheet）。
@@ -192,7 +198,7 @@ flowchart LR
     - 更新 **人物状态表**（位置、境界、伤势、持有物品、情绪关系）。
     - 更新 **伏笔追踪表**（埋设章节、描述、状态：未回收/已回收）。
     - 更新 **人物关系三元组**（`角色A --关系/事件--> 角色B`）与 **事件时间线**。
-- [ ] **3.6 三层作用域知识库与定向授权（Phase 5.5）** `★`
+- [x] **3.6 三层作用域知识库与定向授权（Phase 5.5）** `★`
   - **三层 Scope 模型**：`BOOK`（单书专属，含已写章节自动入库） / `USER`（作者个人跨书资料库） / `GLOBAL` & `ASSIGNED`（后台公共题材资料包 + 定向分配给指定作者的只读资料）。
   - **零拷贝共享授权**：新增 `knowledge_grants` 授权表与 `book_knowledge_bindings` 挂载表，后台一份向量可授权多位作者共享，一处更新全员生效；作者对后台下发资料只读（可停用挂载不可误删）。
   - **优先级与冲突覆盖**：检索 Rerank 与 Prompt 严格遵循 **`BOOK > USER > ASSIGNED > GLOBAL`**，防止公共设定污染作者原创世界观；公共库按 `genre_tags` 题材标签过滤，避免串题材召回。
@@ -217,6 +223,9 @@ flowchart LR
     2. Agent 结束（或中断取消）后，按实际消耗的 `input_tokens`、`cached_tokens`、`output_tokens` + 工具/沙箱调用费率进行 **精准结算（Settle）**，退还多余冻结额度。
   - **防并发超扣与幂等性**：Redis 分布式锁 + 数据库乐观锁（`version`）+ 唯一 `request_id` 记账流水表（复式记账思想，支持对账与审计）。
   - **成本监控看板**：单章生成成本、模型占比、Prompt Cache 命中节省比例、租户月度预算告警与硬熔断。
+- [x] **4.3.1 VIP 会员分级与动态权益中台（Phase 5.5 提前合并落地，详见 [`05-VIP-ENTITLEMENTS-SYSTEM.md`](./architecture/05-VIP-ENTITLEMENTS-SYSTEM.md)）** `★`
+  - 落地 `vip_plans`（4 档 `FREE / VIP / SVIP / STUDIO`）、`user_subscriptions`（到期自动降级 `FREE`）与 `vip_orders`（幂等订单账本），通过 Redis 5 分钟短缓存 + 版本号失效机制实现后台热改配额秒级生效。
+  - 全链路动态联动：个人资料库数量与总容量动态校验（超限返回 `403 VIP_QUOTA_EXCEEDED` 与升级推荐）、AI 网关按档位注入 RPM/TPM 限流、计费结算自动应用 SVIP 9 折 / STUDIO 8 折与月赠积分；作者端提供极简 `/vip` 会员权益中心。
 - [x] **4.4 可靠异步事件（Outbox + MQ）** `★`
   - 使用本地消息表（Transactional Outbox）+ RabbitMQ/Kafka，保证“文档上传/章节定稿/计费结算”与数据库事务的最终一致性，配备死信队列（DLQ）与消费幂等处理。
 
@@ -224,11 +233,12 @@ flowchart LR
 
 ### 模块 5：后台管理系统、可观测性、评测与工程交付（Admin + LLMOps）`★`
 
-- [ ] **5.0 统一后台管理系统（`/admin`，严格 `ROLE_ADMIN` 鉴权）** `★`
-  - **公共 / 定向 RAG 资料库管理**：上传公共资料包、配置 `genre_tags` 题材标签、通过 `knowledge_grants` 定向授权给指定作者、切片原文检查与多 Scope 混合检索调试。
-  - **异步任务中心（Async Job Center）**：聚合监控 `outbox_events`、文档解析（`PARSING/CHUNKING/EMBEDDING/FAILED`）、章摘/卷摘与结构化记忆抽取队列，支持死信（DLQ）排查与一键重试。
+- [ ] **5.0 独立运营后台系统（`apps/admin :3001` + `admin-java :8081`，详见 [`06-ADMIN-SYSTEM-SEPARATION.md`](./architecture/06-ADMIN-SYSTEM-SEPARATION.md)）** `★`
+  - **前后端物理拆分 + Java Maven 多模块共享内核**：Java 升级为 `services/java/{foliarc-common, biz-java, admin-java}`，`foliarc-common` 统一沉淀 Entity / Mapper / Flyway SQL（仅 `biz-java` 执行迁移，`admin-java` 设 `flyway.enabled=false`）；`biz-java` 彻底剥离管理接口，`admin-java` 使用独立连接池、独立 `aud=foliarc-admin` JWT 鉴权与 `admin_audit_logs` 操作审计，避免后台慢查询拖垮作者端 SSE 流式网关。
+  - **公共 / 定向 RAG 资料库管理**：上传公共资料包、配置 `genre_codes` 题材标签、通过 `knowledge_grants` 定向授权给指定作者、切片原文检查与多 Scope 混合检索调试。
+  - **异步任务中心（Async Job Center）**：聚合监控 `outbox_events`、文档解析（`PARSING/CHUNKING/EMBEDDING/FAILED`）、章摘/卷摘/统一编译与蝴蝶效应队列，支持死信（DLQ）排查与一键重试。
   - **Agent 会话日志中心（Session Trace Center）**：新增 `agent_run_events` 持久化表，仅落盘结构化关键节点（`route_decision`、`agent_handoff`、`tool_call`、`tool_result`、命中 RAG 来源与得分、`critic_review`、`interrupt`、`error`、`usage`），不存逐字 `text_delta` 碎片，带脱敏与 TTL 归档；后台以时间轴瀑布图展示每个会话 Agent 的完整行为，并关联 PG Checkpoints 与 `guardrail_audit_logs`。
-  - **计费网关与 Prompt 注册中心**：将 `/billing`（账本流水、缓存省费、RPM/TPM 限流与熔断监控）统一收编进 `/admin/billing`，补齐 `prompt_templates` 在线编辑、版本管理与灰度发布页面。
+  - **计费网关、VIP 权益与 Prompt 注册中心**：将原 `/billing`（账本流水、缓存省费、RPM/TPM 限流与熔断监控）完整收编进 `apps/admin`，承载 VIP 套餐热更新/手动授与及 `prompt_templates` 在线编辑、版本管理与灰度发布。
 - [ ] **5.1 跨语言全链路追踪（Distributed Tracing）**
   - 使用 OpenTelemetry 打通 **Next.js -> Spring Boot -> Python FastAPI -> LLM/DB**，通过统一 `trace_id` 串联全链路耗时。
 - [ ] **5.2 LLM 可观测性（Tracing & Metrics）**
@@ -243,7 +253,7 @@ flowchart LR
 
 ---
 
-## 四、应该从哪里开始？（8 阶段垂直切片实战路线）
+## 四、应该从哪里开始？（9 阶段垂直切片实战路线）
 
 > [!WARNING]
 > **切忌“横向瀑布式开发”！** 不要花一个月先写完 Java 的权限、计费、RBAC 却还没跑通一句 AI 生成；也不要在 Python 里堆砌 10 个 Agent 却没有前后端联调。
@@ -257,7 +267,8 @@ flowchart TD
     P3 --> P4["Phase 4: 多Agent协同 + 路由 + HITL中断恢复 (第8-9周)"]
     P4 --> P5["Phase 5: 企业级网关 + 计费账本 + 安全护栏 + 硬化Docker沙箱 (第10-11周)"]
     P5 --> P55["Phase 5.5: 百章级5层长程记忆 + 自动底座 + 三层RAG知识库 (第12周)"]
-    P55 --> P6["Phase 6: /admin后台运维(任务/日志/RAG/计费) + OTel/Langfuse + Eval评测 (第13周)"]
+    P55 --> P58["Phase 5.8: 万章对数记忆树 + 卷章小节 + 伏笔导演台 + 6大题材包 + 双向蝴蝶效应 & VIP权益 (第13-14周)"]
+    P58 --> P6["Phase 6: 独立运营后台(apps/admin + admin-java多模块拆分) + OTel/Langfuse + Eval评测 (第15周)"]
 ```
 
 ### 各阶段落地目标与简历产出
@@ -291,7 +302,7 @@ flowchart TD
    - **里程碑**：高并发压测下余额不超扣、触发 TPM 限流优雅降级、Prompt 注入被拦截、沙箱攻防用例全部拦截通过（禁外网/禁读密钥/防 Fork Bomb/超时强杀）。
    - **简历亮点**：补齐高并发 Java 后端分布式幂等计费、限流熔断与企业级 Agent 纵深安全隔离体系。
 
-7. **Phase 5.5：百章级 5 层长程记忆、零配置自动底座与三层 RAG 知识库（第 12 周）—— 放在 Eval 评测前！**
+7. **Phase 5.5：百章级 5 层长程记忆、零配置自动底座与三层 RAG 知识库（第 12 周）**
    - **做什么**：
      - 落地 `chapter_summaries`（单章摘要）+ `volume_summaries`（卷级摘要）+ `auto_inferred` 自动涌现式 L0 故事宪章（低频刷新保 KV Cache，`author_defined` 永远优先）+ 改前文级联脏标记重算；
      - 升级为 5 层定额上下文装配器（L0 底座 + L1 上章末尾原文 + L2 章摘/卷摘 + L3 实体感知活跃状态/未回收伏笔 + L4 Milvus RAG），单次输入恒定 8k~12k Tokens；
@@ -299,12 +310,22 @@ flowchart TD
    - **里程碑**：零设定冷启动写到第 100 章仍保持人设/主线/伏笔高度一致；作者私库与后台公共/定向资料互不串租户且不覆盖本书设定。
    - **简历亮点**：攻克超长文本“上下文爆炸 / 吃书 / 回头改文失效”与多作用域 SaaS RAG 权限隔离难题。
 
-8. **Phase 6：`/admin` 统一运维后台、全链路可观测性与 Eval 评测（第 13 周）**
+8. **Phase 5.8：万章级跨体裁长篇架构升级（第 13~14 周，详见 [`docs/architecture/`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）—— 放在 Eval 评测前！**
+   - **做什么（分 5.8A ~ 5.8D 四个垂直切片）**：
+     - **5.8A（结构 + 万章记忆底座）**：`Volume → Chapter → Section` 三级柔性结构（兼容 10 万字大章 + Map-Reduce 摘要）、`narrative_order` 防剧透升级、4 层对数摘要树（`story_rollup_summaries`）+ 三档自适应精度（1~300 / 301~1000 / 1000~10000+）、`ChapterDistiller` 单次统一编译、消除全表拉正文 OOM 与 L2 倒置截断、Milvus `v2` + `summary_vectors` Coarse-to-Fine 检索；
+     - **5.8B（伏笔导演台 + 连续性防线）**：6 态伏笔生命周期与双层真相隔离（`surface_clue` vs `hidden_truth` 防提前剧透）、本章勾选埋入/照应/启用 + 当年原文精准回捞、人物别名归一、冷热休眠/唤醒、POV 视角信息隔离、按节时间旅行快照与 `memory_proposals` 高危审批闸门；
+     - **5.8C（题材档案包 + 文风锚点）**：内置 6 大主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 副标签，联动分层 Skill 路由、人物 `JSONB` 动态表单、Critic 差异化 Rubric、少样本 `style_anchors`（复用 KV Cache 去 AI 味）与公共 RAG `genre_codes` 匹配；
+     - **5.8D（VIP 权益中台 + 双向蝴蝶效应引擎）**：落地 `vip_plans` / `user_subscriptions` / `VipEntitlementService`（联动蝴蝶效应范围、个人库容量、网关限流与积分折扣）；落地双向自选区间 `Fact Diff` → `Impact Radar`（区分前文铺垫冲突与后文剧情冲突）→ 分批稀疏局部 Git Diff 补丁 + 人工逐章采纳与定向重算。
+   - **里程碑**：同时驾驭万章网文与《地下室手记》式十万字大章古典/严肃文学；恐怖/古典/悬疑各题材零穿帮；修改前文 1 分钟内定位后 500 章冲突并生成可审阅局部补丁。
+   - **简历亮点**：工业级 LSM 风格对数记忆压缩、Coarse-to-Fine 万章混合检索、可控伏笔导演状态机与增量编译式“蝴蝶效应”长文本重构引擎。
+
+9. **Phase 6：独立运营后台系统（`apps/admin` + `admin-java` 多模块拆分）、全链路可观测性与 Eval 评测（第 15 周，详见 [`06-ADMIN-SYSTEM-SEPARATION.md`](./architecture/06-ADMIN-SYSTEM-SEPARATION.md)）**
    - **做什么**：
-     - 建设严格 `ROLE_ADMIN` 鉴权的 `/admin` 控制台：公共/定向 RAG 资料库管理、**异步任务中心**（Outbox/文档/摘要/记忆队列监控与死信一键重试）、**Agent 会话日志中心**（`agent_run_events` 关键轨迹持久化表 + 时间轴瀑布图 + RAG 命中出处 + PG Checkpoints + 安全护栏审计）、计费网关看板收编、Prompt 模板版本管理；
-     - 接入 OpenTelemetry 跨语言链路追踪 + Langfuse（与 `/admin` 业务日志通过 `trace_id` 联动）；
-     - 跑通 30+ 场景 Eval 评测集，量化记录 Phase 5.5 优化前后指标（TTFT、Recall@5、KV Cache 节省比例、百章长篇一致性错误率下降幅度）。
-   - **里程碑**：前后台彻底解耦、每次会话与每个异步任务全链路可追溯可重试；沉淀量化对比数据与架构复盘文档。
+     - 完成 Java Maven 多模块重构（`services/java/{foliarc-common, biz-java :8080, admin-java :8081}`）与独立前端 `apps/admin (:3001)` 搭建，实现前后台物理隔离、连接池隔离、`biz-java` 单点 Flyway 迁移、独立 `aud=foliarc-admin` 鉴权与 `admin_audit_logs` 操作审计；
+     - 在独立后台交付五大运营能力：公共/定向 RAG 资料库管理、**异步任务中心**（Outbox/文档/摘要/编译/蝴蝶效应队列监控与死信一键重试）、**Agent 会话日志中心**（`agent_run_events` 关键轨迹持久化表 + 时间轴瀑布图 + RAG 命中出处 + PG Checkpoints + 安全护栏审计）、计费/VIP 权益看板收编、Prompt 模板版本管理；
+     - 接入 OpenTelemetry 跨语言链路追踪 + Langfuse（与 `admin-java` 会话日志通过 `trace_id` 联动）；
+     - 跑通 30+ 场景 Eval 评测集，量化记录 Phase 5.5 / 5.8 优化前后指标（TTFT、Recall@5、KV Cache 节省比例、百章/万章长篇一致性错误率下降幅度）。
+   - **里程碑**：前后台进程与部署彻底解耦、每次会话与每个异步任务全链路可追溯可重试；沉淀量化对比数据与架构复盘文档。
 
 ---
 

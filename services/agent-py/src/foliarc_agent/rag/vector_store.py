@@ -25,6 +25,7 @@ class VectorChunkRow:
     scene_title: str
     content: str
     dense_vec: list[float]
+    scope: str = "BOOK"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ class VectorSearchHit:
     scene_title: str
     content: str
     score: float
+    scope: str = "BOOK"
 
 
 class VectorStore(Protocol):
@@ -61,13 +63,82 @@ class VectorStore(Protocol):
         top_k: int = 10,
         max_chapter_no: int | None = None,
         doc_type: str | None = None,
+        user_doc_ids: list[str] | None = None,
+        assigned_doc_ids: list[str] | None = None,
+        global_doc_ids: list[str] | None = None,
     ) -> list[VectorSearchHit]: ...
 
     async def health_check(self) -> bool: ...
 
 
+PARTITION_USER = "__USER__"
+PARTITION_GLOBAL = "__GLOBAL__"
+
+
 def _escape_expr(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_in_list(ids: list[str]) -> str:
+    return "[" + ", ".join(f'"{_escape_expr(x)}"' for x in ids) + "]"
+
+
+def build_multiscope_filter_expr(
+    *,
+    owner_id: str,
+    book_id: str,
+    max_chapter_no: int | None = None,
+    doc_type: str | None = None,
+    user_doc_ids: list[str] | None = None,
+    assigned_doc_ids: list[str] | None = None,
+    global_doc_ids: list[str] | None = None,
+) -> str:
+    """
+    Builds a strictly parenthesized Milvus scalar pre-filter across:
+    1. BOOK scope: book_id + owner_id + anti-spoiler chapter_no <= N
+    2. USER scope: __USER__ partition + owner_id + allowed user doc IDs (no anti-spoiler cutoff)
+    3. ASSIGNED & GLOBAL scope: __GLOBAL__ partition + Java-authorized doc IDs (zero-copy grants / genre-matched)
+    """
+    book_clauses = [
+        f'book_id == "{_escape_expr(book_id)}"',
+        f'owner_id == "{_escape_expr(owner_id)}"',
+    ]
+    if max_chapter_no is not None and max_chapter_no >= 0:
+        book_clauses.append(f"chapter_no <= {int(max_chapter_no)}")
+    branches = ["(" + " and ".join(book_clauses) + ")"]
+
+    clean_user = [x for x in (user_doc_ids or []) if x]
+    if clean_user:
+        branches.append(
+            f'(book_id == "{PARTITION_USER}" and owner_id == "{_escape_expr(owner_id)}" '
+            f"and document_id in {_build_in_list(clean_user)})"
+        )
+
+    clean_platform = list(dict.fromkeys([x for x in (assigned_doc_ids or []) + (global_doc_ids or []) if x]))
+    if clean_platform:
+        branches.append(
+            f'(book_id == "{PARTITION_GLOBAL}" and document_id in {_build_in_list(clean_platform)})'
+        )
+
+    scope_expr = branches[0] if len(branches) == 1 else "(" + " or ".join(branches) + ")"
+    if doc_type:
+        return f'({scope_expr}) and doc_type == "{_escape_expr(doc_type.upper())}"'
+    return scope_expr
+
+
+def _classify_scope(
+    document_id: str,
+    user_set: set[str],
+    assigned_set: set[str],
+    global_set: set[str],
+) -> str:
+    if document_id in assigned_set:
+        return "ASSIGNED"
+    if document_id in user_set:
+        return "USER"
+    if document_id in global_set:
+        return "GLOBAL"
+    return "BOOK"
 
 
 class MilvusVectorStore:
@@ -230,17 +301,23 @@ class MilvusVectorStore:
         top_k: int = 10,
         max_chapter_no: int | None = None,
         doc_type: str | None = None,
+        user_doc_ids: list[str] | None = None,
+        assigned_doc_ids: list[str] | None = None,
+        global_doc_ids: list[str] | None = None,
     ) -> list[VectorSearchHit]:
         await self.ensure_collection()
-        clauses = [
-            f'book_id == "{_escape_expr(book_id)}"',
-            f'owner_id == "{_escape_expr(owner_id)}"',
-        ]
-        if max_chapter_no is not None and max_chapter_no >= 0:
-            clauses.append(f"chapter_no <= {int(max_chapter_no)}")
-        if doc_type:
-            clauses.append(f'doc_type == "{_escape_expr(doc_type.upper())}"')
-        expr = " and ".join(clauses)
+        expr = build_multiscope_filter_expr(
+            owner_id=owner_id,
+            book_id=book_id,
+            max_chapter_no=max_chapter_no,
+            doc_type=doc_type,
+            user_doc_ids=user_doc_ids,
+            assigned_doc_ids=assigned_doc_ids,
+            global_doc_ids=global_doc_ids,
+        )
+        user_set = set(user_doc_ids or [])
+        assigned_set = set(assigned_doc_ids or [])
+        global_set = set(global_doc_ids or [])
 
         def _do() -> list[VectorSearchHit]:
             client = self._get_client()
@@ -281,17 +358,19 @@ class MilvusVectorStore:
             for item in results[0]:
                 entity: dict[str, Any] = item.get("entity", item)
                 score = float(item.get("distance", item.get("score", 0.0)))
+                doc_id = str(entity.get("document_id", ""))
                 hits.append(
                     VectorSearchHit(
                         chunk_id=str(entity.get("chunk_id", item.get("id", ""))),
                         parent_chunk_id=str(entity.get("parent_chunk_id", "")),
-                        document_id=str(entity.get("document_id", "")),
+                        document_id=doc_id,
                         doc_version=int(entity.get("doc_version", 1)),
                         chapter_no=int(entity.get("chapter_no", 0)),
                         doc_type=str(entity.get("doc_type", "WORLDBOOK")),
                         scene_title=str(entity.get("scene_title", "")),
                         content=str(entity.get("content", "")),
                         score=score,
+                        scope=_classify_scope(doc_id, user_set, assigned_set, global_set),
                     )
                 )
             return hits
@@ -356,15 +435,28 @@ class InMemoryVectorStore:
         top_k: int = 10,
         max_chapter_no: int | None = None,
         doc_type: str | None = None,
+        user_doc_ids: list[str] | None = None,
+        assigned_doc_ids: list[str] | None = None,
+        global_doc_ids: list[str] | None = None,
     ) -> list[VectorSearchHit]:
-        filtered = [
-            r
-            for r in self._rows.values()
-            if r.owner_id == owner_id
-            and r.book_id == book_id
-            and (max_chapter_no is None or r.chapter_no <= max_chapter_no)
-            and (not doc_type or r.doc_type.upper() == doc_type.upper())
-        ]
+        user_set = set(user_doc_ids or [])
+        assigned_set = set(assigned_doc_ids or [])
+        global_set = set(global_doc_ids or [])
+        platform_set = assigned_set | global_set
+
+        def _matches_scope(r: VectorChunkRow) -> bool:
+            if doc_type and r.doc_type.upper() != doc_type.upper():
+                return False
+            # 1. BOOK scope (tenant + book + anti-spoiler)
+            if r.book_id == book_id and r.owner_id == owner_id:
+                return max_chapter_no is None or r.chapter_no <= max_chapter_no
+            # 2. USER personal library scope (tenant + allowlist, no chapter cutoff)
+            if r.book_id == PARTITION_USER and r.owner_id == owner_id and r.document_id in user_set:
+                return True
+            # 3. ASSIGNED / GLOBAL platform scope (Java-authorized allowlist, no chapter cutoff)
+            return r.book_id == PARTITION_GLOBAL and r.document_id in platform_set
+
+        filtered = [r for r in self._rows.values() if _matches_scope(r)]
         if not filtered:
             return []
 
@@ -402,6 +494,7 @@ class InMemoryVectorStore:
                 scene_title=r.scene_title,
                 content=r.content,
                 score=round(rrf_scores[r.chunk_id], 5),
+                scope=_classify_scope(r.document_id, user_set, assigned_set, global_set),
             )
             for r in ranked
         ]

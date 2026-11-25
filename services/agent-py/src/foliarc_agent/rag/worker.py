@@ -18,6 +18,7 @@ from foliarc_agent.rag.chunker import build_parent_child_chunks
 from foliarc_agent.rag.embeddings import EmbeddingProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
 from foliarc_agent.rag.parsers import parse_document_bytes
+from foliarc_agent.rag.summarizer import HierarchicalSummarizer
 from foliarc_agent.rag.vector_store import VectorChunkRow, VectorStore
 
 logger = logging.getLogger(__name__)
@@ -26,16 +27,22 @@ RAG_EXCHANGE = "foliarc.rag.exchange"
 RAG_DLX = "foliarc.rag.dlx"
 
 INGEST_QUEUE = "foliarc.rag.ingest.queue"
+CHAPTER_INGEST_QUEUE = "foliarc.rag.chapter.ingest.queue"
 DELETE_QUEUE = "foliarc.rag.delete.queue"
 MEMORY_QUEUE = "foliarc.memory.extract.queue"
+SUMMARY_QUEUE = "foliarc.memory.summary.queue"
 
 INGEST_DLQ = "foliarc.rag.ingest.dlq"
+CHAPTER_INGEST_DLQ = "foliarc.rag.chapter.ingest.dlq"
 DELETE_DLQ = "foliarc.rag.delete.dlq"
 MEMORY_DLQ = "foliarc.memory.extract.dlq"
+SUMMARY_DLQ = "foliarc.memory.summary.dlq"
 
 RK_INGEST = "rag.ingest"
+RK_CHAPTER_INGEST = "rag.chapter.ingest"
 RK_DELETE = "rag.delete"
 RK_MEMORY = "memory.extract"
+RK_SUMMARY = "memory.summary"
 
 
 class RagIngestionWorker:
@@ -55,11 +62,13 @@ class RagIngestionWorker:
         vector_store: VectorStore,
         embedder: EmbeddingProvider,
         memory_extractor: StructuredMemoryExtractor,
+        summarizer: HierarchicalSummarizer | None = None,
     ) -> None:
         self._settings = settings
         self._store = vector_store
         self._embedder = embedder
         self._extractor = memory_extractor
+        self._summarizer = summarizer or HierarchicalSummarizer(settings)
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._connected = False
@@ -103,25 +112,30 @@ class RagIngestionWorker:
             connection: aio_pika.abc.AbstractRobustConnection | None = None
             try:
                 connection = await aio_pika.connect_robust(self._settings.rabbitmq_url, timeout=8)
-                channel = await connection.channel()
-                await channel.set_qos(prefetch_count=4)
+                # Queue priority isolation: dedicated channels so heavy PDF uploads never starve real-time chapters/summaries
+                fast_channel = await connection.channel()
+                await fast_channel.set_qos(prefetch_count=6)
+                bulk_channel = await connection.channel()
+                await bulk_channel.set_qos(prefetch_count=2)
 
-                exchange = await channel.declare_exchange(
+                exchange = await fast_channel.declare_exchange(
                     RAG_EXCHANGE, aio_pika.ExchangeType.TOPIC, durable=True
                 )
-                dlx = await channel.declare_exchange(
+                dlx = await fast_channel.declare_exchange(
                     RAG_DLX, aio_pika.ExchangeType.DIRECT, durable=True
                 )
 
-                for q_name, dlq_name, rk, handler in (
-                    (INGEST_QUEUE, INGEST_DLQ, RK_INGEST, self._on_ingest_message),
-                    (DELETE_QUEUE, DELETE_DLQ, RK_DELETE, self._on_delete_message),
-                    (MEMORY_QUEUE, MEMORY_DLQ, RK_MEMORY, self._on_memory_message),
+                for ch, q_name, dlq_name, rk, handler in (
+                    (bulk_channel, INGEST_QUEUE, INGEST_DLQ, RK_INGEST, self._on_ingest_message),
+                    (fast_channel, CHAPTER_INGEST_QUEUE, CHAPTER_INGEST_DLQ, RK_CHAPTER_INGEST, self._on_ingest_message),
+                    (fast_channel, DELETE_QUEUE, DELETE_DLQ, RK_DELETE, self._on_delete_message),
+                    (fast_channel, MEMORY_QUEUE, MEMORY_DLQ, RK_MEMORY, self._on_memory_message),
+                    (fast_channel, SUMMARY_QUEUE, SUMMARY_DLQ, RK_SUMMARY, self._on_summary_message),
                 ):
-                    dlq = await channel.declare_queue(dlq_name, durable=True)
+                    dlq = await ch.declare_queue(dlq_name, durable=True)
                     await dlq.bind(dlx, routing_key=dlq_name)
 
-                    queue = await channel.declare_queue(
+                    queue = await ch.declare_queue(
                         q_name,
                         durable=True,
                         arguments={
@@ -137,7 +151,7 @@ class RagIngestionWorker:
                 await self._stop_event.wait()
             except asyncio.CancelledError:
                 raise
-            except (OSError, aio_pika.AMQPError, RuntimeError) as exc:
+            except (OSError, aio_pika.AMQPException, RuntimeError) as exc:
                 self._connected = False
                 logger.warning("RabbitMQ worker connection deferred (%s); retrying in 5s", exc)
                 with contextlib.suppress(TimeoutError):
@@ -213,11 +227,26 @@ class RagIngestionWorker:
             logger.exception("Failed to process memory extraction message (routing to DLQ)")
             await message.reject(requeue=False)
 
+    async def _on_summary_message(self, message: AbstractIncomingMessage) -> None:
+        try:
+            payload = json.loads(message.body.decode("utf-8"))
+            idem_key = str(payload.get("idempotency_key") or message.headers.get("x-idempotency-key") or "")
+            if idem_key and not await self._claim_idempotency(idem_key, "summary-worker"):
+                await message.ack()
+                return
+
+            await self.process_summary_payload(payload)
+            await message.ack()
+        except Exception:
+            logger.exception("Failed to process hierarchical summary message (routing to DLQ)")
+            await message.reject(requeue=False)
+
     # --- Core Pipelines (also directly callable in unit/integration tests) ---
 
     async def process_ingest_payload(self, payload: dict[str, Any]) -> int:
         doc_id = str(payload["document_id"])
-        book_id = str(payload["book_id"])
+        scope = str(payload.get("scope", "BOOK")).upper()
+        book_id = str(payload.get("book_id") or ("__GLOBAL__" if scope == "GLOBAL" else "__USER__"))
         owner_id = str(payload["owner_id"])
         doc_version = int(payload.get("doc_version", 1))
         source_type = str(payload.get("source_type", "UPLOAD")).upper()
@@ -284,6 +313,7 @@ class RagIngestionWorker:
                 scene_title=c.scene_title,
                 content=c.content,
                 dense_vec=vec,
+                scope=scope,
             )
             for c, vec in zip(children, vectors, strict=True)
         ]
@@ -328,6 +358,82 @@ class RagIngestionWorker:
         applied = await self._apply_memory(owner_id, book_id, extracted)
         logger.info("Applied extracted memory for book %s ch.%s: %s", book_id, chapter_data["chapterNo"], applied)
         return applied
+
+    async def process_summary_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Generates Chapter Summary, and conditionally rolls up Volume Summary & Auto-Emergent L0 Charter."""
+        book_id = str(payload["book_id"])
+        owner_id = str(payload["owner_id"])
+        chapter_id = str(payload["chapter_id"])
+        content_hash = str(payload.get("content_hash") or "")
+
+        chapter_data = await self._fetch_chapter(chapter_id)
+        bible = await self._fetch_bible(owner_id, book_id)
+        known_chars = [c.get("name", "") for c in (bible or {}).get("characters", []) if c.get("name")]
+
+        summary = await self._summarizer.summarize_chapter(
+            chapter_no=int(chapter_data["chapterNo"]),
+            chapter_title=str(chapter_data["title"]),
+            chapter_content=str(chapter_data["content"]),
+            known_characters=known_chars,
+        )
+        save_resp = await self._save_chapter_summary(
+            book_id=book_id,
+            payload={
+                "chapterId": chapter_id,
+                "chapterNo": int(chapter_data["chapterNo"]),
+                "chapterTitle": str(chapter_data["title"]),
+                "contentHash": content_hash,
+                **summary,
+            },
+        )
+
+        book_summaries: dict[str, Any] | None = None
+        if save_resp.get("refreshVolumeSummary") or save_resp.get("refreshAutoCharter"):
+            book_summaries = await self._fetch_book_summaries(book_id)
+
+        if save_resp.get("refreshVolumeSummary") and book_summaries is not None:
+            vol_no = int(save_resp.get("volumeNo", 1))
+            start_no = int(save_resp.get("volumeStartChapterNo", 1))
+            end_no = int(save_resp.get("volumeEndChapterNo", start_no + 9))
+            vol_chapters = [
+                c
+                for c in book_summaries.get("chapterSummaries", [])
+                if start_no <= int(c.get("chapterNo", 0)) <= end_no
+            ]
+            if vol_chapters:
+                vol_text, src_hash = await self._summarizer.summarize_volume(
+                    volume_no=vol_no,
+                    start_chapter_no=start_no,
+                    end_chapter_no=end_no,
+                    chapter_summaries=vol_chapters,
+                )
+                await self._save_volume_summary(
+                    book_id=book_id,
+                    payload={
+                        "volumeNo": vol_no,
+                        "startChapterNo": start_no,
+                        "endChapterNo": end_no,
+                        "summaryText": vol_text,
+                        "sourceHash": src_hash,
+                    },
+                )
+
+        if save_resp.get("refreshAutoCharter") and book_summaries is not None:
+            charter_text = await self._summarizer.infer_story_charter(
+                book_title=str(book_summaries.get("bookTitle") or ""),
+                genre=book_summaries.get("genre"),
+                existing_synopsis=book_summaries.get("synopsis"),
+                chapter_summaries=book_summaries.get("chapterSummaries", []),
+                known_characters=known_chars,
+            )
+            await self._save_auto_charter(
+                book_id=book_id,
+                auto_charter=charter_text,
+                chapter_count=int(save_resp.get("totalSummariesCount", 1)),
+            )
+
+        logger.info("Processed hierarchical summary for book %s ch.%s: %s", book_id, chapter_data["chapterNo"], save_resp)
+        return save_resp
 
     # --- Internal HTTP & MinIO Helpers ---
 
@@ -437,3 +543,33 @@ class RagIngestionWorker:
             resp = await client.post(url, headers=self._internal_headers(owner_id), json=extracted)
             resp.raise_for_status()
             return resp.json()
+
+    async def _fetch_book_summaries(self, book_id: str) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/summaries"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=self._internal_headers())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _save_chapter_summary(self, *, book_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/summaries/chapter"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, headers=self._internal_headers(), json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _save_volume_summary(self, *, book_id: str, payload: dict[str, Any]) -> None:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/summaries/volume"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, headers=self._internal_headers(), json=payload)
+            resp.raise_for_status()
+
+    async def _save_auto_charter(self, *, book_id: str, auto_charter: str, chapter_count: int) -> None:
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/charter/auto"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url,
+                headers=self._internal_headers(),
+                json={"autoCharter": auto_charter, "chapterCount": chapter_count},
+            )
+            resp.raise_for_status()

@@ -159,6 +159,18 @@ export default function BookshelfPage() {
                 {user.username} ({user.email})
               </span>
             )}
+            <Link
+              href="/library"
+              className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
+            >
+              我的资料库
+            </Link>
+            <Link
+              href="/vip"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
+            >
+              会员权益
+            </Link>
             {user?.role === "ADMIN" && (
               <Link
                 href="/billing"

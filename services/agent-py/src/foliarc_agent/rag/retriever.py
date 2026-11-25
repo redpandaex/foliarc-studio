@@ -10,6 +10,13 @@ from foliarc_agent.config import Settings
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankCandidate, RerankProvider
 from foliarc_agent.rag.vector_store import VectorSearchHit, VectorStore
 
+SCOPE_WEIGHTS: dict[str, float] = {
+    "BOOK": 1.25,
+    "USER": 1.10,
+    "ASSIGNED": 1.05,
+    "GLOBAL": 1.00,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievedPassage:
@@ -22,6 +29,7 @@ class RetrievedPassage:
     score: float
     matched_snippet: str
     parent_context: str
+    scope: str = "BOOK"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,6 +42,7 @@ class RetrievedPassage:
             "score": self.score,
             "matched_snippet": self.matched_snippet,
             "parent_context": self.parent_context,
+            "scope": self.scope,
         }
 
 
@@ -70,7 +79,17 @@ class HybridRagRetriever:
         doc_type: str | None = None,
         rewrite_query: bool = False,
         chapter_context: str = "",
+        user_doc_ids: list[str] | None = None,
+        assigned_doc_ids: list[str] | None = None,
+        global_doc_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        # Resolve authorized USER / ASSIGNED / GLOBAL doc allowlists from biz-java if not pre-supplied
+        if user_doc_ids is None and assigned_doc_ids is None and global_doc_ids is None:
+            resolved = await self._load_accessible_docs(owner_id, book_id)
+            user_doc_ids = resolved["user_doc_ids"]
+            assigned_doc_ids = resolved["assigned_doc_ids"]
+            global_doc_ids = resolved["global_doc_ids"]
+
         queries = [query.strip()]
         if rewrite_query and query.strip():
             rewritten = await self._transform_query(query.strip(), chapter_context)
@@ -91,6 +110,9 @@ class HybridRagRetriever:
                 top_k=fetch_k,
                 max_chapter_no=max_chapter_no,
                 doc_type=doc_type,
+                user_doc_ids=user_doc_ids,
+                assigned_doc_ids=assigned_doc_ids,
+                global_doc_ids=global_doc_ids,
             )
             for rank, hit in enumerate(sub_hits, start=1):
                 key = hit.parent_chunk_id or hit.chunk_id
@@ -135,22 +157,31 @@ class HybridRagRetriever:
             )
             meta_by_key[key] = (hit, parent_row)
 
-        ranked_ids = await self._reranker.rerank(query, candidates, top_k=top_k)
-        passages: list[dict[str, Any]] = []
-        for item_id, final_score in ranked_ids:
+        ranked_ids = await self._reranker.rerank(query, candidates, top_k=max(top_k * 2, top_k))
+        weighted_passages: list[RetrievedPassage] = []
+        for item_id, base_rerank_score in ranked_ids:
             hit, parent_row = meta_by_key[item_id]
-            passage = RetrievedPassage(
-                parent_chunk_id=hit.parent_chunk_id or hit.chunk_id,
-                document_id=hit.document_id,
-                document_title=(parent_row or {}).get("documentTitle") or hit.scene_title or "知识库文档",
-                doc_type=(parent_row or {}).get("docType") or hit.doc_type,
-                chapter_no=int((parent_row or {}).get("chapterNo", hit.chapter_no)),
-                scene_title=(parent_row or {}).get("sceneTitle") or hit.scene_title,
-                score=final_score,
-                matched_snippet=hit.content[:280],
-                parent_context=(parent_row or {}).get("content") or hit.content,
+            effective_scope = str((parent_row or {}).get("scope") or hit.scope or "BOOK").upper()
+            weight = SCOPE_WEIGHTS.get(effective_scope, 1.0)
+            weighted_score = round(float(base_rerank_score) * weight, 5)
+            weighted_passages.append(
+                RetrievedPassage(
+                    parent_chunk_id=hit.parent_chunk_id or hit.chunk_id,
+                    document_id=hit.document_id,
+                    document_title=(parent_row or {}).get("documentTitle") or hit.scene_title or "知识库文档",
+                    doc_type=(parent_row or {}).get("docType") or hit.doc_type,
+                    chapter_no=int((parent_row or {}).get("chapterNo", hit.chapter_no)),
+                    scene_title=(parent_row or {}).get("sceneTitle") or hit.scene_title,
+                    score=weighted_score,
+                    matched_snippet=hit.content[:280],
+                    parent_context=(parent_row or {}).get("content") or hit.content,
+                    scope=effective_scope,
+                )
             )
-            passages.append(passage.to_dict())
+
+        # Enforce precedence ordering: BOOK > USER > ASSIGNED > GLOBAL weighted score
+        weighted_passages.sort(key=lambda p: p.score, reverse=True)
+        passages = [p.to_dict() for p in weighted_passages[:top_k]]
 
         return {
             "query": query,
@@ -160,6 +191,29 @@ class HybridRagRetriever:
             "rerank_mode": self._reranker.mode,
             "hits": passages,
         }
+
+    async def _load_accessible_docs(self, owner_id: str, book_id: str) -> dict[str, list[str]]:
+        empty: dict[str, list[str]] = {"user_doc_ids": [], "assigned_doc_ids": [], "global_doc_ids": []}
+        if not owner_id or not book_id:
+            return empty
+        url = f"{self._settings.biz_java_base_url.rstrip('/')}/internal/v1/rag/books/{book_id}/accessible-docs"
+        headers = {
+            "X-Internal-Token": self._settings.internal_service_token,
+            "X-Owner-Id": owner_id,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code != 200:
+                    return empty
+                data = resp.json()
+                return {
+                    "user_doc_ids": [str(x) for x in (data.get("userDocIds") or [])],
+                    "assigned_doc_ids": [str(x) for x in (data.get("assignedDocIds") or [])],
+                    "global_doc_ids": [str(x) for x in (data.get("globalDocIds") or [])],
+                }
+        except (httpx.HTTPError, KeyError, ValueError):
+            return empty
 
     async def _load_parents_from_pg(
         self,

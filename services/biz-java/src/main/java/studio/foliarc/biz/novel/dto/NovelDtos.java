@@ -141,4 +141,20 @@ public final class NovelDtos {
             OffsetDateTime createdAt
     ) {
     }
+
+    public record BookCharterResponse(
+            UUID bookId,
+            String authorCharter,
+            String autoCharter,
+            String charterSource,
+            int charterChapterCount,
+            String effectiveCharter
+    ) {
+    }
+
+    public record UpdateBookCharterRequest(
+            @Size(max = 4000, message = "故事档案最多 4000 个字符")
+            String charter
+    ) {
+    }
 }

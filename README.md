@@ -2,7 +2,7 @@
 
 > 企业级长篇小说创作 AI Agent 平台 — **Next.js + Java 21 Spring Boot + Python FastAPI** 三端解耦 Monorepo，采用 **PostgreSQL 16 + Milvus Standalone + Redis 7 + MinIO** 存算分离架构。
 
-完整学习清单、系统架构图与 7 阶段垂直切片路线图见 👉 [docs/ROADMAP.md](./docs/ROADMAP.md)。
+完整学习清单、系统架构图与垂直切片路线图见 👉 [docs/ROADMAP.md](./docs/ROADMAP.md)，万章级跨体裁演进架构设计见 👉 [docs/architecture/00-ARCHITECTURE-OVERVIEW.md](./docs/architecture/00-ARCHITECTURE-OVERVIEW.md)，独立运营后台与 Java 多模块拆分方案见 👉 [docs/architecture/06-ADMIN-SYSTEM-SEPARATION.md](./docs/architecture/06-ADMIN-SYSTEM-SEPARATION.md)。
 
 ---
 

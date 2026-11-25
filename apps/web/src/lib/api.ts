@@ -25,6 +25,98 @@ export interface BookItem {
   updatedAt: string | null;
 }
 
+export interface BookCharterItem {
+  bookId: string;
+  authorCharter: string | null;
+  autoCharter: string | null;
+  charterSource: "NONE" | "AUTO_INFERRED" | "AUTHOR_DEFINED" | string;
+  charterChapterCount: number;
+  effectiveCharter: string;
+}
+
+export interface LibraryDocumentItem {
+  id: string;
+  bookId: string | null;
+  scope: "BOOK" | "USER" | "GLOBAL" | string;
+  accessType: "USER" | "ASSIGNED" | "GLOBAL" | string;
+  docType: KnowledgeDocType;
+  title: string;
+  fileName: string;
+  fileSize: number;
+  genreTags: string;
+  readonly: boolean;
+  enabled: boolean;
+  boundToBook: boolean;
+  status: "QUEUED" | "PARSING" | "CHUNKING" | "EMBEDDING" | "READY" | "FAILED" | "DELETED";
+  progress: number;
+  chunkCount: number;
+  errorMessage: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface VipEntitlements {
+  rippleMaxRangeChapters: number;
+  rippleAllowFullBook: boolean;
+  rippleMaxCandidates: number;
+  rippleMaxPatchChapters: number;
+  rippleDailyScanLimit: number;
+  maxMemoryChapters: number;
+  maxSectionChars: number;
+  maxStyleAnchors: number;
+  maxForeshadowings: number;
+  userLibraryMaxDocs: number;
+  userLibraryMaxTotalBytes: number;
+  rpmLimit: number;
+  tpmLimit: number;
+  priorityQueue: boolean;
+}
+
+export interface VipPlanItem {
+  planCode: "FREE" | "VIP" | "SVIP" | "STUDIO" | string;
+  displayName: string;
+  monthlyPriceCents: number;
+  monthlyPriceCredits: number;
+  monthlyGrantMicros: number;
+  monthlyGrantCredits: number;
+  creditDiscountBps: number;
+  entitlements: VipEntitlements;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface LibraryQuotaUsage {
+  usedDocs: number;
+  maxDocs: number;
+  usedBytes: number;
+  maxTotalBytes: number;
+}
+
+export interface MyVipStatus {
+  planCode: "FREE" | "VIP" | "SVIP" | "STUDIO" | string;
+  displayName: string;
+  status: string;
+  startedAt: string | null;
+  expiresAt: string | null;
+  creditDiscountBps: number;
+  balanceCredits: number;
+  rippleScansUsedToday: number;
+  rippleDailyScanLimit: number;
+  libraryUsage: LibraryQuotaUsage;
+  entitlements: VipEntitlements;
+}
+
+export interface SubscribeVipResult {
+  orderId: string;
+  planCode: string;
+  displayName: string;
+  durationDays: number;
+  chargedCredits: number;
+  grantedBonusCredits: number;
+  expiresAt: string | null;
+  idempotentReplay: boolean;
+}
+
 export interface ChapterSummary {
   id: string;
   bookId: string;
@@ -468,6 +560,82 @@ export const booksApi = {
   },
   remove(bookId: string): Promise<void> {
     return request<void>(`/api/v1/books/${bookId}`, { method: "DELETE" });
+  },
+  getCharter(bookId: string): Promise<BookCharterItem> {
+    return request<BookCharterItem>(`/api/v1/books/${bookId}/charter`);
+  },
+  updateCharter(bookId: string, charter: string): Promise<BookCharterItem> {
+    return request<BookCharterItem>(`/api/v1/books/${bookId}/charter`, {
+      method: "PUT",
+      body: JSON.stringify({ charter }),
+    });
+  },
+};
+
+export const libraryApi = {
+  list(bookId?: string): Promise<LibraryDocumentItem[]> {
+    const query = bookId ? `?bookId=${encodeURIComponent(bookId)}` : "";
+    return request<LibraryDocumentItem[]>(`/api/v1/library/documents${query}`);
+  },
+  upload(payload: {
+    file: File;
+    docType?: KnowledgeDocType;
+    title?: string;
+    genreTags?: string;
+  }): Promise<LibraryDocumentItem> {
+    const form = new FormData();
+    form.append("file", payload.file);
+    const params = new URLSearchParams();
+    if (payload.docType) params.set("docType", payload.docType);
+    if (payload.title?.trim()) params.set("title", payload.title.trim());
+    if (payload.genreTags?.trim()) params.set("genreTags", payload.genreTags.trim());
+    return request<LibraryDocumentItem>(
+      `/api/v1/library/documents?${params.toString()}`,
+      { method: "POST", body: form },
+    );
+  },
+  remove(docId: string): Promise<void> {
+    return request<void>(`/api/v1/library/documents/${docId}`, {
+      method: "DELETE",
+    });
+  },
+  setBookBinding(
+    bookId: string,
+    docId: string,
+    enabled: boolean,
+  ): Promise<LibraryDocumentItem> {
+    return request<LibraryDocumentItem>(
+      `/api/v1/books/${bookId}/library/${docId}/binding`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      },
+    );
+  },
+};
+
+export const vipApi = {
+  listPlans(): Promise<VipPlanItem[]> {
+    return request<VipPlanItem[]>("/api/v1/vip/plans", {}, false);
+  },
+  me(): Promise<MyVipStatus> {
+    return request<MyVipStatus>("/api/v1/vip/me");
+  },
+  subscribe(payload: {
+    planCode: string;
+    months?: number;
+    paymentChannel?: string;
+    idempotencyKey?: string;
+  }): Promise<SubscribeVipResult> {
+    return request<SubscribeVipResult>("/api/v1/vip/subscribe", {
+      method: "POST",
+      body: JSON.stringify({
+        planCode: payload.planCode,
+        months: payload.months ?? 1,
+        paymentChannel: payload.paymentChannel ?? "CREDITS",
+        idempotencyKey: payload.idempotencyKey,
+      }),
+    });
   },
 };
 

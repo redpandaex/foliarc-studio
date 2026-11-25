@@ -18,6 +18,7 @@ public class DocumentChunkEntity {
     private UUID documentId;
     private UUID bookId;
     private UUID ownerId;
+    private String scope;
     private Integer docVersion;
     private String chunkLevel;
     private UUID parentChunkId;
@@ -39,6 +40,8 @@ public class DocumentChunkEntity {
     public void setBookId(UUID bookId) { this.bookId = bookId; }
     public UUID getOwnerId() { return ownerId; }
     public void setOwnerId(UUID ownerId) { this.ownerId = ownerId; }
+    public String getScope() { return scope; }
+    public void setScope(String scope) { this.scope = scope; }
     public Integer getDocVersion() { return docVersion; }
     public void setDocVersion(Integer docVersion) { this.docVersion = docVersion; }
     public String getChunkLevel() { return chunkLevel; }

@@ -40,9 +40,12 @@ class EditorialBlackboard(BaseModel):
     book_title: str = ""
     genre: str | None = None
     synopsis: str | None = None
+    story_charter: str = ""
     chapter_title: str = ""
     chapter_context: str = ""
     previous_chapters_context: str = ""
+    rolling_summary_context: str = ""
+    active_state_brief: str = ""
     director_lore_brief: str = ""
     instruction: str = ""
     requested_model_alias: str = "writer-main"
@@ -789,16 +792,26 @@ class EditorialTeamOrchestrator:
                         "document_title": h.get("document_title", ""),
                         "scene_title": h.get("scene_title", ""),
                         "chapter_no": h.get("chapter_no", 0),
+                        "scope": h.get("scope", "BOOK"),
                         "score": h.get("score", 0.0),
                     }
                     for h in hits
                 ]
                 if hits:
+                    scope_labels = {
+                        "BOOK": "本书",
+                        "USER": "作者私库",
+                        "ASSIGNED": "定向资料",
+                        "GLOBAL": "公共参考",
+                    }
                     rag_lines = [
-                        f"- [{h.get('document_title')} · Ch.{h.get('chapter_no', 0)}] {h.get('parent_context', '')[:450]}"
+                        f"- [{scope_labels.get(str(h.get('scope', 'BOOK')).upper(), '本书')} · {h.get('document_title')} · Ch.{h.get('chapter_no', 0)}] {h.get('parent_context', '')[:450]}"
                         for h in hits
                     ]
-                    brief_parts.append("【Milvus 混合检索参考（已防剧透）】\n" + "\n".join(rag_lines))
+                    brief_parts.append(
+                        "【多作用域混合检索参考（冲突优先级：本书 > 作者私库 > 定向资料 > 公共参考）】\n"
+                        + "\n".join(rag_lines)
+                    )
                 await emit(
                     "tool_result",
                     {
@@ -904,15 +917,21 @@ class EditorialTeamOrchestrator:
         user_parts = [f"作品：《{state.book_title}》"]
         if state.genre:
             user_parts.append(f"题材：{state.genre}")
-        if state.synopsis:
+        if state.story_charter.strip():
+            user_parts.append(f"【作品故事宪章（L0 静态底座）】\n{state.story_charter.strip()[:1200]}")
+        elif state.synopsis:
             user_parts.append(f"简介：{state.synopsis}")
         if state.chapter_no or state.chapter_title:
             user_parts.append(f"目标章节：第 {state.chapter_no or '?'} 章 {state.chapter_title}")
-        if state.director_lore_brief.strip():
+        if state.rolling_summary_context.strip():
+            user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:2400]}")
+        if state.active_state_brief.strip():
+            user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1500]}")
+        elif state.director_lore_brief.strip():
             user_parts.append(f"【作品核心设定与伏笔】\n{state.director_lore_brief.strip()}")
         if state.previous_chapters_context.strip():
             user_parts.append(
-                f"【前文章节承接（必须紧密衔接上一章结尾，严禁脱节）】\n{state.previous_chapters_context.strip()[-4200:]}"
+                f"【前文章节承接（L1 热窗口，必须紧密衔接上一章结尾，严禁脱节）】\n{state.previous_chapters_context.strip()[-2800:]}"
             )
         if state.chapter_context.strip():
             user_parts.append(f"【当前章节已有正文尾部】\n{state.chapter_context[-2500:]}")
@@ -932,20 +951,30 @@ class EditorialTeamOrchestrator:
             "你是 FoliarcStudio 编辑部的【Writer 执笔作家】。",
             "请严格按照总编拟定并经作者批准的【章节大纲】、【前文章节承接】与设定管家提供的【设定核验简报】撰写高质量中文小说正文。",
             "跨章连贯铁律：必须紧接上一章的结尾场景、时间线、人物状态、对话余韵与未解悬念自然展开，禁止另起炉灶、凭空切换无关场景或重复介绍前文已交代的背景。",
+            "参考资料冲突优先级：本书已写正文与本书设定（BOOK） > 作者个人资料库（USER） > 平台定向资料（ASSIGNED） > 平台公共资料（GLOBAL）。发生冲突时一律以本书原创设定为准。",
             "严禁出现人设 OOC、战力境界矛盾、时间线错乱或“吃书”现象；直接输出小说正文，不要输出任何大纲标题或元说明。",
         ]
         if state.book_title:
             static_prefix.append(f"当前作品：《{state.book_title}》（{state.genre or '长篇小说'}）")
+        # L0 Static Charter pinned in immutable System Prefix to maximize KV Cache hits
+        if state.story_charter.strip():
+            static_prefix.append(f"【作品故事宪章（L0 静态底座）】\n{state.story_charter.strip()[:1200]}")
+        elif state.synopsis:
+            static_prefix.append(f"【故事简介】\n{state.synopsis}")
         if skill_body:
             static_prefix.append(f"【已挂载专项写作技能规范】\n{skill_body[:2500]}")
 
         user_parts = [
             f"【作者批准的章节节拍大纲】\n{state.outline_text}",
-            f"【设定管家核验简报（强约束）】\n{state.lore_brief[:3500]}",
+            f"【设定管家核验简报（L4 强约束）】\n{state.lore_brief[:3000]}",
         ]
+        if state.rolling_summary_context.strip():
+            user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:2400]}")
+        if state.active_state_brief.strip():
+            user_parts.append(f"【当前活跃人物状态与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1500]}")
         if state.previous_chapters_context.strip():
             user_parts.append(
-                f"【上一章及前文衔接（必须紧接其结尾展开，严禁割裂）】\n{state.previous_chapters_context.strip()[-3800:]}"
+                f"【上一章及前文衔接（L1 热窗口，必须紧接其结尾展开，严禁割裂）】\n{state.previous_chapters_context.strip()[-2800:]}"
             )
         if state.chapter_context.strip():
             user_parts.append(f"【当前章节已有正文尾部】\n{state.chapter_context[-2000:]}")
@@ -968,7 +997,7 @@ class EditorialTeamOrchestrator:
     def _build_critic_messages(state: EditorialBlackboard) -> list[dict[str, str]]:
         sys_prompt = (
             "你是 FoliarcStudio 编辑部的【ContinuityCritic 审稿与一致性审查编辑】。\n"
-            "请对照【批准大纲】、【上一章结尾参考】与【设定核验简报】，严格审阅【执笔作家草稿】是否存在：\n"
+            "请对照【批准大纲】、【作品故事宪章】、【当前活跃状态】、【上一章结尾参考】与【设定核验简报】，严格审阅【执笔作家草稿】是否存在：\n"
             "1. 人物 OOC（性格/称谓/立场崩塌）\n"
             "2. 战力境界、持有物品或地点时间线矛盾（吃书）\n"
             "3. 遗漏大纲核心节拍或文风质量明显不足\n"
@@ -979,6 +1008,10 @@ class EditorialTeamOrchestrator:
         user_sections = [
             f"【批准大纲】\n{state.outline_text[:1500]}",
         ]
+        if state.story_charter.strip():
+            user_sections.append(f"【作品故事宪章】\n{state.story_charter.strip()[:800]}")
+        if state.active_state_brief.strip():
+            user_sections.append(f"【当前活跃状态与伏笔】\n{state.active_state_brief.strip()[:1200]}")
         if state.previous_chapters_context.strip():
             user_sections.append(f"【上一章结尾参考】\n{state.previous_chapters_context.strip()[-1800:]}")
         user_sections.append(f"【设定核验简报】\n{state.lore_brief[:2500]}")

@@ -61,6 +61,9 @@ def build_novel_messages(
     instruction: str,
     accumulated_text: str = "",
     previous_chapters_context: str = "",
+    story_charter: str = "",
+    rolling_summary_context: str = "",
+    active_state_brief: str = "",
 ) -> list[dict[str, str]]:
     action_guides = {
         "CONTINUE": (
@@ -86,15 +89,21 @@ def build_novel_messages(
         system_parts.append(f"当前作品：《{book_title}》")
     if genre:
         system_parts.append(f"题材风格：{genre}")
-    if synopsis:
+    if story_charter.strip():
+        system_parts.append(f"【作品故事宪章（L0 静态底座）】\n{story_charter.strip()[:1200]}")
+    elif synopsis:
         system_parts.append(f"故事简介：{synopsis}")
 
     user_parts = []
     if chapter_title:
         user_parts.append(f"当前章节：{chapter_title}")
+    if rolling_summary_context.strip():
+        user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{rolling_summary_context.strip()[:2600]}")
+    if active_state_brief.strip():
+        user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{active_state_brief.strip()[:1600]}")
     if previous_chapters_context.strip():
         user_parts.append(
-            f"【前文章节承接（必须紧密衔接上一章结尾，严禁割裂或重启剧情）】\n{previous_chapters_context.strip()[-4500:]}"
+            f"【前文章节承接（L1 热窗口，必须紧密衔接上一章结尾，严禁割裂或重启剧情）】\n{previous_chapters_context.strip()[-2800:]}"
         )
     if chapter_context.strip():
         tail_context = chapter_context[-4000:]
