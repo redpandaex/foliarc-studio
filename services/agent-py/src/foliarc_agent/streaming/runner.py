@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
 from redis.asyncio import Redis
@@ -53,12 +54,51 @@ def control_key(run_id: str) -> str:
     return f"foliarc:run:{run_id}:ctrl"
 
 
+PERSISTED_TRACE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "run_started",
+        "route_decision",
+        "agent_handoff",
+        "tool_call",
+        "tool_result",
+        "critic_review",
+        "draft_reset",
+        "interrupt",
+        "guardrail_block",
+        "usage",
+        "error",
+        "done",
+    }
+)
+
+_SENSITIVE_KEY_TOKENS = ("secret", "token", "password", "api_key", "apikey", "authorization")
+
+
+def redact_trace_payload(value: Any, *, max_str: int = 800) -> Any:
+    """Recursively redacts secret keys and caps oversized strings before persisting run trace events."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            key_str = str(k)
+            low = key_str.lower()
+            if any(tok in low for tok in _SENSITIVE_KEY_TOKENS) and not low.endswith("_tokens"):
+                out[key_str] = "***REDACTED***"
+            else:
+                out[key_str] = redact_trace_payload(v, max_str=max_str)
+        return out
+    if isinstance(value, list):
+        return [redact_trace_payload(item, max_str=max_str) for item in value[:25]]
+    if isinstance(value, str) and len(value) > max_str:
+        return value[:max_str] + "…"
+    return value
+
+
 class StateReporter(Protocol):
     async def report(self, run_id: str, state: RunStateCallback) -> None: ...
 
 
 class HttpBizStateReporter:
-    """Reports run checkpoints and terminal statuses back to biz-java."""
+    """Reports run checkpoints, terminal statuses, and structured trace events back to biz-java."""
 
     def __init__(self, settings: Settings) -> None:
         self._base_url = settings.biz_java_base_url.rstrip("/")
@@ -79,6 +119,19 @@ class HttpBizStateReporter:
                     )
         except httpx.HTTPError as exc:
             logger.warning("Could not reach biz-java state callback for %s: %s", run_id, exc)
+
+    async def report_events(self, run_id: str, events: list[dict[str, Any]]) -> None:
+        if not events:
+            return
+        url = f"{self._base_url}/internal/v1/runs/{run_id}/events"
+        headers = {"X-Internal-Token": self._token}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, headers=headers, json={"events": events})
+                if resp.status_code >= 400:
+                    logger.warning("Failed to persist trace events for %s: HTTP %s", run_id, resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("Could not persist trace events for %s: %s", run_id, exc)
 
 
 @dataclass
@@ -313,6 +366,8 @@ class RunManager:
         approval_payload: dict[str, Any] | None = None,
     ) -> None:
         seq = start_seq
+        effective_trace_id = (trace_id or "").strip() or uuid4().hex
+        trace_events: list[dict[str, Any]] = []
         last_event_id: str | None = None
         full_text = accumulated_text
         seg_input = 0
@@ -329,12 +384,24 @@ class RunManager:
             seq += 1
             last_event_id = await self._emit(
                 run_id=run_id,
-                trace_id=trace_id,
+                trace_id=effective_trace_id,
                 seq=seq,
                 event_type=event_type,
                 payload=payload,
                 agent=agent,
             )
+            if event_type in PERSISTED_TRACE_EVENT_TYPES:
+                safe_payload = redact_trace_payload(payload)
+                trace_events.append(
+                    {
+                        "seq": seq,
+                        "event_type": event_type,
+                        "agent_name": agent,
+                        "trace_id": effective_trace_id,
+                        "latency_ms": int(payload.get("latency_ms") or 0) if isinstance(payload, dict) else 0,
+                        "payload_json": json.dumps(safe_payload, ensure_ascii=False),
+                    }
+                )
             return last_event_id
 
         try:
@@ -815,6 +882,11 @@ class RunManager:
                 out_tok=prior_output_tokens + seg_output,
             )
         finally:
+            if trace_events:
+                report_events_fn = getattr(self._reporter, "report_events", None)
+                if callable(report_events_fn):
+                    with contextlib.suppress(Exception):
+                        await report_events_fn(run_id, trace_events)
             if self._active.get(run_id) is active:
                 self._active.pop(run_id, None)
 

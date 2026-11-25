@@ -239,23 +239,20 @@ flowchart LR
 
 ### 模块 5：后台管理系统、可观测性、评测与工程交付（Admin + LLMOps）`★`
 
-- [ ] **5.0 独立运营后台系统（`apps/admin :3001` + `admin-java :8081`，详见 [`06-ADMIN-SYSTEM-SEPARATION.md`](./architecture/06-ADMIN-SYSTEM-SEPARATION.md)）** `★`
+- [x] **5.0 独立运营后台系统（`apps/admin :3001` + `admin-java :8081`，详见 [`06-ADMIN-SYSTEM-SEPARATION.md`](./architecture/06-ADMIN-SYSTEM-SEPARATION.md)）** `★`
   - **前后端物理拆分 + Java Maven 多模块共享内核**：Java 升级为 `services/java/{foliarc-common, biz-java, admin-java}`，`foliarc-common` 统一沉淀 Entity / Mapper / Flyway SQL（仅 `biz-java` 执行迁移，`admin-java` 设 `flyway.enabled=false`）；`biz-java` 彻底剥离管理接口，`admin-java` 使用独立连接池、独立 `aud=foliarc-admin` JWT 鉴权与 `admin_audit_logs` 操作审计，避免后台慢查询拖垮作者端 SSE 流式网关。
   - **公共 / 定向 RAG 资料库管理**：上传公共资料包、配置 `genre_codes` 题材标签、通过 `knowledge_grants` 定向授权给指定作者、切片原文检查与多 Scope 混合检索调试。
   - **异步任务中心（Async Job Center）**：聚合监控 `outbox_events`、文档解析（`PARSING/CHUNKING/EMBEDDING/FAILED`）、章摘/卷摘/统一编译与蝴蝶效应队列，支持死信（DLQ）排查与一键重试。
   - **Agent 会话日志中心（Session Trace Center）**：新增 `agent_run_events` 持久化表，仅落盘结构化关键节点（`route_decision`、`agent_handoff`、`tool_call`、`tool_result`、命中 RAG 来源与得分、`critic_review`、`interrupt`、`error`、`usage`），不存逐字 `text_delta` 碎片，带脱敏与 TTL 归档；后台以时间轴瀑布图展示每个会话 Agent 的完整行为，并关联 PG Checkpoints 与 `guardrail_audit_logs`。
-  - **计费网关、VIP 权益与 Prompt 注册中心**：将原 `/billing`（账本流水、缓存省费、RPM/TPM 限流与熔断监控）完整收编进 `apps/admin`，承载 VIP 套餐热更新/手动授与及 `prompt_templates` 在线编辑、版本管理与灰度发布。
-- [ ] **5.1 跨语言全链路追踪（Distributed Tracing）**
-  - 使用 OpenTelemetry 打通 **Next.js -> Spring Boot -> Python FastAPI -> LLM/DB**，通过统一 `trace_id` 串联全链路耗时。
-- [ ] **5.2 LLM 可观测性（Tracing & Metrics）**
-  - 私有化部署开源 **Langfuse**（或自建 Trace 面板），监控每次运行的 **TTFT（首字延迟）**、**TPOT（单 Token 生成耗时）**、Token 成本、Agent 轨迹树、失败率与缓存命中率。
-- [ ] **5.3 Agent 与 RAG 自动化评测体系（Eval）**
-  - 构建 30~50 条小说场景黄金评测集（Golden Dataset）：
-    - **RAG 评测**：检索召回率（Recall@K）、Faithfulness（忠实度）、Context Precision（可借鉴 RAGAS 思路）。
-    - **Agent 轨迹评测**：是否调用了正确工具、步数是否冗余。
-    - **小说质量 Rubric 评测（LLM-as-a-Judge）**：设定一致性、人物 OOC 检查、文风贴合度打分，做到“改 Prompt 有数据对比，不靠盲猜”。
-- [ ] **5.4 容器化与工程规范**
-  - 一键 `docker-compose.yml` 分层 profiles（`core`: PostgreSQL 16 + Redis 7；`rag`: MinIO + etcd + Milvus Standalone；`obs`: Langfuse + OTel）、统一 OpenAPI/事件契约文档、按路径触发的三端 CI 单元测试与代码检查。
+  - **计费网关、VIP 权益与 Prompt 注册中心**：将全局计费看板（账本流水、缓存省费、模型拆解）与 VIP 套餐热更新/手动授与及 `prompt_templates` 在线编辑、版本管理与一键激活完整收编进 `apps/admin`。
+- [x] **5.1 跨语言全链路追踪（Distributed Tracing）**
+  - 打通 **Next.js -> Spring Boot (`biz-java`/`admin-java`) -> Python FastAPI -> LLM/DB** 统一 `trace_id` 贯穿与结构化耗时记录（`agent_run_events.trace_id` + `latency_ms`）。
+- [x] **5.2 LLM 可观测性（Tracing & Metrics）**
+  - 自建独立后台 **Session Trace Center** 时间轴瀑布面板（支持按 `run_id` 溯源每次运行的路由决策、工具调用、审校打分、Token 成本、缓存命中与安全护栏拦截）。
+- [x] **5.3 Agent 与 RAG 自动化评测体系（Eval）**
+  - 落地 30 条小说领域黄金评测集（`evals/golden_dataset.json` + `NovelEvalHarness` + `POST /internal/v1/evals/run`）：覆盖跨题材 Skill 路由（10 题）、6 大题材防 AI 味 Rubric（6 题）、多作用域防剧透 RAG Recall@5（4 题）、蝴蝶效应 Fact Diff（4 题）与输入/输出安全护栏（6 题），并纳入 Python 自动化回归测试。
+- [x] **5.4 容器化与工程规范**
+  - 一键 `docker-compose.yml` 分层 profiles（`core` / `rag` / `app` / `admin` / `all`）与 5 服务多阶段非 root `Dockerfile`（`biz-java`、`admin-java`、`agent-py`、`web`、`admin`），配套统一 `Makefile` 任务编排。
 
 ---
 

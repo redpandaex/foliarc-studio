@@ -1,0 +1,63 @@
+spring:
+  application:
+    name: admin-java
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:foliarc}
+    username: ${POSTGRES_USER:foliarc}
+    password: ${POSTGRES_PASSWORD:foliarc_dev_password}
+    hikari:
+      maximum-pool-size: 6
+      connection-init-sql: SET statement_timeout TO '10s'
+  flyway:
+    enabled: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  rabbitmq:
+    dynamic: false
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+mybatis-plus:
+  type-handlers-package: studio.foliarc.biz.config.mybatis
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+server:
+  port: ${ADMIN_JAVA_PORT:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    rabbit:
+      enabled: false
+
+foliarc:
+  agent:
+    base-url: ${AGENT_PY_BASE_URL:http://localhost:8000}
+    internal-token: ${INTERNAL_SERVICE_TOKEN:foliarc-internal-dev-token-change-me}
+  cors:
+    allowed-origins: ${ADMIN_CORS_ALLOWED_ORIGINS:http://localhost:3001}
+  jwt:
+    secret: ${JWT_SECRET:foliarc-dev-jwt-secret-change-me-at-least-32-chars}
+    admin-secret: ${ADMIN_JWT_SECRET:}
+    issuer: foliarc-studio
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ROOT_USER:minioadmin}
+    secret-key: ${MINIO_ROOT_PASSWORD:minioadmin}
+    bucket-docs: ${MINIO_BUCKET_DOCS:foliarc-docs}
+  outbox:
+    enabled: false
+  billing:
+    starter-grant-micros: ${BILLING_STARTER_GRANT_MICROS:50000000}
+    default-monthly-budget-micros: ${BILLING_DEFAULT_MONTHLY_BUDGET_MICROS:100000000}

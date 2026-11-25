@@ -11,6 +11,7 @@ from redis.exceptions import RedisError
 from foliarc_agent.agent.guardrails import GuardrailEngine
 from foliarc_agent.agent.sandbox import create_sandbox_provider
 from foliarc_agent.config import get_settings
+from foliarc_agent.evals import NovelEvalHarness
 from foliarc_agent.rag.distiller import ChapterDistiller
 from foliarc_agent.rag.embeddings import EmbeddingProvider, RerankProvider
 from foliarc_agent.rag.memory_extractor import StructuredMemoryExtractor
@@ -249,6 +250,16 @@ async def internal_rag_search(req: InternalRagSearchRequest) -> dict[str, Any]:
         assigned_doc_ids=req.assigned_doc_ids,
         global_doc_ids=req.global_doc_ids,
     )
+
+
+@app.post(
+    "/internal/v1/evals/run",
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_run_evals() -> dict[str, Any]:
+    harness = NovelEvalHarness(get_settings())
+    report = await harness.run_all()
+    return report.to_dict()
 
 
 @app.post(

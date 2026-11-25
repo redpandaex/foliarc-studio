@@ -18,18 +18,20 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Node / Next.js (apps/web)
-apps/web/node_modules/
-apps/web/.next/
-apps/web/out/
-apps/web/.vercel/
-apps/web/*.tsbuildinfo
-apps/web/next-env.d.ts
+# Node / Next.js (apps/web & apps/admin)
+apps/*/node_modules/
+apps/*/.next/
+apps/*/out/
+apps/*/.vercel/
+apps/*/*.tsbuildinfo
+apps/*/next-env.d.ts
+.pnpm-store/
 
-# Java / Maven (services/biz-java)
+# Java / Maven (services/java multi-module)
+services/java/**/target/
+services/java/.mvn/timing.properties
+services/java/*.log
 services/biz-java/target/
-services/biz-java/.mvn/timing.properties
-services/biz-java/*.log
 
 # Python / uv (services/agent-py)
 services/agent-py/.venv/

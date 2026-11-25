@@ -296,14 +296,6 @@ export default function BookshelfPage() {
             >
               会员权益
             </Link>
-            {user?.role === "ADMIN" && (
-              <Link
-                href="/billing"
-                className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
-              >
-                后台管理
-              </Link>
-            )}
             <Button variant="outline" size="sm" onClick={() => void handleLogout()}>
               退出登录
             </Button>

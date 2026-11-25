@@ -25,7 +25,7 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "PROMPT_INJECTION_IGNORE_RULES",
         re.compile(
             r"(ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)"
-            r"|忽略(之前|上面|前面|所有|全部)的?(指令|提示词|规则|设定|系统提示)"
+            r"|忽略你?(之前|上面|前面|所有|全部){1,2}的?(系统|安全)?(指令|提示词|规则|设定|系统提示)"
             r"|无视(一切|以上|所有)(系统|安全)?(指令|规则|限制))",
             re.IGNORECASE,
         ),
@@ -34,7 +34,8 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "SYSTEM_PROMPT_EXFILTRATION",
         re.compile(
             r"(reveal|print|dump|output|show|repeat)\s+(your\s+)?(system\s+prompt|hidden\s+instructions|developer\s+prompt)"
-            r"|(输出|打印|泄露|告诉我|复述|展示)(你的|完整的)?(系统提示词|系统指令|System\s*Prompt|隐藏规则|内部密钥|API\s*Key)",
+            r"|(输出|打印|泄露|告诉我|复述|展示)(你的|完整的)?(系统提示词|系统指令|System\s*Prompt|隐藏规则|内部密钥|API\s*Key)"
+            r"|(系统提示词|系统指令|System\s*Prompt|隐藏规则).{0,16}(输出|打印|泄露|复述|展示)",
             re.IGNORECASE,
         ),
     ),
