@@ -42,9 +42,10 @@ public class LibraryController {
             @RequestPart("file") MultipartFile file,
             @RequestParam(value = "docType", required = false, defaultValue = "WORLDBOOK") String docType,
             @RequestParam(value = "title", required = false) String title,
-            @RequestParam(value = "genreTags", required = false) String genreTags
+            @RequestParam(value = "genreTags", required = false) String genreTags,
+            @RequestParam(value = "genreCodes", required = false) String genreCodes
     ) {
-        return documentService.uploadPersonalDocument(principal.userId(), file, docType, title, genreTags);
+        return documentService.uploadPersonalDocument(principal.userId(), file, docType, title, genreTags, genreCodes);
     }
 
     @DeleteMapping("/library/documents/{docId}")

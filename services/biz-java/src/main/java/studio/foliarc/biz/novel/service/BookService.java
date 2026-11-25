@@ -2,17 +2,20 @@ package studio.foliarc.biz.novel.service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.genre.GenreProfileRegistry;
 import studio.foliarc.biz.novel.dto.NovelDtos.BookResponse;
 import studio.foliarc.biz.novel.dto.NovelDtos.CreateBookRequest;
 import studio.foliarc.biz.novel.dto.NovelDtos.UpdateBookRequest;
@@ -28,10 +31,16 @@ public class BookService {
 
     private final BookMapper bookMapper;
     private final ChapterMapper chapterMapper;
+    private GenreProfileRegistry genreProfiles = new GenreProfileRegistry();
 
     public BookService(BookMapper bookMapper, ChapterMapper chapterMapper) {
         this.bookMapper = bookMapper;
         this.chapterMapper = chapterMapper;
+    }
+
+    @Autowired(required = false)
+    public void setGenreProfileRegistry(GenreProfileRegistry genreProfiles) {
+        this.genreProfiles = genreProfiles;
     }
 
     public List<BookResponse> listBooks(UUID ownerId) {
@@ -57,7 +66,7 @@ public class BookService {
         entity.setId(UUID.randomUUID());
         entity.setOwnerId(ownerId);
         entity.setTitle(req.title().trim());
-        entity.setGenre(cleanOptional(req.genre()));
+        applyGenre(entity, req.genreCode(), req.genre(), req.subGenreTags());
         entity.setSynopsis(cleanOptional(req.synopsis()));
         entity.setStatus("DRAFT");
         entity.setVersion(0L);
@@ -85,8 +94,15 @@ public class BookService {
             throw BizException.badRequest("INVALID_BOOK_STATUS", "无效的小说状态: " + nextStatus);
         }
 
+        String genreCode = req.genreCode();
+        String genre = req.genre();
+        if (genreCode == null && genre == null) {
+            genreCode = book.getGenreCode();
+            genre = book.getGenre();
+        }
+        applyGenre(book, genreCode, genre,
+                req.subGenreTags() == null ? book.getSubGenreTags() : req.subGenreTags());
         book.setTitle(req.title().trim());
-        book.setGenre(cleanOptional(req.genre()));
         book.setSynopsis(cleanOptional(req.synopsis()));
         book.setStatus(nextStatus);
         book.setVersion(req.version());
@@ -123,6 +139,18 @@ public class BookService {
         bookMapper.lockForStructure(bookId);
     }
 
+    private void applyGenre(BookEntity book, String requestedCode, String genre, String rawSubGenreTags) {
+        String code = genreProfiles.resolveGenreCode(requestedCode, genre);
+        String tags = genreProfiles.normalizeSubGenreTags(rawSubGenreTags);
+        if (tags.length() > 255) {
+            throw BizException.badRequest("INVALID_SUB_GENRE_TAGS", "副题材标签总长最多 255 个字符");
+        }
+        String displayGenre = cleanOptional(genre);
+        book.setGenre(displayGenre == null ? genreProfiles.getRequired(code).displayName() : displayGenre);
+        book.setGenreCode(code);
+        book.setSubGenreTags(tags);
+    }
+
     private static BookResponse toResponse(BookEntity book, BookChapterStats stats) {
         int chapterCount = stats == null ? 0 : stats.getChapterCount();
         long totalWords = stats == null ? 0L : stats.getTotalWordCount();
@@ -136,7 +164,9 @@ public class BookService {
                 chapterCount,
                 totalWords,
                 book.getCreatedAt(),
-                book.getUpdatedAt()
+                book.getUpdatedAt(),
+                GenreProfileRegistry.codeOrDefault(book.getGenreCode()),
+                Objects.requireNonNullElse(book.getSubGenreTags(), "")
         );
     }
 

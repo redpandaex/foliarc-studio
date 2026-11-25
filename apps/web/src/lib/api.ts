@@ -12,10 +12,43 @@ export interface AuthResponse {
   user: UserProfile;
 }
 
+export interface GenreCharacterField {
+  key: string;
+  label: string;
+  placeholder: string;
+}
+
+export interface GenreProfileItem {
+  code: string;
+  displayName: string;
+  shortName: string;
+  description: string;
+  recommendedSubTags: string[];
+  characterFieldSchema: GenreCharacterField[];
+  stylePrinciples: string;
+  antiClicheRules: string[];
+  defaultBeatPattern: string;
+  criticRubric: string[];
+  summaryFocus: string;
+}
+
+export interface StyleAnchorItem {
+  id: string;
+  bookId: string;
+  title: string;
+  excerptText: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface BookItem {
   id: string;
   title: string;
   genre: string | null;
+  genreCode?: string;
+  subGenreTags?: string;
   synopsis: string | null;
   status: string;
   version: number;
@@ -43,6 +76,7 @@ export interface LibraryDocumentItem {
   title: string;
   fileName: string;
   fileSize: number;
+  genreCodes?: string;
   genreTags: string;
   readonly: boolean;
   enabled: boolean;
@@ -257,6 +291,7 @@ export interface CharacterItem {
   lastSeenOrder?: number;
   arcScope?: string;
   lockedFields?: string[];
+  customAttributes?: Record<string, string>;
   updatedAt: string | null;
 }
 
@@ -644,6 +679,8 @@ export const booksApi = {
   create(payload: {
     title: string;
     genre?: string;
+    genreCode?: string;
+    subGenreTags?: string;
     synopsis?: string;
   }): Promise<BookItem> {
     return request<BookItem>("/api/v1/books", {
@@ -656,6 +693,8 @@ export const booksApi = {
     payload: {
       title: string;
       genre?: string | null;
+      genreCode?: string;
+      subGenreTags?: string;
       synopsis?: string | null;
       status?: string;
       version: number;
@@ -676,6 +715,45 @@ export const booksApi = {
     return request<BookCharterItem>(`/api/v1/books/${bookId}/charter`, {
       method: "PUT",
       body: JSON.stringify({ charter }),
+    });
+  },
+};
+
+export const genresApi = {
+  list(): Promise<GenreProfileItem[]> {
+    return request<GenreProfileItem[]>("/api/v1/genres", {}, false);
+  },
+  get(genreCode: string): Promise<GenreProfileItem> {
+    return request<GenreProfileItem>(
+      `/api/v1/genres/${encodeURIComponent(genreCode)}`,
+      {},
+      false,
+    );
+  },
+};
+
+export const styleAnchorsApi = {
+  list(bookId: string): Promise<StyleAnchorItem[]> {
+    return request<StyleAnchorItem[]>(`/api/v1/books/${bookId}/style-anchors`);
+  },
+  upsert(
+    bookId: string,
+    payload: {
+      id?: string;
+      title?: string;
+      excerptText: string;
+      sortOrder?: number;
+      enabled?: boolean;
+    },
+  ): Promise<StyleAnchorItem> {
+    return request<StyleAnchorItem>(`/api/v1/books/${bookId}/style-anchors`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  remove(bookId: string, anchorId: string): Promise<void> {
+    return request<void>(`/api/v1/books/${bookId}/style-anchors/${anchorId}`, {
+      method: "DELETE",
     });
   },
 };
@@ -1018,6 +1096,7 @@ export const loreApi = {
       lifecycleStatus?: string;
       arcScope?: string;
       lockedFields?: string[];
+      customAttributes?: Record<string, string>;
     },
   ): Promise<CharacterItem> {
     return request<CharacterItem>(`/api/v1/books/${bookId}/characters`, {

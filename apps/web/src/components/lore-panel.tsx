@@ -4,15 +4,21 @@ import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  ApiClientError,
   booksApi,
+  genresApi,
   libraryApi,
   loreApi,
   memoryProposalsApi,
+  styleAnchorsApi,
   type BookCharterItem,
   type CharacterItem,
   type ForeshadowingItem,
+  type GenreCharacterField,
+  type GenreProfileItem,
   type LibraryDocumentItem,
   type MemoryProposalItem,
+  type StyleAnchorItem,
   type WorldEntryItem,
 } from "@/lib/api";
 
@@ -81,18 +87,31 @@ const PROPOSAL_TYPE_LABELS: Record<string, string> = {
 
 const DEFAULT_LOCKED_CHARACTER_FIELDS = ["personality", "realmOrLevel", "roleType"];
 
+const DEFAULT_CHAR_FIELDS: GenreCharacterField[] = [
+  { key: "realm", label: "境界 / 实力", placeholder: "如：筑基后期" },
+  { key: "faction", label: "所属势力", placeholder: "如：青云宗" },
+];
+
 interface LorePanelProps {
   bookId: string;
+  bookGenreCode?: string;
+  anchorRefreshKey?: number;
 }
 
-export function LorePanel({ bookId }: LorePanelProps) {
+export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LorePanelProps) {
   const [subTab, setSubTab] = useState<"charter" | "characters" | "world" | "foreshadowing">(
     "characters",
   );
+  const [genreProfile, setGenreProfile] = useState<GenreProfileItem | null>(null);
   const [charter, setCharter] = useState<BookCharterItem | null>(null);
   const [charterDraft, setCharterDraft] = useState("");
   const [savingCharter, setSavingCharter] = useState(false);
   const [charterNotice, setCharterNotice] = useState<string | null>(null);
+  const [styleAnchors, setStyleAnchors] = useState<StyleAnchorItem[]>([]);
+  const [anchorTitle, setAnchorTitle] = useState("");
+  const [anchorText, setAnchorText] = useState("");
+  const [savingAnchor, setSavingAnchor] = useState(false);
+  const [anchorQuotaError, setAnchorQuotaError] = useState<string | null>(null);
   const [libraryDocs, setLibraryDocs] = useState<LibraryDocumentItem[]>([]);
 
   const [characters, setCharacters] = useState<CharacterItem[]>([]);
@@ -106,10 +125,10 @@ export function LorePanel({ bookId }: LorePanelProps) {
   const [cName, setCName] = useState("");
   const [cRole, setCRole] = useState("PROTAGONIST");
   const [cAliases, setCAliases] = useState("");
-  const [cRealm, setCRealm] = useState("");
   const [cLocation, setCLocation] = useState("");
   const [cNotes, setCNotes] = useState("");
   const [cInventory, setCInventory] = useState("");
+  const [cCustomAttrs, setCCustomAttrs] = useState<Record<string, string>>({});
 
   // World entry form
   const [wCat, setWCat] = useState("WORLD");
@@ -128,6 +147,8 @@ export function LorePanel({ bookId }: LorePanelProps) {
   const [fHiddenTruth, setFHiddenTruth] = useState("");
   const [fAuthorLocked, setFAuthorLocked] = useState(true);
 
+  const effectiveGenreCode = bookGenreCode || "XIANXIA_FANTASY";
+
   useEffect(() => {
     let active = true;
     void Promise.all([
@@ -137,8 +158,10 @@ export function LorePanel({ bookId }: LorePanelProps) {
       booksApi.getCharter(bookId).catch(() => null),
       libraryApi.list(bookId).catch(() => []),
       memoryProposalsApi.list(bookId, "PENDING").catch(() => []),
+      genresApi.get(effectiveGenreCode).catch(() => null),
+      styleAnchorsApi.list(bookId).catch(() => []),
     ])
-      .then(([chars, worlds, clues, charterData, libDocs, pendingProposals]) => {
+      .then(([chars, worlds, clues, charterData, libDocs, pendingProposals, profile, anchors]) => {
         if (!active) return;
         setCharacters(chars);
         setWorldEntries(worlds);
@@ -147,6 +170,8 @@ export function LorePanel({ bookId }: LorePanelProps) {
         setCharterDraft(charterData?.effectiveCharter ?? "");
         setLibraryDocs(libDocs);
         setProposals(pendingProposals);
+        setGenreProfile(profile);
+        setStyleAnchors(anchors);
         setError(null);
       })
       .catch((err) => {
@@ -156,7 +181,20 @@ export function LorePanel({ bookId }: LorePanelProps) {
     return () => {
       active = false;
     };
-  }, [bookId]);
+  }, [bookId, effectiveGenreCode, anchorRefreshKey]);
+
+  const charFields =
+    genreProfile && genreProfile.characterFieldSchema.length > 0
+      ? genreProfile.characterFieldSchema
+      : DEFAULT_CHAR_FIELDS;
+
+  const charFieldLabels: Record<string, string> = Object.fromEntries(
+    charFields.map((f) => [f.key, f.label]),
+  );
+
+  const enabledAnchorChars = styleAnchors
+    .filter((a) => a.enabled)
+    .reduce((sum, a) => sum + a.excerptText.trim().length, 0);
 
   async function handleDecideProposal(proposal: MemoryProposalItem, decision: "ACCEPT" | "REJECT") {
     setDecidingProposalId(proposal.id);
@@ -200,6 +238,54 @@ export function LorePanel({ bookId }: LorePanelProps) {
     }
   }
 
+  async function handleAddStyleAnchor(e: FormEvent) {
+    e.preventDefault();
+    if (!anchorText.trim()) return;
+    setSavingAnchor(true);
+    setError(null);
+    setAnchorQuotaError(null);
+    try {
+      const saved = await styleAnchorsApi.upsert(bookId, {
+        title: anchorTitle.trim() || `文风参考 #${styleAnchors.length + 1}`,
+        excerptText: anchorText.trim(),
+        sortOrder: styleAnchors.length + 1,
+        enabled: true,
+      });
+      setStyleAnchors((prev) => [...prev, saved]);
+      setAnchorTitle("");
+      setAnchorText("");
+    } catch (err) {
+      if (err instanceof ApiClientError && err.code === "VIP_QUOTA_EXCEEDED") {
+        setAnchorQuotaError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : "保存文风锚点失败");
+      }
+    } finally {
+      setSavingAnchor(false);
+    }
+  }
+
+  async function handleToggleStyleAnchor(anchor: StyleAnchorItem) {
+    setError(null);
+    setAnchorQuotaError(null);
+    try {
+      const updated = await styleAnchorsApi.upsert(bookId, {
+        id: anchor.id,
+        title: anchor.title,
+        excerptText: anchor.excerptText,
+        sortOrder: anchor.sortOrder,
+        enabled: !anchor.enabled,
+      });
+      setStyleAnchors((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+    } catch (err) {
+      if (err instanceof ApiClientError && err.code === "VIP_QUOTA_EXCEEDED") {
+        setAnchorQuotaError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : "切换文风锚点失败");
+      }
+    }
+  }
+
   async function handleToggleBookDoc(doc: LibraryDocumentItem) {
     setError(null);
     try {
@@ -214,15 +300,20 @@ export function LorePanel({ bookId }: LorePanelProps) {
     e.preventDefault();
     if (!cName.trim()) return;
     setError(null);
+    const cleanedCustom: Record<string, string> = {};
+    for (const [k, v] of Object.entries(cCustomAttrs)) {
+      if (v.trim()) cleanedCustom[k] = v.trim();
+    }
     try {
       const saved = await loreApi.upsertCharacter(bookId, {
         name: cName.trim(),
         roleType: cRole,
         aliases: cAliases.trim(),
-        realmOrLevel: cRealm.trim(),
+        realmOrLevel: cleanedCustom.realm ?? "",
         currentLocation: cLocation.trim(),
         statusNotes: cNotes.trim(),
         inventory: cInventory.trim(),
+        customAttributes: cleanedCustom,
       });
       setCharacters((prev) => {
         const rest = prev.filter((item) => item.id !== saved.id);
@@ -230,10 +321,10 @@ export function LorePanel({ bookId }: LorePanelProps) {
       });
       setCName("");
       setCAliases("");
-      setCRealm("");
       setCLocation("");
       setCNotes("");
       setCInventory("");
+      setCCustomAttrs({});
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存人物失败");
     }
@@ -330,8 +421,13 @@ export function LorePanel({ bookId }: LorePanelProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
-      <div className="border-b border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-        维护故事档案、人物、世界观与伏笔底牌，AI 创作时会自动参考并严守防剧透纪律
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+        <span className="truncate">维护故事档案、文风锚点、人物与伏笔底牌</span>
+        {genreProfile && (
+          <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            {genreProfile.shortName}
+          </span>
+        )}
       </div>
 
       {proposals.length > 0 && (
@@ -466,10 +562,10 @@ export function LorePanel({ bookId }: LorePanelProps) {
                 开书时可不填，写完前几章后系统会自动整理主线、人称与基调；你随时可修改并锁定，锁定后 AI 不会覆盖。
               </p>
               <textarea
-                rows={6}
+                rows={5}
                 value={charterDraft}
                 onChange={(e) => setCharterDraft(e.target.value)}
-                placeholder="例如：第三人称限知，冷峻武侠写实基调。主角林青为查清师门灭门真相携玄铁剑入世……"
+                placeholder="例如：第三人称限知，冷峻写实基调。主角为查清旧案真相踏入迷雾……"
                 className="w-full resize-none rounded border border-input bg-background p-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring"
               />
               {charterNotice && (
@@ -485,6 +581,91 @@ export function LorePanel({ bookId }: LorePanelProps) {
                     : "保存故事档案"}
               </Button>
             </form>
+
+            {/* Phase 5.8C: Style Anchors Card */}
+            <div className="space-y-2 rounded-lg border border-border bg-background p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">文风锚点（去 AI 味参考）</span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {enabledAnchorChars}/900 字
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                收藏 1~3 段你最满意的亲笔正文（或直接在中栏划词一键设为锚点），AI 每次动笔都会对齐你的句式节奏与用词克制度。
+              </p>
+
+              {anchorQuotaError && (
+                <div className="flex items-center justify-between gap-2 rounded bg-amber-500/15 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+                  <span>{anchorQuotaError}</span>
+                  <Link href="/vip" className="shrink-0 font-semibold underline">
+                    升级权益 →
+                  </Link>
+                </div>
+              )}
+
+              <form onSubmit={handleAddStyleAnchor} className="space-y-1.5">
+                <input
+                  value={anchorTitle}
+                  onChange={(e) => setAnchorTitle(e.target.value)}
+                  placeholder="锚点名称（如：雪夜白描参考）"
+                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+                <textarea
+                  rows={3}
+                  value={anchorText}
+                  onChange={(e) => setAnchorText(e.target.value)}
+                  placeholder="粘贴 100~300 字最具代表性的文风段落（总启用字数上限 900 字）..."
+                  className="w-full resize-none rounded border border-input bg-background p-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring"
+                />
+                <Button type="submit" size="xs" variant="outline" className="w-full" disabled={savingAnchor}>
+                  {savingAnchor ? "保存中..." : "+ 添加文风锚点"}
+                </Button>
+              </form>
+
+              {styleAnchors.length > 0 && (
+                <ul className="space-y-1.5 pt-1">
+                  {styleAnchors.map((anchor) => (
+                    <li
+                      key={anchor.id}
+                      className={`rounded border p-2 ${
+                        anchor.enabled
+                          ? "border-primary/30 bg-primary/5"
+                          : "border-border/70 bg-muted/20 opacity-70"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="truncate font-medium">{anchor.title || "文风锚点"}</span>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleStyleAnchor(anchor)}
+                            className="rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-muted"
+                          >
+                            {anchor.enabled ? "已启用" : "已停用"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void styleAnchorsApi
+                                .remove(bookId, anchor.id)
+                                .then(() =>
+                                  setStyleAnchors((prev) => prev.filter((x) => x.id !== anchor.id)),
+                                )
+                            }
+                            className="text-destructive hover:underline"
+                          >
+                            删
+                          </button>
+                        </div>
+                      </div>
+                      <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                        {anchor.excerptText}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             <div className="space-y-2 rounded-lg border border-border bg-background p-2.5">
               <div className="flex items-center justify-between">
@@ -541,7 +722,7 @@ export function LorePanel({ bookId }: LorePanelProps) {
                   required
                   value={cName}
                   onChange={(e) => setCName(e.target.value)}
-                  placeholder="角色姓名（如：林青）"
+                  placeholder="角色姓名"
                   className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
                 />
                 <select
@@ -557,29 +738,38 @@ export function LorePanel({ bookId }: LorePanelProps) {
               <input
                 value={cAliases}
                 onChange={(e) => setCAliases(e.target.value)}
-                placeholder="别名/化名/称谓（逗号分隔，如：青莲居士, 小林）"
+                placeholder="别名/化名/称谓（逗号分隔）"
                 className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
               />
+              {/* Dynamic Genre-Specific Character Fields */}
               <div className="grid grid-cols-2 gap-1.5">
-                <input
-                  value={cRealm}
-                  onChange={(e) => setCRealm(e.target.value)}
-                  placeholder="境界/实力"
-                  className="rounded border border-input bg-background px-2 py-1 text-xs"
-                />
+                {charFields.map((field) => (
+                  <input
+                    key={field.key}
+                    value={cCustomAttrs[field.key] ?? ""}
+                    onChange={(e) =>
+                      setCCustomAttrs((prev) => ({ ...prev, [field.key]: e.target.value }))
+                    }
+                    placeholder={`${field.label}（${field.placeholder}）`}
+                    title={field.label}
+                    className="rounded border border-input bg-background px-2 py-1 text-xs"
+                  />
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
                 <input
                   value={cLocation}
                   onChange={(e) => setCLocation(e.target.value)}
                   placeholder="当前位置"
                   className="rounded border border-input bg-background px-2 py-1 text-xs"
                 />
+                <input
+                  value={cInventory}
+                  onChange={(e) => setCInventory(e.target.value)}
+                  placeholder="随身关键物品"
+                  className="rounded border border-input bg-background px-2 py-1 text-xs"
+                />
               </div>
-              <input
-                value={cInventory}
-                onChange={(e) => setCInventory(e.target.value)}
-                placeholder="持有法宝/物品（如：玄铁剑）"
-                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-              />
               <input
                 value={cNotes}
                 onChange={(e) => setCNotes(e.target.value)}
@@ -596,6 +786,9 @@ export function LorePanel({ bookId }: LorePanelProps) {
                 const lifeMeta =
                   LIFECYCLE_LABELS[ch.lifecycleStatus ?? "ACTIVE"] ?? LIFECYCLE_LABELS.ACTIVE;
                 const isLocked = (ch.lockedFields?.length ?? 0) > 0;
+                const customEntries = Object.entries(ch.customAttributes ?? {}).filter(
+                  ([, val]) => Boolean(val && val.trim()),
+                );
                 return (
                   <li key={ch.id} className="rounded-lg border border-border bg-background p-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -607,11 +800,11 @@ export function LorePanel({ bookId }: LorePanelProps) {
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
                         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
-                          {ch.realmOrLevel || ROLE_LABELS[ch.roleType] || ch.roleType}
+                          {ROLE_LABELS[ch.roleType] || ch.roleType}
                         </span>
                         <button
                           type="button"
-                          title="锁定后 AI 自动整理不会覆盖该人物的性格、境界与定位"
+                          title="锁定后 AI 自动整理不会覆盖该人物的核心定位与属性"
                           onClick={() => void handleToggleCharacterLock(ch)}
                           className={`rounded px-1.5 py-0.5 text-[10px] ${
                             isLocked
@@ -649,6 +842,24 @@ export function LorePanel({ bookId }: LorePanelProps) {
                       <div className="mt-1 text-[11px] text-muted-foreground">
                         别名：{ch.aliases}
                       </div>
+                    )}
+                    {customEntries.length > 0 ? (
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {customEntries.map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="rounded bg-muted/70 px-1.5 py-0.5 text-[10px] text-foreground"
+                          >
+                            {charFieldLabels[k] ?? k}：{v}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      ch.realmOrLevel && (
+                        <div className="mt-1 text-[11px] text-muted-foreground">
+                          实力：{ch.realmOrLevel}
+                        </div>
+                      )
                     )}
                     {ch.currentLocation && (
                       <div className="mt-0.5 text-[11px] text-muted-foreground">
@@ -695,7 +906,7 @@ export function LorePanel({ bookId }: LorePanelProps) {
                   required
                   value={wTitle}
                   onChange={(e) => setWTitle(e.target.value)}
-                  placeholder="词条标题（如：星渊禁地）"
+                  placeholder="词条标题"
                   className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
                 />
               </div>

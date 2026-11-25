@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from foliarc_agent.agent.genre_profiles import GenreProfileRegistry
 from foliarc_agent.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ _UNIFIED_DISTILL_PROMPT = """你是长篇小说记忆编译引擎。请阅读给
         "currentLocation": "本节结束位置",
         "statusNotes": "伤势/心境/状态变更",
         "inventoryDelta": "新增或失去的物品",
+        "customAttributes": {},
         "isHighRisk": false
       }
     ],
@@ -169,6 +171,7 @@ class ChapterDistiller:
         known_characters: list[str] | None = None,
         open_foreshadowings: list[str] | None = None,
         genre: str | None = None,
+        genre_code: str | None = None,
     ) -> dict[str, Any]:
         text = (content or "").strip()
         if not text:
@@ -205,6 +208,7 @@ class ChapterDistiller:
                     known_characters=known,
                     open_foreshadowings=open_foreshadowings or [],
                     genre=genre,
+                    genre_code=genre_code,
                     body_block=distill_body,
                 )
                 raw = await self._call_fast_llm(
@@ -422,11 +426,15 @@ class ChapterDistiller:
         open_foreshadowings: list[str],
         genre: str | None,
         body_block: str,
+        genre_code: str | None = None,
     ) -> str:
+        profile = GenreProfileRegistry.resolve(genre_code, genre) if (genre_code or genre) else None
         parts = [
-            f"题材：{genre or '通用长篇'}",
+            f"题材：{genre or (profile.display_name if profile else '通用长篇')}",
             f"位置：第 {chapter_no} 章《{chapter_title}》· 第 {section_no} 节《{section_title or chapter_title}》",
         ]
+        if profile is not None:
+            parts.append(profile.format_distill_focus_block())
         if volume_arc_goal:
             parts.append(f"当前卷纲：{volume_arc_goal[:300]}")
         if prev_ending_hook:

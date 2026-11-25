@@ -19,6 +19,8 @@ public class BookEntity {
     private UUID ownerId;
     private String title;
     private String genre;
+    private String genreCode;
+    private String subGenreTags;
     private String synopsis;
     private String authorCharter;
     private String autoCharter;
@@ -66,6 +68,22 @@ public class BookEntity {
 
     public void setGenre(String genre) {
         this.genre = genre;
+    }
+
+    public String getGenreCode() {
+        return genreCode;
+    }
+
+    public void setGenreCode(String genreCode) {
+        this.genreCode = genreCode;
+    }
+
+    public String getSubGenreTags() {
+        return subGenreTags;
+    }
+
+    public void setSubGenreTags(String subGenreTags) {
+        this.subGenreTags = subGenreTags;
     }
 
     public String getSynopsis() {

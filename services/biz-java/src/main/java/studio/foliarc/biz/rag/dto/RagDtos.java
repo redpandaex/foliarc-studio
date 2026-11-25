@@ -12,6 +12,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import studio.foliarc.biz.genre.GenreProfileRegistry;
 import studio.foliarc.biz.lore.dto.LoreDtos;
 
 public final class RagDtos {
@@ -311,8 +312,20 @@ public final class RagDtos {
             UUID sectionId, UUID chapterId, UUID volumeId, UUID bookId, UUID ownerId,
             int chapterNo, int sectionNo, long narrativeOrder, String chapterTitle, String sectionTitle,
             String content, String contentHash, String volumeArcGoal, String prevEndingHook, String firstSectionSample,
-            String latestSectionSample, String bookTitle, String genre, String synopsis
-    ) {}
+            String latestSectionSample, String bookTitle, String genre, String synopsis, String genreCode,
+            String subGenreTags
+    ) {
+        public InternalSectionPayload(
+                UUID sectionId, UUID chapterId, UUID volumeId, UUID bookId, UUID ownerId,
+                int chapterNo, int sectionNo, long narrativeOrder, String chapterTitle, String sectionTitle,
+                String content, String contentHash, String volumeArcGoal, String prevEndingHook, String firstSectionSample,
+                String latestSectionSample, String bookTitle, String genre, String synopsis
+        ) {
+            this(sectionId, chapterId, volumeId, bookId, ownerId, chapterNo, sectionNo, narrativeOrder, chapterTitle,
+                    sectionTitle, content, contentHash, volumeArcGoal, prevEndingHook, firstSectionSample,
+                    latestSectionSample, bookTitle, genre, synopsis, GenreProfileRegistry.DEFAULT_GENRE_CODE, "");
+        }
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record DistilledSectionSummary(
@@ -388,8 +401,18 @@ public final class RagDtos {
             Integer chunkCount,
             String errorMessage,
             OffsetDateTime createdAt,
-            OffsetDateTime updatedAt
-    ) {}
+            OffsetDateTime updatedAt,
+            String genreCodes
+    ) {
+        public LibraryDocumentResponse(
+                UUID id, UUID bookId, String scope, String accessType, String docType, String title, String fileName,
+                Long fileSize, String genreTags, boolean readonly, boolean enabled, boolean boundToBook, String status,
+                Integer progress, Integer chunkCount, String errorMessage, OffsetDateTime createdAt, OffsetDateTime updatedAt
+        ) {
+            this(id, bookId, scope, accessType, docType, title, fileName, fileSize, genreTags, readonly, enabled,
+                    boundToBook, status, progress, chunkCount, errorMessage, createdAt, updatedAt, "");
+        }
+    }
 
     public record UpdateBookBindingRequest(
             boolean enabled

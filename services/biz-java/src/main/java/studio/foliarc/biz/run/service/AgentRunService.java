@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -28,6 +29,7 @@ import studio.foliarc.biz.billing.ModelPricing;
 import studio.foliarc.biz.billing.service.BillingService;
 import studio.foliarc.biz.common.BizException;
 import studio.foliarc.biz.gateway.RedisRateLimiterService;
+import studio.foliarc.biz.genre.GenreProfileRegistry;
 import studio.foliarc.biz.memory.service.StoryMemoryContextService;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterEntity;
@@ -227,10 +229,7 @@ public class AgentRunService {
         body.put("mode", mode);
         body.put("action", action);
         body.put("model_alias", modelAlias);
-        body.put("book_title", book.getTitle());
-        body.put("genre", book.getGenre());
-        body.put("synopsis", book.getSynopsis());
-        body.put("story_charter", fiveLayer.storyCharter());
+        addBookContext(body, book, fiveLayer);
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", chapterContext);
         body.put("previous_chapters_context", fiveLayer.hotWindowContext());
@@ -365,10 +364,7 @@ public class AgentRunService {
         body.put("mode", run.getMode() == null ? "AGENT" : run.getMode());
         body.put("action", run.getAction());
         body.put("model_alias", run.getModelAlias());
-        body.put("book_title", book.getTitle());
-        body.put("genre", book.getGenre());
-        body.put("synopsis", book.getSynopsis());
-        body.put("story_charter", fiveLayer.storyCharter());
+        addBookContext(body, book, fiveLayer);
         body.put("chapter_title", chapter != null ? chapter.getTitle() : "");
         body.put("chapter_context", run.getChapterContext() == null ? "" : run.getChapterContext());
         body.put("previous_chapters_context", fiveLayer.hotWindowContext());
@@ -576,6 +572,18 @@ public class AgentRunService {
         body.put("foreshadowing_writer_pack", context.foreshadowingWriterPack());
         body.put("foreshadowing_critic_pack", context.foreshadowingCriticPack());
         body.put("critic_guard_brief", context.criticGuardBrief());
+    }
+
+    private static void addBookContext(
+            Map<String, Object> body, BookEntity book, StoryMemoryContextService.FiveLayerContext context
+    ) {
+        body.put("book_title", book.getTitle());
+        body.put("genre", book.getGenre());
+        body.put("genre_code", GenreProfileRegistry.codeOrDefault(book.getGenreCode()));
+        body.put("sub_genre_tags", Objects.requireNonNullElse(book.getSubGenreTags(), ""));
+        body.put("synopsis", book.getSynopsis());
+        body.put("story_charter", context.storyCharter());
+        body.put("style_anchors_text", context.styleAnchorsText());
     }
 
     public String buildPreviousChaptersContext(UUID bookId, ChapterEntity currentChapter) {

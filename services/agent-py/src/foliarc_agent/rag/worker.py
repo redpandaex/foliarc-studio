@@ -512,6 +512,7 @@ class RagIngestionWorker:
             known_characters=known_chars,
             open_foreshadowings=open_clues,
             genre=section_data.get("genre"),
+            genre_code=section_data.get("genreCode"),
         )
         summary = distilled["summary"]
         ch_no = int(section_data.get("chapterNo", 1))
@@ -534,6 +535,15 @@ class RagIngestionWorker:
                     "currentLocation": str(c.get("currentLocation") or "").strip() or None,
                     "statusNotes": str(c.get("statusNotes") or "").strip() or None,
                     "inventory": str(c.get("inventoryDelta") or c.get("inventory") or "").strip() or None,
+                    "customAttributes": (
+                        {
+                            str(k).strip(): str(v).strip()
+                            for k, v in (c.get("customAttributes") or {}).items()
+                            if str(k).strip() and str(v).strip()
+                        }
+                        if isinstance(c.get("customAttributes"), dict)
+                        else None
+                    ),
                     "isHighRisk": bool(c.get("isHighRisk", False)),
                 }
                 for c in (raw_mem.get("characterUpdates") or [])

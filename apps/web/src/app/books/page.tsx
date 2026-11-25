@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { ApiClientError, booksApi, type BookItem } from "@/lib/api";
+import {
+  ApiClientError,
+  booksApi,
+  genresApi,
+  type BookItem,
+  type GenreProfileItem,
+} from "@/lib/api";
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: "草稿",
@@ -14,22 +20,125 @@ const STATUS_LABELS: Record<string, string> = {
   ARCHIVED: "已归档",
 };
 
+const FALLBACK_GENRES: GenreProfileItem[] = [
+  {
+    code: "XIANXIA_FANTASY",
+    displayName: "仙侠 / 玄幻",
+    shortName: "仙侠玄幻",
+    description: "修真境界、宗门博弈与力量体系",
+    recommendedSubTags: ["古典仙侠", "凡人流", "宗门权谋", "剑修"],
+    characterFieldSchema: [],
+    stylePrinciples: "",
+    antiClicheRules: [],
+    defaultBeatPattern: "",
+    criticRubric: [],
+    summaryFocus: "",
+  },
+  {
+    code: "HORROR_SUPERNATURAL",
+    displayName: "恐怖 / 灵异 / 规则怪谈",
+    shortName: "恐怖灵异",
+    description: "中式民俗惊悚、规则怪谈与心理压迫",
+    recommendedSubTags: ["中式民俗", "规则怪谈", "克苏鲁", "心理惊悚"],
+    characterFieldSchema: [],
+    stylePrinciples: "",
+    antiClicheRules: [],
+    defaultBeatPattern: "",
+    criticRubric: [],
+    summaryFocus: "",
+  },
+  {
+    code: "CLASSICAL_HISTORICAL",
+    displayName: "古典 / 历史 / 世情志怪",
+    shortName: "古典历史",
+    description: "半文白韵律、世情白描、志怪与历史权谋",
+    recommendedSubTags: ["明清世情", "历史权谋", "志怪笔记", "民俗恐怖"],
+    characterFieldSchema: [],
+    stylePrinciples: "",
+    antiClicheRules: [],
+    defaultBeatPattern: "",
+    criticRubric: [],
+    summaryFocus: "",
+  },
+  {
+    code: "MYSTERY_THRILLER",
+    displayName: "悬疑 / 推理 / 刑侦",
+    shortName: "悬疑推理",
+    description: "公平线索、不在场证明与反转推演",
+    recommendedSubTags: ["本格推理", "刑侦破案", "社会派悬疑", "密室诡计"],
+    characterFieldSchema: [],
+    stylePrinciples: "",
+    antiClicheRules: [],
+    defaultBeatPattern: "",
+    criticRubric: [],
+    summaryFocus: "",
+  },
+  {
+    code: "SCIFI_APOCALYPSE",
+    displayName: "科幻 / 赛博 / 末世",
+    shortName: "科幻末世",
+    description: "科技硬设定、资源危机与赛博阵营",
+    recommendedSubTags: ["硬科幻", "赛博朋克", "废土末世", "星际探索"],
+    characterFieldSchema: [],
+    stylePrinciples: "",
+    antiClicheRules: [],
+    defaultBeatPattern: "",
+    criticRubric: [],
+    summaryFocus: "",
+  },
+  {
+    code: "URBAN_REALISM",
+    displayName: "都市 / 现实 / 职场情感",
+    shortName: "都市现实",
+    description: "现实质感、职场商战与细腻情感拉扯",
+    recommendedSubTags: ["现实职场", "都市商战", "情感成长", "行业群像"],
+    characterFieldSchema: [],
+    stylePrinciples: "",
+    antiClicheRules: [],
+    defaultBeatPattern: "",
+    criticRubric: [],
+    summaryFocus: "",
+  },
+];
+
+function toggleTagInCsv(current: string, tag: string): string {
+  const parts = current
+    .split(/[,，、;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.includes(tag)) {
+    return parts.filter((s) => s !== tag).join(",");
+  }
+  return [...parts, tag].join(",");
+}
+
+function splitTags(csv?: string | null): string[] {
+  if (!csv) return [];
+  return csv
+    .split(/[,，、;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export default function BookshelfPage() {
   const router = useRouter();
   const { user, loading: authLoading, logout } = useAuth();
   const [books, setBooks] = useState<BookItem[]>([]);
+  const [genres, setGenres] = useState<GenreProfileItem[]>(FALLBACK_GENRES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
-  const [genre, setGenre] = useState("");
+  const [genreCode, setGenreCode] = useState("XIANXIA_FANTASY");
+  const [subGenreTags, setSubGenreTags] = useState("");
   const [synopsis, setSynopsis] = useState("");
   const [creating, setCreating] = useState(false);
 
   const [editing, setEditing] = useState<BookItem | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  const [editGenre, setEditGenre] = useState("");
+  const [editGenreCode, setEditGenreCode] = useState("XIANXIA_FANTASY");
+  const [editSubGenreTags, setEditSubGenreTags] = useState("");
   const [editSynopsis, setEditSynopsis] = useState("");
   const [editStatus, setEditStatus] = useState("DRAFT");
 
@@ -42,11 +151,16 @@ export default function BookshelfPage() {
       return;
     }
     let active = true;
-    void booksApi
-      .list()
-      .then((list) => {
+    void Promise.all([
+      booksApi.list(),
+      genresApi.list().catch(() => FALLBACK_GENRES),
+    ])
+      .then(([list, genreList]) => {
         if (!active) return;
         setBooks(list);
+        if (genreList.length > 0) {
+          setGenres(genreList);
+        }
         setError(null);
       })
       .catch((err) => {
@@ -65,6 +179,11 @@ export default function BookshelfPage() {
     };
   }, [authLoading, user, router]);
 
+  const selectedCreateGenre =
+    genres.find((g) => g.code === genreCode) ?? genres[0] ?? FALLBACK_GENRES[0];
+  const selectedEditGenre =
+    genres.find((g) => g.code === editGenreCode) ?? genres[0] ?? FALLBACK_GENRES[0];
+
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
@@ -73,12 +192,15 @@ export default function BookshelfPage() {
     try {
       const created = await booksApi.create({
         title: title.trim(),
-        genre: genre.trim() || undefined,
+        genre: selectedCreateGenre.displayName,
+        genreCode,
+        subGenreTags: subGenreTags.trim() || undefined,
         synopsis: synopsis.trim() || undefined,
       });
       setBooks((prev) => [created, ...prev]);
       setTitle("");
-      setGenre("");
+      setGenreCode("XIANXIA_FANTASY");
+      setSubGenreTags("");
       setSynopsis("");
       setShowCreate(false);
     } catch (err) {
@@ -91,7 +213,8 @@ export default function BookshelfPage() {
   function startEdit(book: BookItem) {
     setEditing(book);
     setEditTitle(book.title);
-    setEditGenre(book.genre ?? "");
+    setEditGenreCode(book.genreCode || "XIANXIA_FANTASY");
+    setEditSubGenreTags(book.subGenreTags ?? "");
     setEditSynopsis(book.synopsis ?? "");
     setEditStatus(book.status);
   }
@@ -103,7 +226,9 @@ export default function BookshelfPage() {
     try {
       const updated = await booksApi.update(editing.id, {
         title: editTitle.trim(),
-        genre: editGenre.trim() || null,
+        genre: selectedEditGenre.displayName,
+        genreCode: editGenreCode,
+        subGenreTags: editSubGenreTags.trim(),
         synopsis: editSynopsis.trim() || null,
         status: editStatus,
         version: editing.version,
@@ -191,7 +316,7 @@ export default function BookshelfPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">作品列表</h1>
             <p className="text-sm text-muted-foreground">
-              管理你的长篇小说项目，点击作品进入三栏写作工作台
+              管理你的长篇小说项目，选定题材档案即可自动匹配文风纪律、人物属性与专属写作技巧
             </p>
           </div>
           <Button onClick={() => setShowCreate((v) => !v)}>
@@ -208,7 +333,7 @@ export default function BookshelfPage() {
         {showCreate && (
           <form
             onSubmit={handleCreate}
-            className="grid gap-4 rounded-xl border border-border bg-card p-5 shadow-xs sm:grid-cols-2"
+            className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs"
           >
             <div className="space-y-1.5">
               <label className="text-sm font-medium">书名 *</label>
@@ -217,22 +342,74 @@ export default function BookshelfPage() {
                 maxLength={200}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="例如：星渊剑录"
+                placeholder="例如：星渊剑录 / 四号楼值班守则 / 姑苏夜雨录"
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">选择主分类题材 *</label>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {genres.map((g) => {
+                  const selected = g.code === genreCode;
+                  return (
+                    <button
+                      key={g.code}
+                      type="button"
+                      onClick={() => setGenreCode(g.code)}
+                      className={`rounded-lg border p-2.5 text-left transition-colors ${
+                        selected
+                          ? "border-primary bg-primary/5 ring-1 ring-primary"
+                          : "border-border bg-background hover:bg-muted/40"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-semibold">{g.shortName}</span>
+                        <span className="text-[10px] text-muted-foreground">{g.displayName}</span>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                        {g.description}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">题材分类</label>
+              <label className="text-sm font-medium">
+                细分副标签（支持跨界混搭，如古典 + 民俗恐怖）
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedCreateGenre.recommendedSubTags.map((tag) => {
+                  const active = splitTags(subGenreTags).includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setSubGenreTags((cur) => toggleTagInCsv(cur, tag))}
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] transition-colors ${
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "border border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {active ? `✓ ${tag}` : `+ ${tag}`}
+                    </button>
+                  );
+                })}
+              </div>
               <input
-                maxLength={64}
-                value={genre}
-                onChange={(e) => setGenre(e.target.value)}
-                placeholder="例如：东方玄幻 / 赛博悬疑 / 科幻"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                maxLength={255}
+                value={subGenreTags}
+                onChange={(e) => setSubGenreTags(e.target.value)}
+                placeholder="可继续输入自定义标签，用逗号分隔（如：中式民俗,规则怪谈）"
+                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className="text-sm font-medium">故事简介</label>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">故事简介（选填，开书也可留空由系统从前几章自动整理）</label>
               <textarea
                 rows={3}
                 maxLength={4000}
@@ -242,7 +419,8 @@ export default function BookshelfPage() {
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
-            <div className="flex justify-end gap-2 sm:col-span-2">
+
+            <div className="flex justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"
@@ -260,12 +438,10 @@ export default function BookshelfPage() {
         {editing && (
           <form
             onSubmit={handleSaveEdit}
-            className="grid gap-4 rounded-xl border border-primary/40 bg-card p-5 shadow-xs sm:grid-cols-3"
+            className="space-y-4 rounded-xl border border-primary/40 bg-card p-5 shadow-xs"
           >
-            <div className="sm:col-span-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">
-                编辑作品信息
-              </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">编辑作品信息</h2>
               <Button
                 type="button"
                 variant="ghost"
@@ -275,38 +451,76 @@ export default function BookshelfPage() {
                 关闭
               </Button>
             </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium">书名 *</label>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">书名 *</label>
+                <input
+                  required
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">主分类题材</label>
+                <select
+                  value={editGenreCode}
+                  onChange={(e) => setEditGenreCode(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                >
+                  {genres.map((g) => (
+                    <option key={g.code} value={g.code}>
+                      {g.displayName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">连载状态</label>
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                >
+                  {Object.entries(STATUS_LABELS).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">细分副标签</label>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedEditGenre.recommendedSubTags.map((tag) => {
+                  const active = splitTags(editSubGenreTags).includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setEditSubGenreTags((cur) => toggleTagInCsv(cur, tag))}
+                      className={`rounded-full px-2 py-0.5 text-[11px] ${
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "border border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {active ? `✓ ${tag}` : `+ ${tag}`}
+                    </button>
+                  );
+                })}
+              </div>
               <input
-                required
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                value={editSubGenreTags}
+                onChange={(e) => setEditSubGenreTags(e.target.value)}
+                placeholder="逗号分隔副标签"
+                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
               />
             </div>
+
             <div className="space-y-1">
-              <label className="text-xs font-medium">题材</label>
-              <input
-                value={editGenre}
-                onChange={(e) => setEditGenre(e.target.value)}
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium">连载状态</label>
-              <select
-                value={editStatus}
-                onChange={(e) => setEditStatus(e.target.value)}
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-              >
-                {Object.entries(STATUS_LABELS).map(([k, label]) => (
-                  <option key={k} value={k}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1 sm:col-span-3">
               <label className="text-xs font-medium">简介</label>
               <textarea
                 rows={2}
@@ -315,7 +529,7 @@ export default function BookshelfPage() {
                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
               />
             </div>
-            <div className="flex justify-end gap-2 sm:col-span-3">
+            <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" size="sm" onClick={() => setEditing(null)}>
                 取消
               </Button>
@@ -339,61 +553,75 @@ export default function BookshelfPage() {
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {books.map((book) => (
-              <article
-                key={book.id}
-                className="flex flex-col justify-between rounded-xl border border-border bg-card p-5 shadow-xs"
-              >
-                <div className="space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <h2 className="text-base font-semibold leading-snug">
-                      {book.title}
-                    </h2>
-                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                      {STATUS_LABELS[book.status] ?? book.status}
-                    </span>
-                  </div>
-                  {book.genre && (
-                    <p className="text-xs font-medium text-muted-foreground">
-                      题材：{book.genre}
+            {books.map((book) => {
+              const genreMeta = genres.find((g) => g.code === book.genreCode);
+              const subTags = splitTags(book.subGenreTags);
+              return (
+                <article
+                  key={book.id}
+                  className="flex flex-col justify-between rounded-xl border border-border bg-card p-5 shadow-xs"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <h2 className="text-base font-semibold leading-snug">
+                        {book.title}
+                      </h2>
+                      <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                        {STATUS_LABELS[book.status] ?? book.status}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(genreMeta?.shortName || book.genre) && (
+                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+                          {genreMeta?.shortName || book.genre}
+                        </span>
+                      )}
+                      {subTags.slice(0, 3).map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="line-clamp-3 text-sm text-muted-foreground">
+                      {book.synopsis || "暂无简介"}
                     </p>
-                  )}
-                  <p className="line-clamp-3 text-sm text-muted-foreground">
-                    {book.synopsis || "暂无简介"}
-                  </p>
-                </div>
+                  </div>
 
-                <div className="mt-5 space-y-3 border-t border-border pt-3">
-                  <div className="flex items-center justify-between font-mono text-xs text-muted-foreground">
-                    <span>{book.chapterCount} 章</span>
-                    <span>{book.totalWordCount.toLocaleString()} 字</span>
-                    <span>v{book.version}</span>
+                  <div className="mt-5 space-y-3 border-t border-border pt-3">
+                    <div className="flex items-center justify-between font-mono text-xs text-muted-foreground">
+                      <span>{book.chapterCount} 章</span>
+                      <span>{book.totalWordCount.toLocaleString()} 字</span>
+                      <span>v{book.version}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/books/${book.id}`}
+                        className={buttonVariants({ size: "sm", className: "flex-1" })}
+                      >
+                        进入创作台
+                      </Link>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => startEdit(book)}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => void handleDelete(book)}
+                      >
+                        删除
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Link
-                      href={`/books/${book.id}`}
-                      className={buttonVariants({ size: "sm", className: "flex-1" })}
-                    >
-                      进入创作台
-                    </Link>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => startEdit(book)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => void handleDelete(book)}
-                    >
-                      删除
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         )}
       </main>

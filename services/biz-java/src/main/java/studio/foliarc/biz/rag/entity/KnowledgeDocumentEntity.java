@@ -20,6 +20,7 @@ public class KnowledgeDocumentEntity {
     private String scope;
     private UUID uploadedBy;
     private String genreTags;
+    private String genreCodes;
     private String contentSha256;
     private Boolean isReadonly;
     private Boolean enabled;
@@ -58,6 +59,8 @@ public class KnowledgeDocumentEntity {
     public void setUploadedBy(UUID uploadedBy) { this.uploadedBy = uploadedBy; }
     public String getGenreTags() { return genreTags; }
     public void setGenreTags(String genreTags) { this.genreTags = genreTags; }
+    public String getGenreCodes() { return genreCodes; }
+    public void setGenreCodes(String genreCodes) { this.genreCodes = genreCodes; }
     public String getContentSha256() { return contentSha256; }
     public void setContentSha256(String contentSha256) { this.contentSha256 = contentSha256; }
     public Boolean getIsReadonly() { return isReadonly; }

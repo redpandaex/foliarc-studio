@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 import httpx
 
+from foliarc_agent.agent.skills import SkillRegistry
 from foliarc_agent.config import Settings
 from foliarc_agent.rag.embeddings import EmbeddingProvider
 from foliarc_agent.streaming.llm_client import (
@@ -21,6 +22,13 @@ RouteIntent = Literal[
     "FORESHADOWING",
     "ANCIENT_DIALOGUE",
     "PLOT_UNBLOCK",
+    "HORROR_ATMOSPHERE",
+    "RULE_HORROR",
+    "CLASSICAL_PROSE",
+    "FAIR_PLAY_CLUES",
+    "SCIFI_LOGIC",
+    "URBAN_TENSION",
+    "DIALOGUE_SUBTEXT",
     "STYLE_POLISH",
     "OUTLINE_PLAN",
     "CHAPTER_COMPOSE",
@@ -69,8 +77,15 @@ class RouteDecision:
 
 _RULE_CATALOG: list[tuple[RouteIntent, str | None, tuple[str, ...]]] = [
     ("COMBAT_SCENE", "combat-scene", ("打斗", "交手", "比试", "剑招", "法术对决", "追杀", "搏杀", "激战", "生死战")),
+    ("RULE_HORROR", "rule-horror-logic", ("规则怪谈", "守则", "禁忌", "告示", "条文", "污染规则")),
+    ("HORROR_ATMOSPHERE", "horror-atmosphere", ("恐怖", "灵异", "阴森", "诡异", "民俗恐怖", "闹鬼", "惊悚", "噩梦")),
+    ("CLASSICAL_PROSE", "classical-prose", ("古典", "白描", "世情", "志怪", "章回", "史笔", "礼法")),
+    ("FAIR_PLAY_CLUES", "fair-play-clues", ("推理", "破案", "现场勘查", "物证", "不在场证明", "嫌疑人", "口供", "密室")),
+    ("SCIFI_LOGIC", "scifi-hard-logic", ("科幻", "赛博", "义体", "星舰", "废土", "末世", "辐射", "能源危机")),
+    ("URBAN_TENSION", "urban-tension", ("都市", "职场", "商战", "谈判", "项目博弈", "现实冲突")),
     ("FORESHADOWING", "foreshadowing-craft", ("伏笔", "悬疑", "草蛇灰线", "暗线", "照应", "反转", "线索")),
-    ("ANCIENT_DIALOGUE", "ancient-dialogue", ("对话", "宗门议事", "世家交锋", "论道", "古风对话", "试探", "对白")),
+    ("ANCIENT_DIALOGUE", "ancient-dialogue", ("对话", "宗门议事", "世家交锋", "论道", "古风对话", "试探", "对白", "朝堂")),
+    ("DIALOGUE_SUBTEXT", "dialogue-subtext", ("潜台词", "对峙", "审讯", "言不由衷", "心理博弈")),
     ("PLOT_UNBLOCK", "plot-unblock", ("卡文", "破局", "钩子", "冲突升级", "怎么推进", "不知怎么写")),
     ("OUTLINE_PLAN", None, ("大纲", "细纲", "章节规划", "节拍表", "分幕")),
     ("STYLE_POLISH", None, ("润色", "扩写", "改写", "文笔", "细节描写")),
@@ -78,8 +93,15 @@ _RULE_CATALOG: list[tuple[RouteIntent, str | None, tuple[str, ...]]] = [
 
 _SEMANTIC_PROTOTYPES: dict[RouteIntent, tuple[str | None, str]] = {
     "COMBAT_SCENE": ("combat-scene", "高强度动作打斗、冷兵器交锋、修仙法术对决、近身搏杀与招式节奏描写"),
+    "RULE_HORROR": ("rule-horror-logic", "规则怪谈守则条文、真假规则分辨、禁忌触发代价与理性求生博弈"),
+    "HORROR_ATMOSPHERE": ("horror-atmosphere", "中式民俗惊悚、阴森灵异空间压迫、五感微异化与毛骨悚然的心理恐惧"),
+    "CLASSICAL_PROSE": ("classical-prose", "古典文学半文白韵律、明清世情白描、礼法器物细节与章回体留白"),
+    "FAIR_PLAY_CLUES": ("fair-play-clues", "悬疑刑侦破案现场勘查、公平物证线索埋点、不在场证明与供词矛盾"),
+    "SCIFI_LOGIC": ("scifi-hard-logic", "硬核科幻物理设定、赛博义体过载、废土资源倒计时与阵营科技博弈"),
+    "URBAN_TENSION": ("urban-tension", "都市现实职场利益拉扯、商业谈判与细腻生活流心理情感冲突"),
     "FORESHADOWING": ("foreshadowing-craft", "悬疑推理、埋设长线伏笔、回收前文线索、制造草蛇灰线与结局反转"),
     "ANCIENT_DIALOGUE": ("ancient-dialogue", "古风仙侠人物交谈、宗门长老议事、江湖言辞试探、潜台词博弈与论道对话"),
+    "DIALOGUE_SUBTEXT": ("dialogue-subtext", "人物高张力潜台词对峙、审讯博弈、言不由衷的暗流对话"),
     "PLOT_UNBLOCK": ("plot-unblock", "解决写作卡文瓶颈、设计剧情转折与章节末尾悬念钩子、推进主线冲突"),
     "STYLE_POLISH": (None, "文学润色、环境氛围扩写、心理活动细腻刻画与叙事节奏打磨"),
     "OUTLINE_PLAN": (None, "规划章节结构大纲、拆解三到四个核心场景节拍与起承转合"),
@@ -102,12 +124,10 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 class IntentAndModelRouter:
     """
-    Multi-layer novel intent & cost-aware model router:
-    1. Layer 1: Deterministic rule/keyword fast path (<1ms, 0 tokens)
-    2. Layer 2: Embedding semantic similarity against canonical novel intent prototypes
+    Multi-layer genre-aware novel intent & cost-aware model router:
+    1. Layer 1: Deterministic rule/keyword fast path (<1ms, 0 tokens), filtered by book genre & sub-tags
+    2. Layer 2: Embedding semantic similarity against allowed genre-matched intent prototypes
     3. Layer 3: Optional fast-model tie-breaker when semantic margin is narrow
-    Allocates low-cost `fast-router` to Director/Lorekeeper, flagship `writer-main` to Writer,
-    and reasoning `critic-reasoner` (with automatic fallback) to ContinuityCritic.
     """
 
     def __init__(
@@ -115,9 +135,11 @@ class IntentAndModelRouter:
         *,
         settings: Settings,
         embedder: EmbeddingProvider | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._embedder = embedder or EmbeddingProvider(settings)
+        self._skills = skill_registry or SkillRegistry()
         self._prototype_vecs: dict[RouteIntent, list[float]] | None = None
 
     async def route(
@@ -127,11 +149,27 @@ class IntentAndModelRouter:
         instruction: str,
         chapter_context: str = "",
         requested_model_alias: str = "writer-main",
+        genre_code: str | None = None,
+        sub_genre_tags: str | None = None,
+        allowed_skills: set[str] | None = None,
     ) -> RouteDecision:
         text = f"{instruction.strip()} {chapter_context[-300:]}".strip()
 
-        # Layer 1: Rule / Keyword fast channel
+        resolved_allowed = allowed_skills
+        if resolved_allowed is None and (genre_code or sub_genre_tags):
+            resolved_allowed = set(
+                self._skills.available_names(genre_code=genre_code, sub_genre_tags=sub_genre_tags)
+            )
+
+        def _skill_allowed(skill: str | None) -> bool:
+            if skill is None or resolved_allowed is None:
+                return True
+            return skill in resolved_allowed
+
+        # Layer 1: Rule / Keyword fast channel (genre-filtered)
         for intent, skill, keywords in _RULE_CATALOG:
+            if not _skill_allowed(skill):
+                continue
             matched = [kw for kw in keywords if kw in instruction]
             if matched:
                 return self._build_decision(
@@ -162,29 +200,30 @@ class IntentAndModelRouter:
                 reason="动作类型为 REWRITE，命中润色扩写快通道",
             )
 
-        # Layer 2: Semantic Embedding routing
+        # Layer 2: Semantic Embedding routing (restricted to allowed genre skills)
         if text:
-            best_intent, best_score, margin = await self._embedding_route(text)
+            best_intent, best_score, margin = await self._embedding_route(text, resolved_allowed)
             if best_score >= 0.20 and margin >= 0.03:
                 skill = _SEMANTIC_PROTOTYPES[best_intent][0]
                 return self._build_decision(
                     intent=best_intent,
                     confidence=min(0.89, 0.55 + best_score),
                     layer="EMBEDDING",
-                    skill=skill,
+                    skill=skill if _skill_allowed(skill) else None,
                     requested_model_alias=requested_model_alias,
                     reason=f"语义向量路由命中 {best_intent} (cos={best_score:.3f}, margin={margin:.3f})",
                 )
 
             # Layer 3: Lightweight LLM classifier tie-breaker when configured
             if self._settings.llm_configured and instruction.strip():
-                llm_intent = await self._llm_classify(instruction.strip())
+                llm_intent = await self._llm_classify(instruction.strip(), resolved_allowed)
                 if llm_intent is not None:
+                    skill = _SEMANTIC_PROTOTYPES[llm_intent][0]
                     return self._build_decision(
                         intent=llm_intent,
                         confidence=0.82,
                         layer="LLM_CLASSIFIER",
-                        skill=_SEMANTIC_PROTOTYPES[llm_intent][0],
+                        skill=skill if _skill_allowed(skill) else None,
                         requested_model_alias=requested_model_alias,
                         reason=f"轻量快模型分类器判定为 {llm_intent}",
                     )
@@ -198,7 +237,11 @@ class IntentAndModelRouter:
             reason="默认进入标准长篇章节协同创作通道",
         )
 
-    async def _embedding_route(self, text: str) -> tuple[RouteIntent, float, float]:
+    async def _embedding_route(
+        self,
+        text: str,
+        allowed_skills: set[str] | None = None,
+    ) -> tuple[RouteIntent, float, float]:
         if self._prototype_vecs is None:
             intents = list(_SEMANTIC_PROTOTYPES.keys())
             proto_texts = [_SEMANTIC_PROTOTYPES[i][1] for i in intents]
@@ -210,6 +253,9 @@ class IntentAndModelRouter:
             (
                 (intent, _cosine_similarity(query_vec, vec))
                 for intent, vec in self._prototype_vecs.items()
+                if allowed_skills is None
+                or _SEMANTIC_PROTOTYPES[intent][0] is None
+                or _SEMANTIC_PROTOTYPES[intent][0] in allowed_skills
             ),
             key=lambda x: x[1],
             reverse=True,
@@ -218,9 +264,17 @@ class IntentAndModelRouter:
         second_score = scored[1][1] if len(scored) > 1 else 0.0
         return top_intent, top_score, top_score - second_score
 
-    async def _llm_classify(self, instruction: str) -> RouteIntent | None:
+    async def _llm_classify(
+        self,
+        instruction: str,
+        allowed_skills: set[str] | None = None,
+    ) -> RouteIntent | None:
         url = f"{self._settings.llm_base_url.rstrip('/')}/chat/completions"
-        valid = list(_SEMANTIC_PROTOTYPES.keys())
+        valid = [
+            intent
+            for intent, (skill, _) in _SEMANTIC_PROTOTYPES.items()
+            if allowed_skills is None or skill is None or skill in allowed_skills
+        ]
         prompt = (
             f"请将以下小说写作指令分类为唯一一个标签：{', '.join(valid)}。"
             '仅返回 JSON：{"intent":"..."}'
@@ -248,7 +302,7 @@ class IntentAndModelRouter:
                 if start >= 0 and end > start:
                     parsed = json.loads(raw[start : end + 1])
                     candidate = str(parsed.get("intent", "")).upper()
-                    if candidate in _SEMANTIC_PROTOTYPES:
+                    if candidate in valid:
                         return candidate  # type: ignore[return-value]
         except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError):
             return None
@@ -265,7 +319,6 @@ class IntentAndModelRouter:
         reason: str,
     ) -> RouteDecision:
         writer_model = requested_model_alias if requested_model_alias in DEFAULT_FALLBACK_CHAINS else "writer-main"
-        # Simple/structural tasks use fast-router; heavy consistency review uses critic-reasoner (with fallback)
         critic_model = "writer-main" if intent in ("STYLE_POLISH", "OUTLINE_PLAN") else "critic-reasoner"
         plan = ModelPlan(
             director="fast-router",

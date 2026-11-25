@@ -22,6 +22,7 @@ import {
   chaptersApi,
   runsApi,
   structureApi,
+  styleAnchorsApi,
   type BookItem,
   type BookTreeResponse,
   type ChapterDetail,
@@ -103,6 +104,9 @@ function BookWorkbenchContent() {
   const [snapshotSummary, setSnapshotSummary] = useState("");
   const [fullPreview, setFullPreview] = useState<FullChapterPreview | null>(null);
   const [loadingPage, setLoadingPage] = useState(true);
+  const [selectedExcerpt, setSelectedExcerpt] = useState("");
+  const [anchorNotice, setAnchorNotice] = useState<string | null>(null);
+  const [anchorRefreshKey, setAnchorRefreshKey] = useState(0);
 
   const [runningChapterIds, setRunningChapterIds] = useState<Record<string, boolean>>({});
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -732,13 +736,66 @@ function BookWorkbenchContent() {
                 />
               </div>
 
+              {anchorNotice && (
+                <div className="mb-2 flex items-center justify-between rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-400">
+                  <span>{anchorNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAnchorNotice(null)}
+                    className="text-[11px] underline"
+                  >
+                    知道了
+                  </button>
+                </div>
+              )}
+
+              {selectedExcerpt.length >= 20 && selectedExcerpt.length <= 900 && (
+                <div className="mb-2 flex items-center justify-between gap-2 rounded border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs">
+                  <span className="truncate text-muted-foreground">
+                    已选中 {selectedExcerpt.length} 字片段，可收藏为本书文风参考
+                  </span>
+                  <Button
+                    type="button"
+                    size="xs"
+                    onClick={() => {
+                      const titleLabel = activeChapter
+                        ? `第${activeChapter.chapterNo}章片段`
+                        : "正文选段";
+                      void styleAnchorsApi
+                        .upsert(bookId, {
+                          title: titleLabel,
+                          excerptText: selectedExcerpt,
+                          enabled: true,
+                        })
+                        .then(() => {
+                          setSelectedExcerpt("");
+                          setAnchorRefreshKey((k) => k + 1);
+                          setAnchorNotice("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
+                        })
+                        .catch((err) => {
+                          setErrorMsg(
+                            err instanceof Error ? err.message : "设为文风锚点失败",
+                          );
+                        });
+                    }}
+                  >
+                    设为本书文风锚点
+                  </Button>
+                </div>
+              )}
+
               <textarea
                 value={draftContent}
+                onSelect={(e) => {
+                  const el = e.currentTarget;
+                  const chunk = el.value.slice(el.selectionStart, el.selectionEnd).trim();
+                  setSelectedExcerpt(chunk);
+                }}
                 onChange={(e) => {
                   setDraftContent(e.target.value);
                   if (saveState !== "conflict") setSaveState("dirty");
                 }}
-                placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存）"
+                placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存；划选满意段落可一键设为本书文风锚点）"
                 className="min-h-0 flex-1 resize-none bg-transparent text-base leading-8 outline-none"
               />
             </div>
@@ -803,7 +860,13 @@ function BookWorkbenchContent() {
             />
           </div>
 
-          {rightTab === "lore" && <LorePanel bookId={bookId} />}
+          {rightTab === "lore" && (
+            <LorePanel
+              bookId={bookId}
+              bookGenreCode={book?.genreCode}
+              anchorRefreshKey={anchorRefreshKey}
+            />
+          )}
         </aside>
       </div>
 

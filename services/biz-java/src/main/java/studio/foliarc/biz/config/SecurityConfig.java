@@ -7,6 +7,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
@@ -58,6 +59,7 @@ public class SecurityConfig {
                                 "/api/v1/vip/plans",
                                 "/internal/v1/**"
                         ).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/genres", "/api/v1/genres/**").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

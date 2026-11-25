@@ -21,6 +21,9 @@ class RunStartRequest(BaseModel):
     model_alias: str = "writer-main"
     book_title: str = ""
     genre: str | None = None
+    genre_code: str = ""
+    sub_genre_tags: str = ""
+    style_anchors_text: str = ""
     synopsis: str | None = None
     story_charter: str = ""
     chapter_title: str = ""
@@ -50,6 +53,9 @@ class RunResumeRequest(BaseModel):
     model_alias: str = "writer-main"
     book_title: str = ""
     genre: str | None = None
+    genre_code: str = ""
+    sub_genre_tags: str = ""
+    style_anchors_text: str = ""
     synopsis: str | None = None
     story_charter: str = ""
     chapter_title: str = ""

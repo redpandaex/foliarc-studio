@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import studio.foliarc.biz.genre.GenreProfileRegistry;
 
 public final class NovelDtos {
 
@@ -22,8 +23,14 @@ public final class NovelDtos {
             String genre,
 
             @Size(max = 4000, message = "简介最多 4000 个字符")
-            String synopsis
+            String synopsis,
+
+            String genreCode,
+            String subGenreTags
     ) {
+        public CreateBookRequest(String title, String genre, String synopsis) {
+            this(title, genre, synopsis, null, null);
+        }
     }
 
     public record UpdateBookRequest(
@@ -41,8 +48,14 @@ public final class NovelDtos {
             String status,
 
             @NotNull(message = "版本号不能为空")
-            Long version
+            Long version,
+
+            String genreCode,
+            String subGenreTags
     ) {
+        public UpdateBookRequest(String title, String genre, String synopsis, String status, Long version) {
+            this(title, genre, synopsis, status, version, null, null);
+        }
     }
 
     public record BookResponse(
@@ -55,8 +68,15 @@ public final class NovelDtos {
             int chapterCount,
             long totalWordCount,
             OffsetDateTime createdAt,
-            OffsetDateTime updatedAt
+            OffsetDateTime updatedAt,
+            String genreCode,
+            String subGenreTags
     ) {
+        public BookResponse(UUID id, String title, String genre, String synopsis, String status, Long version,
+                            int chapterCount, long totalWordCount, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+            this(id, title, genre, synopsis, status, version, chapterCount, totalWordCount, createdAt, updatedAt,
+                    GenreProfileRegistry.DEFAULT_GENRE_CODE, "");
+        }
     }
 
     public record CreateChapterRequest(

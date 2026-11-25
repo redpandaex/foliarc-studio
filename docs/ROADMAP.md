@@ -153,9 +153,11 @@ flowchart LR
 - [x] **2.6.2B 伏笔全生命周期导演台与连续性防线（Phase 5.8B，已完成）** `★`
   - **6 态伏笔状态机与防提前剧透双层隔离**：支持 `PLANNED / PLANTED / HINTED / TRIGGERED / RESOLVED / DORMANT_CLUE / ABANDONED` 状态流转与 `#F01` 编号；`surface_clue` 与 `hidden_truth` 物理隔离，Writer 仅见表象与导演指令，Critic 持有潜伏底牌清单与 `PAYOFF` 埋设原文锚点（精准回捞当年原文）。
   - **人物与事实连续性防线**：人物别名归一（Alias）、冷热休眠与一键唤醒（`CORE_PINNED / ACTIVE / DORMANT / DEAD`）、字段锁定防 AI 覆盖（`locked_fields`）、按节状态快照时间旅行（`character_state_snapshots`）、源小节归属回滚（`source_section_id`）、POV 视角信息隔离（`known_by`）以及高危变更审批闸门（`memory_proposals`）。
-- [ ] **2.6.2C 6 大题材档案包与双向蝴蝶效应引擎（Phase 5.8C~D，详见 [`docs/architecture/00-ARCHITECTURE-OVERVIEW.md`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）** `★`
-  - **题材分类档案包（5.8C）**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签，联动分层 Skill 路由、人物 `JSONB` 动态表单、Critic 差异化 Rubric、少样本黄金文风锚点（Style Anchors）与公共 RAG 标准化匹配。
-  - **双向自选范围蝴蝶效应引擎（5.8D）**：原生对接 Phase 5.5 已落地的 VIP 动态权益中台，支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）。
+- [x] **2.6.2C 6 大题材档案包、分层 Skill 路由与少样本黄金文风锚点（Phase 5.8C，已完成）** `★`
+  - **两级题材分类体系与 6 处全链路联动**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签（支持“古典 + 民俗恐怖”跨界叠加）；升级 11 个分层写作技能包（`genres`/`sub_tags` 过滤路由），消除跨题材误触发；人物扩展属性收口至 `characters.custom_attributes JSONB`（前端按题材动态渲染表单、仙侠 `realm` 双向兼容）；`Director` 节拍骨架、`Writer` 反 AI 味禁忌词与 `Critic` 差异化审稿 Rubric 全链路按题材自适应；公共 RAG 资料库升级 `genre_codes` + `genre_tags` 标准化匹配。
+  - **少样本黄金文风锚点（Style Anchors）**：新增 `style_anchors` 表与增删启停接口（联动 VIP `maxStyleAnchors` 配额与总字数 ≤ 900 字硬上限），固定注入 L0 静态 System Prefix 100% 复用 KV Cache，支持编辑器划词一键收藏为本书文风参考，根治长篇续写“AI 味自噬”。
+- [ ] **2.6.2D 双向自选范围蝴蝶效应引擎（Phase 5.8D，详见 [`docs/architecture/04-RIPPLE-EDIT-ENGINE.md`](./architecture/04-RIPPLE-EDIT-ENGINE.md)）** `★`
+  - 原生对接 Phase 5.5 已落地的 VIP 动态权益中台，支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）。
 - [x] **2.7 多 Agent 架构与协作编排**
   - 设计“小说编辑部”多 Agent 团队：
     - `Director（总编/规划师）`：拆解章节大纲与场景节拍（Beat Sheet）。

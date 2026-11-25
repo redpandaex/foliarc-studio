@@ -45,11 +45,12 @@ public class AdminKnowledgeController {
             @RequestParam(value = "docType", required = false, defaultValue = "WORLDBOOK") String docType,
             @RequestParam(value = "title", required = false) String title,
             @RequestParam(value = "genreTags", required = false) String genreTags,
+            @RequestParam(value = "genreCodes", required = false) String genreCodes,
             @RequestParam(value = "publicToAll", required = false, defaultValue = "true") boolean publicToAll
     ) {
         requireAdmin(principal);
         return documentService.uploadPlatformDocument(
-                principal.userId(), file, docType, title, genreTags, publicToAll
+                principal.userId(), file, docType, title, genreTags, genreCodes, publicToAll
         );
     }
 

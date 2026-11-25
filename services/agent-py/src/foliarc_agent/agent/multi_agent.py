@@ -11,6 +11,7 @@ from typing import Any, Literal, Protocol
 import httpx
 from pydantic import BaseModel, Field
 
+from foliarc_agent.agent.genre_profiles import GenreProfileRegistry
 from foliarc_agent.agent.mcp_client import McpLoreClient
 from foliarc_agent.agent.router import FallbackStreamClient, IntentAndModelRouter
 from foliarc_agent.agent.skills import SkillRegistry
@@ -42,6 +43,9 @@ class EditorialBlackboard(BaseModel):
     action: str = "CONTINUE"
     book_title: str = ""
     genre: str | None = None
+    genre_code: str = ""
+    sub_genre_tags: str = ""
+    style_anchors_text: str = ""
     synopsis: str | None = None
     story_charter: str = ""
     chapter_title: str = ""
@@ -362,11 +366,24 @@ class EditorialTeamOrchestrator:
         # NODE 0: ROUTER (Multi-layer Intent + Model Routing)
         # =====================================================================
         if state.current_node == "ROUTER":
+            allowed_skills = (
+                set(
+                    self._skills.available_names(
+                        genre_code=state.genre_code or None,
+                        sub_genre_tags=state.sub_genre_tags or None,
+                    )
+                )
+                if (state.genre_code or state.sub_genre_tags)
+                else None
+            )
             decision = await self._router.route(
                 action=state.action,
                 instruction=state.instruction,
                 chapter_context=state.chapter_context,
                 requested_model_alias=state.requested_model_alias,
+                genre_code=state.genre_code or None,
+                sub_genre_tags=state.sub_genre_tags or None,
+                allowed_skills=allowed_skills,
             )
             state.route_intent = decision.intent
             state.route_layer = decision.layer
@@ -924,8 +941,13 @@ class EditorialTeamOrchestrator:
             "3. 不写正文，只输出精炼可编辑的大纲（300~500 字）。"
         )
         user_parts = [f"作品：《{state.book_title}》"]
-        if state.genre:
-            user_parts.append(f"题材：{state.genre}")
+        if state.genre or state.genre_code:
+            profile = GenreProfileRegistry.resolve(state.genre_code, state.genre)
+            genre_desc = state.genre or profile.display_name
+            if state.sub_genre_tags.strip():
+                genre_desc = f"{genre_desc}（标签：{state.sub_genre_tags.strip()}）"
+            user_parts.append(f"题材：{genre_desc}")
+            user_parts.append(profile.format_director_pattern_block())
         if state.story_charter.strip():
             user_parts.append(f"【作品故事宪章（L0 静态底座）】\n{state.story_charter.strip()[:1200]}")
         elif state.synopsis:
@@ -975,11 +997,21 @@ class EditorialTeamOrchestrator:
         ]
         if state.book_title:
             static_prefix.append(f"当前作品：《{state.book_title}》（{state.genre or '长篇小说'}）")
+        if state.genre_code or state.genre:
+            profile = GenreProfileRegistry.resolve(state.genre_code, state.genre)
+            static_prefix.append(profile.format_writer_guard_block())
+            if state.sub_genre_tags.strip():
+                static_prefix.append(f"【作品细分标签】{state.sub_genre_tags.strip()}")
         # L0 Static Charter pinned in immutable System Prefix to maximize KV Cache hits
         if state.story_charter.strip():
             static_prefix.append(f"【作品故事宪章（L0 静态底座）】\n{state.story_charter.strip()[:1200]}")
         elif state.synopsis:
             static_prefix.append(f"【故事简介】\n{state.synopsis}")
+        if state.style_anchors_text.strip():
+            static_prefix.append(
+                "【本书文风锚点（L0 静态风格参考：请模仿句式长短、白描密度、对话节奏与用词克制度，严禁照抄剧情）】\n"
+                + state.style_anchors_text.strip()[:1000]
+            )
         if skill_body:
             static_prefix.append(f"【已挂载专项写作技能规范】\n{skill_body[:2500]}")
 
@@ -1022,17 +1054,22 @@ class EditorialTeamOrchestrator:
 
     @staticmethod
     def _build_critic_messages(state: EditorialBlackboard) -> list[dict[str, str]]:
+        genre_rubric = ""
+        if state.genre_code or state.genre:
+            profile = GenreProfileRegistry.resolve(state.genre_code, state.genre)
+            genre_rubric = "\n" + profile.format_critic_rubric_block() + "\n"
         sys_prompt = (
             "你是 FoliarcStudio 编辑部的【ContinuityCritic 审稿与一致性审查编辑】。\n"
             "请对照【批准大纲】、【作品故事宪章】、【当前活跃状态】、【上一章结尾参考】与【设定核验简报】，严格审阅【执笔作家草稿】是否存在：\n"
             "1. 人物 OOC（性格/称谓/立场崩塌）\n"
-            "2. 战力境界、持有物品或地点时间线矛盾（吃书）\n"
-            "3. 遗漏大纲核心节拍或文风质量明显不足\n"
+            "2. 设定、能力/规则、持有物品或地点时间线矛盾（吃书）\n"
+            "3. 遗漏大纲核心节拍、文风出戏或触犯本题材禁用套话\n"
             "4. 跨章衔接断层：若提供了【上一章结尾参考】，本章必须自然承接上一章末尾的剧情、人物状态与悬念；若另起炉灶、与上一章关联薄弱或重复前文，必须扣分并打回重写\n"
             "5. 伏笔导演与防剧透红线：检查本章指定的 PLANT 是否自然埋入、PAYOFF 是否与当年埋设原文零矛盾，以及是否存在把【严禁提前点破真相】的潜伏底牌意外剧透的严重失误\n"
             "6. 死亡墓碑与视角红线：检查是否出现已亡角色无故复活，或当前 POV 视角角色凭空知晓【幕后客观事实】（读心术/视角越权）\n"
-            '请仅输出严格 JSON 对象：{"passed": true/false, "score": 0-100, "issues": ["问题1"], "revision_guidance": "具体修改指令"}'
-            "\n评分 >= 78 且无硬伤时 passed 为 true；否则 passed 为 false 并给出可执行修改意见。"
+            + genre_rubric
+            + '请仅输出严格 JSON 对象：{"passed": true/false, "score": 0-100, "issues": ["问题1"], "revision_guidance": "具体修改指令"}'
+            + "\n评分 >= 78 且无硬伤时 passed 为 true；否则 passed 为 false 并给出可执行修改意见。"
         )
         user_sections = [
             f"【批准大纲】\n{state.outline_text[:1500]}",

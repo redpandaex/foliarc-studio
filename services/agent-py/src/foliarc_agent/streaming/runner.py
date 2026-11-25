@@ -115,7 +115,7 @@ class RunManager:
         self._skills = skill_registry or SkillRegistry()
         self._prompts = PromptRegistry(settings)
         self._rag_retriever = rag_retriever
-        self._router = IntentAndModelRouter(settings=settings, embedder=embedder)
+        self._router = IntentAndModelRouter(settings=settings, embedder=embedder, skill_registry=self._skills)
         self._checkpoint_store = checkpoint_store or HttpBizCheckpointStore(settings)
         self._sandbox = sandbox_provider or StubSandboxProvider()
         self._guardrails = guardrails or GuardrailEngine(settings)
@@ -146,6 +146,9 @@ class RunManager:
                 model_alias=req.model_alias,
                 book_title=req.book_title,
                 genre=req.genre,
+                genre_code=req.genre_code,
+                sub_genre_tags=req.sub_genre_tags,
+                style_anchors_text=req.style_anchors_text,
                 synopsis=req.synopsis,
                 story_charter=req.story_charter,
                 chapter_title=req.chapter_title,
@@ -190,6 +193,9 @@ class RunManager:
                 model_alias=req.model_alias,
                 book_title=req.book_title,
                 genre=req.genre,
+                genre_code=req.genre_code,
+                sub_genre_tags=req.sub_genre_tags,
+                style_anchors_text=req.style_anchors_text,
                 synopsis=req.synopsis,
                 story_charter=req.story_charter,
                 chapter_title=req.chapter_title,
@@ -283,6 +289,9 @@ class RunManager:
         book_title: str,
         genre: str | None,
         synopsis: str | None,
+        genre_code: str = "",
+        sub_genre_tags: str = "",
+        style_anchors_text: str = "",
         story_charter: str = "",
         chapter_title: str,
         chapter_context: str,
@@ -430,6 +439,9 @@ class RunManager:
                         action=str(action),
                         book_title=book_title,
                         genre=genre,
+                        genre_code=genre_code,
+                        sub_genre_tags=sub_genre_tags,
+                        style_anchors_text=style_anchors_text,
                         synopsis=synopsis,
                         story_charter=story_charter,
                         chapter_title=chapter_title,
@@ -468,8 +480,14 @@ class RunManager:
                         action=action,
                         book_title=book_title,
                         genre=genre,
+                        genre_code=genre_code,
+                        sub_genre_tags=sub_genre_tags,
+                        style_anchors_text=style_anchors_text,
                         synopsis=story_charter.strip() or synopsis,
-                        skill_catalog=self._skills.render_catalog_prompt(),
+                        skill_catalog=self._skills.render_catalog_prompt(
+                            genre_code=genre_code or None,
+                            sub_genre_tags=sub_genre_tags or None,
+                        ),
                     )
                     user_parts = []
                     if chapter_no is not None or chapter_title:
@@ -534,6 +552,9 @@ class RunManager:
                         action=action,
                         book_title=book_title,
                         genre=genre,
+                        genre_code=genre_code,
+                        sub_genre_tags=sub_genre_tags,
+                        style_anchors_text=style_anchors_text,
                         synopsis=synopsis,
                         story_charter=story_charter,
                         chapter_title=chapter_title,

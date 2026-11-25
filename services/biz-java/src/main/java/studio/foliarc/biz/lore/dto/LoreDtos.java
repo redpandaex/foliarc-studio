@@ -2,6 +2,7 @@ package studio.foliarc.biz.lore.dto;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
@@ -37,7 +38,8 @@ public final class LoreDtos {
             @PositiveOrZero Long lastSeenOrder,
             @Size(max = 120) String arcScope,
             List<String> lockedFields,
-            Boolean isHighRisk
+            Boolean isHighRisk,
+            Map<String, String> customAttributes
     ) {
         public UpsertCharacterRequest(String name, String roleType, String personality, String realmOrLevel,
                                       String currentLocation, String statusNotes, String inventory) {
@@ -50,6 +52,23 @@ public final class LoreDtos {
                                       String lifecycleStatus, Long lastSeenOrder, String arcScope, List<String> lockedFields) {
             this(name, roleType, personality, realmOrLevel, currentLocation, statusNotes, inventory,
                     aliases, lifecycleStatus, lastSeenOrder, arcScope, lockedFields, null);
+        }
+
+        public UpsertCharacterRequest(String name, String roleType, String personality, String realmOrLevel,
+                                      String currentLocation, String statusNotes, String inventory, String aliases,
+                                      String lifecycleStatus, Long lastSeenOrder, String arcScope, List<String> lockedFields,
+                                      Boolean isHighRisk) {
+            this(name, roleType, personality, realmOrLevel, currentLocation, statusNotes, inventory,
+                    aliases, lifecycleStatus, lastSeenOrder, arcScope, lockedFields, isHighRisk, null);
+        }
+
+        public static UpsertCharacterRequest fromJson(
+                String name, String roleType, String personality, String realmOrLevel, String currentLocation,
+                String statusNotes, String inventory, Object aliases, String lifecycleStatus, Long lastSeenOrder,
+                String arcScope, List<String> lockedFields, Boolean isHighRisk
+        ) {
+            return fromJson(name, roleType, personality, realmOrLevel, currentLocation, statusNotes,
+                    inventory, aliases, lifecycleStatus, lastSeenOrder, arcScope, lockedFields, isHighRisk, null);
         }
 
         // Section workers may send an array, while the author API stores comma-separated aliases.
@@ -67,11 +86,12 @@ public final class LoreDtos {
                 @JsonProperty("lastSeenOrder") Long lastSeenOrder,
                 @JsonProperty("arcScope") String arcScope,
                 @JsonProperty("lockedFields") List<String> lockedFields,
-                @JsonProperty("isHighRisk") Boolean isHighRisk
+                @JsonProperty("isHighRisk") Boolean isHighRisk,
+                @JsonProperty("customAttributes") @JsonAlias("custom_attributes") Map<String, String> customAttributes
         ) {
             return new UpsertCharacterRequest(name, roleType, personality, realmOrLevel, currentLocation,
                     statusNotes, inventory, LoreNames.fromJson(aliases), lifecycleStatus, lastSeenOrder,
-                    arcScope, lockedFields, isHighRisk);
+                    arcScope, lockedFields, isHighRisk, customAttributes);
         }
     }
 
@@ -90,7 +110,8 @@ public final class LoreDtos {
             String lifecycleStatus,
             Long lastSeenOrder,
             String arcScope,
-            List<String> lockedFields
+            List<String> lockedFields,
+            Map<String, String> customAttributes
     ) {
         public CharacterResponse(UUID id, UUID bookId, String name, String roleType, String personality,
                                  String realmOrLevel, String currentLocation, String statusNotes,
@@ -98,6 +119,14 @@ public final class LoreDtos {
             this(id, bookId, name, roleType, personality, realmOrLevel, currentLocation, statusNotes,
                     inventory, updatedAt, "", "PROTAGONIST".equals(roleType) ? "CORE_PINNED" : "ACTIVE",
                     0L, "", List.of());
+        }
+
+        public CharacterResponse(UUID id, UUID bookId, String name, String roleType, String personality,
+                                 String realmOrLevel, String currentLocation, String statusNotes, String inventory,
+                                 OffsetDateTime updatedAt, String aliases, String lifecycleStatus,
+                                 Long lastSeenOrder, String arcScope, List<String> lockedFields) {
+            this(id, bookId, name, roleType, personality, realmOrLevel, currentLocation, statusNotes,
+                    inventory, updatedAt, aliases, lifecycleStatus, lastSeenOrder, arcScope, lockedFields, Map.of());
         }
     }
 

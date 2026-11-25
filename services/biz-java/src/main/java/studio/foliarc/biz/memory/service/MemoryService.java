@@ -23,6 +23,7 @@ import studio.foliarc.biz.memory.entity.TimelineEventEntity;
 import studio.foliarc.biz.memory.mapper.CharacterRelationMapper;
 import studio.foliarc.biz.memory.mapper.CharacterStateSnapshotMapper;
 import studio.foliarc.biz.memory.mapper.TimelineEventMapper;
+import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.entity.ChapterSectionEntity;
 import studio.foliarc.biz.novel.mapper.ChapterSectionMapper;
 import studio.foliarc.biz.novel.service.BookService;
@@ -247,15 +248,15 @@ public class MemoryService {
             UUID bookId,
             RagDtos.ApplyExtractedMemoryRequest req
     ) {
-        bookService.requireOwnedBook(ownerId, bookId);
+        BookEntity book = bookService.requireOwnedBook(ownerId, bookId);
         bookService.lockStructure(bookId);
-        return applyExtraction(ownerId, bookId, req, null);
+        return applyExtraction(ownerId, bookId, req, null, book == null ? null : book.getGenreCode());
     }
 
     // StoryMemoryContextService already validates the content hash and holds the book lock.
     RagDtos.ApplyExtractedMemoryResponse applySectionMemory(
             UUID ownerId, UUID bookId, ChapterSectionEntity section, RagDtos.ApplyExtractedMemoryRequest req,
-            long maxOrder, String precisionMode
+            long maxOrder, String precisionMode, String genreCode
     ) {
         UUID sectionId = section.getId();
         relationMapper.delete(new LambdaQueryWrapper<CharacterRelationEntity>()
@@ -272,7 +273,8 @@ public class MemoryService {
                 .eq(CharacterStateSnapshotEntity::getSource, AI_EXTRACTED));
         if (proposalService != null) proposalService.clearPendingForSection(bookId, sectionId);
 
-        RagDtos.ApplyExtractedMemoryResponse applied = req == null ? null : applyExtraction(ownerId, bookId, req, section);
+        RagDtos.ApplyExtractedMemoryResponse applied = req == null ? null
+                : applyExtraction(ownerId, bookId, req, section, genreCode);
         if ("EXPEDITION".equals(precisionMode) || "EPIC".equals(precisionMode)) {
             loreService.shelveDormantEntities(bookId, maxOrder);
         }
@@ -280,13 +282,13 @@ public class MemoryService {
     }
 
     private RagDtos.ApplyExtractedMemoryResponse applyExtraction(
-            UUID ownerId, UUID bookId, RagDtos.ApplyExtractedMemoryRequest req, ChapterSectionEntity section
+            UUID ownerId, UUID bookId, RagDtos.ApplyExtractedMemoryRequest req, ChapterSectionEntity section, String genreCode
     ) {
         Integer chapterNo = section == null ? req.chapterNo() : section.getChapterNo();
         FactOrigin origin = section == null ? new FactOrigin(null, 0L, AI_EXTRACTED)
                 : new FactOrigin(section.getId(), section.getNarrativeOrder(), AI_EXTRACTED);
         Map<String, CharacterEntity> characterIndex = loreService.characterIndex(bookId);
-        int characters = applyCharacterUpdates(ownerId, bookId, req.characterUpdates(), section, characterIndex);
+        int characters = applyCharacterUpdates(ownerId, bookId, req.characterUpdates(), section, characterIndex, genreCode);
         int clues = 0;
         int relations = 0;
         int events = 0;
@@ -313,7 +315,8 @@ public class MemoryService {
     }
 
     private int applyCharacterUpdates(UUID ownerId, UUID bookId, List<LoreDtos.UpsertCharacterRequest> updates,
-                                      ChapterSectionEntity section, Map<String, CharacterEntity> characterIndex) {
+                                      ChapterSectionEntity section, Map<String, CharacterEntity> characterIndex,
+                                      String genreCode) {
         int applied = 0;
         Map<UUID, CharacterEntity> states = new LinkedHashMap<>();
         for (LoreDtos.UpsertCharacterRequest update : orEmpty(updates)) {
@@ -327,7 +330,8 @@ public class MemoryService {
                         ? findPriorState(bookId, existing.getId(), section.getNarrativeOrder())
                         : CharacterState.of(previouslyApplied);
             }
-            CharacterEntity updated = loreService.applyExtractedCharacter(ownerId, bookId, existing, update, section, priorState);
+            CharacterEntity updated = loreService.applyExtractedCharacter(
+                    ownerId, bookId, existing, update, section, priorState, genreCode);
             if (updated == null) continue;
             if (!historical) {
                 characterIndex.put(updated.getName(), updated);

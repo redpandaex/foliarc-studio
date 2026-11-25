@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import httpx
 from jinja2 import BaseLoader, Environment
 
+from foliarc_agent.agent.genre_profiles import GenreProfileRegistry
 from foliarc_agent.config import Settings
 from foliarc_agent.streaming.protocol import RunAction
 
@@ -69,6 +70,9 @@ class PromptRegistry:
         genre: str | None,
         synopsis: str | None,
         skill_catalog: str,
+        genre_code: str = "",
+        sub_genre_tags: str = "",
+        style_anchors_text: str = "",
     ) -> RenderedPrompt:
         template_body = DEFAULT_WRITER_SYSTEM_TEMPLATE
         version = 1
@@ -85,6 +89,20 @@ class PromptRegistry:
             synopsis=synopsis or "",
             skill_catalog=skill_catalog,
         ).strip()
+
+        extra_blocks: list[str] = []
+        if genre_code or genre:
+            profile = GenreProfileRegistry.resolve(genre_code, genre)
+            extra_blocks.append(profile.format_writer_guard_block())
+            if sub_genre_tags.strip():
+                extra_blocks.append(f"【作品细分标签】{sub_genre_tags.strip()}")
+        if style_anchors_text.strip():
+            extra_blocks.append(
+                "【本书文风锚点（L0 静态风格参考：请模仿句式长短、白描密度、对话节奏与用词克制度，严禁照抄剧情）】\n"
+                + style_anchors_text.strip()[:1000]
+            )
+        if extra_blocks:
+            rendered = rendered + "\n\n" + "\n\n".join(extra_blocks)
 
         return RenderedPrompt(
             template_name="novel_writer_system",

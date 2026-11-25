@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from foliarc_agent.agent.genre_profiles import GenreProfileRegistry
 from foliarc_agent.config import Settings
 from foliarc_agent.streaming.protocol import RunAction
 
@@ -66,6 +67,9 @@ def build_novel_messages(
     active_state_brief: str = "",
     pov_character: str = "",
     foreshadowing_writer_pack: str = "",
+    genre_code: str = "",
+    sub_genre_tags: str = "",
+    style_anchors_text: str = "",
 ) -> list[dict[str, str]]:
     action_guides = {
         "CONTINUE": (
@@ -89,12 +93,22 @@ def build_novel_messages(
     ]
     if book_title:
         system_parts.append(f"当前作品：《{book_title}》")
-    if genre:
-        system_parts.append(f"题材风格：{genre}")
+    if genre or genre_code:
+        profile = GenreProfileRegistry.resolve(genre_code, genre)
+        genre_label = genre or profile.display_name
+        if sub_genre_tags.strip():
+            genre_label = f"{genre_label}（标签：{sub_genre_tags.strip()}）"
+        system_parts.append(f"题材风格：{genre_label}")
+        system_parts.append(profile.format_writer_guard_block())
     if story_charter.strip():
         system_parts.append(f"【作品故事宪章（L0 静态底座）】\n{story_charter.strip()[:1200]}")
     elif synopsis:
         system_parts.append(f"故事简介：{synopsis}")
+    if style_anchors_text.strip():
+        system_parts.append(
+            "【本书文风锚点（请模仿其句式长短、白描密度、对话节奏与用词克制度，严禁照抄剧情）】\n"
+            + style_anchors_text.strip()[:1000]
+        )
 
     user_parts = []
     if chapter_title:

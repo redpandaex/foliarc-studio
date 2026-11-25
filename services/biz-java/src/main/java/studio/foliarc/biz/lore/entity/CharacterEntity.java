@@ -31,6 +31,8 @@ public class CharacterEntity {
     private String arcScope;
     @TableField(typeHandler = PostgresJsonbTypeHandler.class)
     private String lockedFields;
+    @TableField(typeHandler = PostgresJsonbTypeHandler.class)
+    private String customAttributes = "{}";
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -66,6 +68,8 @@ public class CharacterEntity {
     public void setArcScope(String arcScope) { this.arcScope = arcScope; }
     public String getLockedFields() { return lockedFields; }
     public void setLockedFields(String lockedFields) { this.lockedFields = lockedFields; }
+    public String getCustomAttributes() { return customAttributes; }
+    public void setCustomAttributes(String customAttributes) { this.customAttributes = customAttributes; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

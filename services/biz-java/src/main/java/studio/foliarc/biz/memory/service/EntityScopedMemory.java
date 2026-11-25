@@ -1,6 +1,7 @@
 package studio.foliarc.biz.memory.service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +14,7 @@ import java.util.stream.Stream;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 
+import studio.foliarc.biz.genre.GenreDtos.CharacterFieldDef;
 import studio.foliarc.biz.lore.CharacterState;
 import studio.foliarc.biz.lore.LoreNames;
 import studio.foliarc.biz.lore.dto.LoreDtos.CharacterResponse;
@@ -53,7 +55,7 @@ final class EntityScopedMemory {
     private record Fact(String line, String knownBy) {}
 
     Brief assemble(UUID ownerId, UUID bookId, int chapterNo, long order, String probe, String pov,
-                   List<ForeshadowingDirective> directives) {
+                   List<ForeshadowingDirective> directives, List<CharacterFieldDef> characterFields) {
         List<CharacterResponse> characters = lore.listCharacters(ownerId, bookId, null);
         boolean historical = order > 0 && snapshots != null && sections != null
                 && order < sections.findMaxNarrativeOrder(bookId);
@@ -89,7 +91,7 @@ final class EntityScopedMemory {
                 bookId, chapterNo, order, castNames, clues, directives, sections);
 
         StringBuilder active = new StringBuilder();
-        appendCast(active, cast);
+        appendCast(active, cast, characterFields);
         List<Fact> relationFacts = relationFacts(bookId, chapterNo, order, castNames);
         List<Fact> timelineFacts = timelineFacts(bookId, chapterNo, order);
         if (pov.isBlank()) {
@@ -170,7 +172,7 @@ final class EntityScopedMemory {
         return "PUBLIC".equals(access) || LoreNames.split(access).stream().anyMatch(povNames::contains);
     }
 
-    private static void appendCast(StringBuilder active, List<CastMember> cast) {
+    private static void appendCast(StringBuilder active, List<CastMember> cast, List<CharacterFieldDef> characterFields) {
         if (cast.isEmpty()) return;
         active.append("【当前活跃人物状态】\n");
         for (CastMember member : cast) {
@@ -178,7 +180,14 @@ final class EntityScopedMemory {
             CharacterState state = member.state();
             if (state != null) {
                 List<String> attributes = new ArrayList<>();
-                addAttribute(attributes, "境界", state.realmOrLevel());
+                Map<String, String> custom = new LinkedHashMap<>(state.customAttributes());
+                for (CharacterFieldDef field : characterFields) {
+                    addAttribute(attributes, field.label(), custom.remove(field.key()));
+                }
+                custom.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                        .forEach(entry -> addAttribute(attributes, entry.getKey(), entry.getValue()));
+                String realm = state.customAttributes().get("realm");
+                if (realm == null || realm.isBlank()) addAttribute(attributes, "境界", state.realmOrLevel());
                 addAttribute(attributes, "位置", state.currentLocation());
                 addAttribute(attributes, "物品", state.inventory());
                 addAttribute(attributes, "状态", state.statusNotes());

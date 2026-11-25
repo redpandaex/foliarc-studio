@@ -25,6 +25,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.genre.GenreProfileRegistry;
 import studio.foliarc.biz.lore.service.LoreService;
 import studio.foliarc.biz.memory.entity.ChapterSummaryEntity;
 import studio.foliarc.biz.memory.entity.SectionSummaryEntity;
@@ -53,6 +54,7 @@ import studio.foliarc.biz.outbox.RabbitMqTopologyConfig;
 import studio.foliarc.biz.outbox.service.OutboxService;
 import studio.foliarc.biz.rag.dto.RagDtos;
 import studio.foliarc.biz.run.dto.RunDtos.ForeshadowingDirective;
+import studio.foliarc.biz.style.service.StyleAnchorService;
 
 /**
  * Builds story context from the charter, preceding prose, rollup tree and active story entities.
@@ -81,6 +83,8 @@ public class StoryMemoryContextService {
     private MemoryService memoryService;
     private CharacterStateSnapshotMapper snapshotMapper;
     private TimelineEventMapper timelineMapper;
+    private GenreProfileRegistry genreProfiles = new GenreProfileRegistry();
+    private StyleAnchorService styleAnchorService;
 
     public StoryMemoryContextService(
             BookService bookService,
@@ -137,6 +141,16 @@ public class StoryMemoryContextService {
         this.timelineMapper = timelineMapper;
     }
 
+    @Autowired(required = false)
+    public void setGenreProfileRegistry(GenreProfileRegistry genreProfiles) {
+        this.genreProfiles = genreProfiles;
+    }
+
+    @Autowired(required = false)
+    public void setStyleAnchorService(StyleAnchorService styleAnchorService) {
+        this.styleAnchorService = styleAnchorService;
+    }
+
     public record FiveLayerContext(
             String storyCharter,
             String hotWindowContext,
@@ -146,8 +160,20 @@ public class StoryMemoryContextService {
             String effectivePrecisionMode,
             String foreshadowingWriterPack,
             String foreshadowingCriticPack,
-            String criticGuardBrief
+            String criticGuardBrief,
+            String styleAnchorsText
     ) {
+        public FiveLayerContext {
+            styleAnchorsText = Objects.requireNonNullElse(styleAnchorsText, "");
+        }
+
+        public FiveLayerContext(String storyCharter, String hotWindowContext, String rollingSummaryContext,
+                                String activeStateBrief, String previousChaptersCombined, String effectivePrecisionMode,
+                                String foreshadowingWriterPack, String foreshadowingCriticPack, String criticGuardBrief) {
+            this(storyCharter, hotWindowContext, rollingSummaryContext, activeStateBrief, previousChaptersCombined,
+                    effectivePrecisionMode, foreshadowingWriterPack, foreshadowingCriticPack, criticGuardBrief, "");
+        }
+
         public FiveLayerContext(String storyCharter, String hotWindowContext, String rollingSummaryContext,
                                 String activeStateBrief, String previousChaptersCombined, String effectivePrecisionMode) {
             this(storyCharter, hotWindowContext, rollingSummaryContext, activeStateBrief, previousChaptersCombined,
@@ -396,7 +422,7 @@ public class StoryMemoryContextService {
         String mode = determinePrecisionMode(book, totalUnits);
         if (currentOrder == 0) {
             return withEntityMemory(new FiveLayerContext(resolveEffectiveCharter(book), "", "", "", "", mode),
-                    ownerId, bookId, chapterNo, currentOrder, probe, pov, directives);
+                    ownerId, book, chapterNo, currentOrder, probe, pov, directives);
         }
         if (totalUnits == 0 && currentSection == null && chapterSectionMapper.selectOne(
                 new LambdaQueryWrapper<ChapterSectionEntity>().select(ChapterSectionEntity::getId)
@@ -439,7 +465,7 @@ public class StoryMemoryContextService {
                 volume == null ? "" : volume.getArcGoal(), recent);
         return withEntityMemory(new FiveLayerContext(resolveEffectiveCharter(book), hotWindow, rolling, "",
                         combineContext(rolling, hotWindow), mode),
-                ownerId, bookId, chapterNo, currentOrder, String.join("\n", hotTail, probe, previousCharacters), pov, directives);
+                ownerId, book, chapterNo, currentOrder, String.join("\n", hotTail, probe, previousCharacters), pov, directives);
     }
 
     private VolumeEntity findVolume(UUID bookId, UUID volumeId) {
@@ -458,7 +484,7 @@ public class StoryMemoryContextService {
 
         if (currentChapter == null || currentChapter.getChapterNo() == null || currentChapter.getChapterNo() <= 1) {
             return withEntityMemory(new FiveLayerContext(storyCharter, "", "", "", "", determinePrecisionMode(book, 0)),
-                    ownerId, book.getId(), 1, order, probe, pov, directives);
+                    ownerId, book, 1, order, probe, pov, directives);
         }
 
         int currentNo = currentChapter.getChapterNo();
@@ -481,7 +507,7 @@ public class StoryMemoryContextService {
 
         if (nonEmptyEarlier.isEmpty()) {
             return withEntityMemory(new FiveLayerContext(storyCharter, "", "", "", "", precisionMode),
-                    ownerId, book.getId(), currentNo, order, probe, pov, directives);
+                    ownerId, book, currentNo, order, probe, pov, directives);
         }
 
         // L1 Hot Window: verbatim tail of immediately preceding non-empty chapter (N-1)
@@ -594,7 +620,7 @@ public class StoryMemoryContextService {
 
         return withEntityMemory(new FiveLayerContext(storyCharter, hotWindow, rollingSummary, "",
                         combineContext(rollingSummary, hotWindow), precisionMode),
-                ownerId, book.getId(), currentNo, order, String.join("\n", hotTail, probe, prevInvolvedChars), pov, directives);
+                ownerId, book, currentNo, order, String.join("\n", hotTail, probe, prevInvolvedChars), pov, directives);
     }
 
     private static String hotTail(String content) {
@@ -610,20 +636,25 @@ public class StoryMemoryContextService {
         return hotWindow.isBlank() ? rolling : rolling + "\n\n" + hotWindow;
     }
 
-    private FiveLayerContext withEntityMemory(FiveLayerContext base, UUID ownerId, UUID bookId, int chapterNo,
+    private FiveLayerContext withEntityMemory(FiveLayerContext base, UUID ownerId, BookEntity book, int chapterNo,
                                               long order, String probe, String pov, List<ForeshadowingDirective> directives) {
+        UUID bookId = book.getId();
+        String styleAnchors = styleAnchorService == null ? "" : styleAnchorService.buildStyleAnchorsText(bookId);
+        EntityScopedMemory.Brief brief;
         try {
-            EntityScopedMemory.Brief brief = new EntityScopedMemory(
+            var profile = genreProfiles.getRequired(GenreProfileRegistry.codeOrDefault(book.getGenreCode()));
+            brief = new EntityScopedMemory(
                     loreService, relationMapper, timelineMapper, snapshotMapper, chapterSectionMapper)
-                    .assemble(ownerId, bookId, chapterNo, order, probe, pov, directives);
-            return new FiveLayerContext(base.storyCharter(), base.hotWindowContext(), base.rollingSummaryContext(),
-                    brief.activeState(), base.previousChaptersCombined(), base.effectivePrecisionMode(),
-                    brief.writerPack(), brief.criticPack(), brief.criticGuard());
+                    .assemble(ownerId, bookId, chapterNo, order, probe, pov, directives, profile.characterFieldSchema());
         } catch (RuntimeException ex) {
             if (ex instanceof BizException || !directives.isEmpty() || !pov.isBlank()) throw ex;
             log.warn("Entity-scoped state assembly skipped for book {}: {}", bookId, ex.getMessage());
-            return base;
+            brief = new EntityScopedMemory.Brief(base.activeStateBrief(), base.foreshadowingWriterPack(),
+                    base.foreshadowingCriticPack(), base.criticGuardBrief());
         }
+        return new FiveLayerContext(base.storyCharter(), base.hotWindowContext(), base.rollingSummaryContext(),
+                brief.activeState(), base.previousChaptersCombined(), base.effectivePrecisionMode(),
+                brief.writerPack(), brief.criticPack(), brief.criticGuard(), styleAnchors);
     }
 
     // --- Book Story Charter (L0 Static Base: author_defined > auto_inferred) ---
@@ -682,7 +713,8 @@ public class StoryMemoryContextService {
                 volume == null ? "" : volume.getArcGoal(),
                 safe(sectionSummaryMapper.findPreviousEndingHook(book.getId(), section.getNarrativeOrder())),
                 emptyIfNull(chapterSectionMapper.firstSectionSample(book.getId())),
-                sectionSample(section.getContent()), book.getTitle(), book.getGenre(), book.getSynopsis()
+                sectionSample(section.getContent()), book.getTitle(), book.getGenre(), book.getSynopsis(),
+                GenreProfileRegistry.codeOrDefault(book.getGenreCode()), emptyIfNull(book.getSubGenreTags())
         );
     }
 
@@ -738,7 +770,7 @@ public class StoryMemoryContextService {
             long totalUnits = "AUTO".equals(configuredPrecisionMode(book)) ? chapterSectionMapper.selectCount(
                     new LambdaQueryWrapper<ChapterSectionEntity>().eq(ChapterSectionEntity::getBookId, bookId)) : 0;
             appliedMemory = memoryService.applySectionMemory(book.getOwnerId(), bookId, section, req.memory(),
-                    maxOrder, determinePrecisionMode(book, totalUnits));
+                    maxOrder, determinePrecisionMode(book, totalUnits), book.getGenreCode());
         } else if (req.memory() != null && memoryService != null) {
             RagDtos.ApplyExtractedMemoryRequest memory = req.memory();
             if (!section.getChapterNo().equals(memory.chapterNo())) {

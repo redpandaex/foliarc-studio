@@ -7,10 +7,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -198,7 +200,6 @@ public class KnowledgeDocumentService {
 
     public List<RagDtos.LibraryDocumentResponse> listAccessibleLibrary(UUID userId, UUID bookId) {
         BookEntity book = bookId != null ? bookService.requireOwnedBook(userId, bookId) : null;
-        String bookGenre = book != null ? book.getGenre() : null;
 
         Map<UUID, Boolean> explicitBindings = new HashMap<>();
         if (bookId != null) {
@@ -264,7 +265,8 @@ public class KnowledgeDocumentService {
         if (globalDocs != null) {
             for (KnowledgeDocumentEntity d : globalDocs) {
                 if (result.containsKey(d.getId())) continue;
-                boolean defaultBound = bookId == null || genreMatches(d.getGenreTags(), bookGenre);
+                boolean defaultBound = book == null || matchesBookGenre(d.getGenreCodes(), d.getGenreTags(),
+                        book.getGenreCode(), book.getSubGenreTags(), book.getGenre());
                 boolean bound = explicitBindings.getOrDefault(d.getId(), defaultBound);
                 result.put(d.getId(), toLibraryResponse(d, "GLOBAL", bound));
             }
@@ -281,6 +283,19 @@ public class KnowledgeDocumentService {
             String titleOverride,
             String genreTags
     ) {
+        return uploadPersonalDocument(ownerId, file, docTypeRaw, titleOverride, genreTags, null);
+    }
+
+    @Transactional
+    public RagDtos.LibraryDocumentResponse uploadPersonalDocument(
+            UUID ownerId,
+            MultipartFile file,
+            String docTypeRaw,
+            String titleOverride,
+            String genreTags,
+            String genreCodes
+    ) {
+        String normalizedGenreCodes = normalizeGenreCodes(genreCodes);
         byte[] bytes = readAndValidateFile(file, USER_MAX_FILE_BYTES);
         String sha256 = sha256Hex(bytes);
 
@@ -352,6 +367,7 @@ public class KnowledgeDocumentService {
         entity.setUploadedBy(ownerId);
         entity.setScope("USER");
         entity.setGenreTags(normalizeGenreTags(genreTags));
+        entity.setGenreCodes(normalizedGenreCodes);
         entity.setContentSha256(sha256);
         entity.setIsReadonly(false);
         entity.setEnabled(true);
@@ -419,7 +435,7 @@ public class KnowledgeDocumentService {
                 target.docType(), target.title(), target.fileName(), target.fileSize(),
                 target.genreTags(), target.readonly(), target.enabled(), enabled,
                 target.status(), target.progress(), target.chunkCount(), target.errorMessage(),
-                target.createdAt(), target.updatedAt()
+                target.createdAt(), target.updatedAt(), target.genreCodes()
         );
     }
 
@@ -434,6 +450,20 @@ public class KnowledgeDocumentService {
             String genreTags,
             boolean publicToAll
     ) {
+        return uploadPlatformDocument(adminId, file, docTypeRaw, titleOverride, genreTags, null, publicToAll);
+    }
+
+    @Transactional
+    public RagDtos.LibraryDocumentResponse uploadPlatformDocument(
+            UUID adminId,
+            MultipartFile file,
+            String docTypeRaw,
+            String titleOverride,
+            String genreTags,
+            String genreCodes,
+            boolean publicToAll
+    ) {
+        String normalizedGenreCodes = normalizeGenreCodes(genreCodes);
         byte[] bytes = readAndValidateFile(file, 25L * 1024 * 1024);
         String sha256 = sha256Hex(bytes);
 
@@ -456,6 +486,7 @@ public class KnowledgeDocumentService {
         entity.setUploadedBy(adminId);
         entity.setScope("GLOBAL");
         entity.setGenreTags(normalizeGenreTags(genreTags));
+        entity.setGenreCodes(normalizedGenreCodes);
         entity.setContentSha256(sha256);
         entity.setIsReadonly(true);
         entity.setEnabled(publicToAll);
@@ -1090,6 +1121,40 @@ public class KnowledgeDocumentService {
         return false;
     }
 
+    public static boolean matchesBookGenre(
+            String docGenreCodes, String docGenreTags, String bookGenreCode, String bookSubGenreTags, String bookLegacyGenre
+    ) {
+        if (Objects.requireNonNullElse(docGenreCodes, "").isBlank()
+                && Objects.requireNonNullElse(docGenreTags, "").isBlank()) {
+            return true;
+        }
+        Set<String> codes = genreTokens(docGenreCodes);
+        String bookCode = Objects.requireNonNullElse(bookGenreCode, "").strip().toUpperCase(Locale.ROOT);
+        if (codes.contains("ALL") || codes.contains(bookCode)) return true;
+
+        Set<String> tags = genreTokens(docGenreTags);
+        return !tags.isEmpty() && (!Collections.disjoint(tags, genreTokens(bookSubGenreTags))
+                || !Collections.disjoint(tags, genreTokens(bookLegacyGenre)));
+    }
+
+    private static String normalizeGenreCodes(String raw) {
+        String codes = String.join(",", genreTokens(raw));
+        if (codes.length() > 255) {
+            throw BizException.badRequest("INVALID_GENRE_CODES", "资料题材代码总长最多 255 个字符");
+        }
+        return codes;
+    }
+
+    private static Set<String> genreTokens(String raw) {
+        if (raw == null || raw.isBlank()) return Set.of();
+        Set<String> tokens = new LinkedHashSet<>();
+        for (String part : raw.split("[,，、;；/\\r\\n]+")) {
+            String token = part.strip().toUpperCase(Locale.ROOT);
+            if (!token.isEmpty()) tokens.add(token);
+        }
+        return tokens;
+    }
+
     private static String normalizeGenreTags(String raw) {
         if (raw == null || raw.isBlank()) return "";
         List<String> tags = new ArrayList<>();
@@ -1162,7 +1227,8 @@ public class KnowledgeDocumentService {
                 d.getChunkCount(),
                 d.getErrorMessage(),
                 d.getCreatedAt(),
-                d.getUpdatedAt()
+                d.getUpdatedAt(),
+                Objects.requireNonNullElse(d.getGenreCodes(), "")
         );
     }
 }

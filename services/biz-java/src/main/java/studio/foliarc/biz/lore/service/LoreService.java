@@ -19,6 +19,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.genre.GenreProfileRegistry;
 import studio.foliarc.biz.lore.CharacterState;
 import studio.foliarc.biz.lore.LoreNames;
 import studio.foliarc.biz.lore.dto.LoreDtos;
@@ -52,7 +53,9 @@ public class LoreService {
     private static final Set<String> VALID_CATEGORIES = Set.of("WORLD", "POWER_SYSTEM", "FACTION", "ITEM", "LOCATION", "RULE");
     private static final Set<String> VALID_LIFECYCLE = Set.of("CORE_PINNED", "ACTIVE", "DORMANT", "DEAD");
     private static final Set<String> LOCKABLE_FIELDS = Set.of("roleType", "personality", "realmOrLevel",
-            "currentLocation", "statusNotes", "inventory", "aliases", "lifecycleStatus");
+            "currentLocation", "statusNotes", "inventory", "aliases", "lifecycleStatus", "customAttributes");
+    private static final String CUSTOM_ATTRIBUTE_PREFIX = "customAttributes.";
+    private static final String REALM_ATTRIBUTE = "realm";
     private static final Set<String> VALID_FORESHADOW_STATUSES =
             Set.of("PLANNED", "PLANTED", "HINTED", "TRIGGERED", "RESOLVED", "DORMANT_CLUE", "ABANDONED");
     private static final Set<String> ACTIVE_FORESHADOW_STATUSES = Set.of("PLANNED", "PLANTED", "HINTED", "TRIGGERED", "OPEN");
@@ -117,14 +120,14 @@ public class LoreService {
 
     @Transactional
     public LoreDtos.CharacterResponse upsertCharacter(UUID ownerId, UUID bookId, LoreDtos.UpsertCharacterRequest req) {
-        bookService.requireOwnedBook(ownerId, bookId);
+        BookEntity book = bookService.requireOwnedBook(ownerId, bookId);
         bookService.lockStructure(bookId);
         CharacterEntity existing = characterIndex(bookId).get(req.name().strip());
         CharacterEntity row = existing == null ? newCharacter(bookId, req.name()) : existing;
-        applyCharacterFields(row, req, Set.of(), false);
+        applyCharacterFields(row, req, Set.of(), false, book == null ? null : book.getGenreCode());
         row.setLifecycleStatus(normalizeEnum(req.lifecycleStatus(), lifecycle(row), VALID_LIFECYCLE, "INVALID_LIFECYCLE_STATUS"));
         if (req.lastSeenOrder() != null) row.setLastSeenOrder(req.lastSeenOrder());
-        if (req.lockedFields() != null) row.setLockedFields(serializeLockedFields(req.lockedFields()));
+        if (req.lockedFields() != null) row.setLockedFields(serializeLockedFields(req.lockedFields(), row));
         if (existing == null) characterMapper.insert(row);
         else characterMapper.updateById(row);
         return toChar(row);
@@ -141,10 +144,11 @@ public class LoreService {
 
     @Transactional
     public LoreDtos.CharacterResponse upsertAgentCharacter(UUID ownerId, UUID bookId, LoreDtos.UpsertCharacterRequest req) {
-        bookService.requireOwnedBook(ownerId, bookId);
+        BookEntity book = bookService.requireOwnedBook(ownerId, bookId);
         bookService.lockStructure(bookId);
         CharacterEntity existing = findExtractedCharacter(characterIndex(bookId), req);
-        CharacterEntity updated = applyExtractedCharacter(ownerId, bookId, existing, req, null, null);
+        CharacterEntity updated = applyExtractedCharacter(ownerId, bookId, existing, req, null, null,
+                book == null ? null : book.getGenreCode());
         return updated == null ? (existing == null ? null : toChar(existing)) : toChar(updated);
     }
 
@@ -158,6 +162,15 @@ public class LoreService {
     public CharacterEntity applyExtractedCharacter(
             UUID ownerId, UUID bookId, CharacterEntity existing, LoreDtos.UpsertCharacterRequest req,
             ChapterSectionEntity section, CharacterState priorState
+    ) {
+        BookEntity book = bookService.requireOwnedBook(ownerId, bookId);
+        return applyExtractedCharacter(ownerId, bookId, existing, req, section, priorState,
+                book == null ? null : book.getGenreCode());
+    }
+
+    public CharacterEntity applyExtractedCharacter(
+            UUID ownerId, UUID bookId, CharacterEntity existing, LoreDtos.UpsertCharacterRequest req,
+            ChapterSectionEntity section, CharacterState priorState, String genreCode
     ) {
         long order = section == null ? 0L : section.getNarrativeOrder();
         boolean historical = existing != null && section != null && lastSeen(existing) > order;
@@ -178,7 +191,7 @@ public class LoreService {
             if (priorState != null) priorState.restore(row);
         }
         Set<String> locks = existing == null ? Set.of() : Set.copyOf(readLockedFields(existing));
-        applyCharacterFields(row, req, locks, true);
+        applyCharacterFields(row, req, locks, true, genreCode);
         String lifecycle = lifecycle(row);
         if (!locks.contains("lifecycleStatus") && !"CORE_PINNED".equals(lifecycle) && !"DEAD".equals(lifecycle)) {
             row.setLifecycleStatus("DORMANT".equals(lifecycle) ? "ACTIVE"
@@ -229,13 +242,12 @@ public class LoreService {
     }
 
     private static void applyCharacterFields(CharacterEntity row, LoreDtos.UpsertCharacterRequest req,
-                                             Set<String> locks, boolean extracted) {
+                                             Set<String> locks, boolean extracted, String genreCode) {
         if (row.getRoleType() == null) row.setRoleType("SUPPORTING");
         if (req.roleType() != null && !locks.contains("roleType")) {
             row.setRoleType(normalizeEnum(req.roleType(), row.getRoleType(), VALID_ROLES, "INVALID_ROLE_TYPE"));
         }
         if (req.personality() != null && !locks.contains("personality")) row.setPersonality(safeText(req.personality()));
-        if (req.realmOrLevel() != null && !locks.contains("realmOrLevel")) row.setRealmOrLevel(safeText(req.realmOrLevel()));
         if (req.currentLocation() != null && !locks.contains("currentLocation")) row.setCurrentLocation(safeText(req.currentLocation()));
         if (req.statusNotes() != null && !locks.contains("statusNotes")) row.setStatusNotes(safeText(req.statusNotes()));
         if (req.inventory() != null && !locks.contains("inventory")) row.setInventory(safeText(req.inventory()));
@@ -243,6 +255,48 @@ public class LoreService {
             row.setAliases(LoreNames.mergeAliases(row.getName(), extracted ? row.getAliases() : "", req.aliases()));
         }
         if (req.arcScope() != null) row.setArcScope(safeText(req.arcScope()));
+        applyCharacterAttributes(row, req, locks, extracted, genreCode);
+    }
+
+    private static void applyCharacterAttributes(CharacterEntity row, LoreDtos.UpsertCharacterRequest req,
+                                                 Set<String> locks, boolean extracted, String genreCode) {
+        Map<String, String> current = CharacterState.readCustomAttributes(row.getCustomAttributes());
+        Map<String, String> incoming = Objects.requireNonNullElse(req.customAttributes(), Map.of());
+        // The author can replace the map. Extraction only patches keys it provides.
+        Map<String, String> attributes = new LinkedHashMap<>();
+        if (extracted || req.customAttributes() == null) attributes.putAll(current);
+        incoming.forEach((key, value) -> {
+            if (key != null && !key.isBlank() && !REALM_ATTRIBUTE.equals(key) && !isAttributeLocked(locks, key)) {
+                putAttribute(attributes, key, safeText(value));
+            }
+        });
+
+        boolean syncRealm = GenreProfileRegistry.DEFAULT_GENRE_CODE.equals(GenreProfileRegistry.codeOrDefault(genreCode))
+                || current.containsKey(REALM_ATTRIBUTE) || incoming.containsKey(REALM_ATTRIBUTE);
+        if (syncRealm) {
+            // Neither name of the mirrored field can bypass a lock on the other.
+            if (!locks.contains("realmOrLevel") && !isAttributeLocked(locks, REALM_ATTRIBUTE)) {
+                String realm = safeText(incoming.getOrDefault(REALM_ATTRIBUTE, req.realmOrLevel() != null
+                        ? req.realmOrLevel() : current.getOrDefault(REALM_ATTRIBUTE, row.getRealmOrLevel())));
+                if (realm.length() > 120) {
+                    throw BizException.badRequest("INVALID_CHARACTER_REALM", "修为境界最多 120 个字符");
+                }
+                row.setRealmOrLevel(realm);
+                putAttribute(attributes, REALM_ATTRIBUTE, realm);
+            }
+        } else if (req.realmOrLevel() != null && !locks.contains("realmOrLevel")) {
+            row.setRealmOrLevel(safeText(req.realmOrLevel()));
+        }
+        row.setCustomAttributes(CharacterState.writeCustomAttributes(attributes));
+    }
+
+    private static void putAttribute(Map<String, String> attributes, String key, String value) {
+        if (value.isEmpty()) attributes.remove(key);
+        else attributes.put(key, value);
+    }
+
+    private static boolean isAttributeLocked(Set<String> locks, String key) {
+        return locks.contains("customAttributes") || locks.contains(key) || locks.contains(CUSTOM_ATTRIBUTE_PREFIX + key);
     }
 
     private static String lifecycle(CharacterEntity row) {
@@ -276,7 +330,7 @@ public class LoreService {
         bookService.requireOwnedBook(ownerId, bookId);
         bookService.lockStructure(bookId);
         CharacterEntity row = requireCharacter(bookId, characterId);
-        row.setLockedFields(serializeLockedFields(req.lockedFields()));
+        row.setLockedFields(serializeLockedFields(req.lockedFields(), row));
         characterMapper.updateById(row);
         return toChar(row);
     }
@@ -286,11 +340,14 @@ public class LoreService {
         return JSON.readValue(row.getLockedFields(), new TypeReference<List<String>>() {});
     }
 
-    private static String serializeLockedFields(List<String> fields) {
+    private static String serializeLockedFields(List<String> fields, CharacterEntity row) {
         if (fields == null) throw BizException.badRequest("INVALID_CHARACTER_LOCK", "需要提供锁定字段列表");
+        Map<String, String> custom = CharacterState.readCustomAttributes(row.getCustomAttributes());
         Set<String> result = new LinkedHashSet<>();
         for (String field : fields) {
-            if (field == null || !LOCKABLE_FIELDS.contains(field)) {
+            if (field == null || !(LOCKABLE_FIELDS.contains(field) || GenreProfileRegistry.isCharacterFieldKey(field)
+                    || custom.containsKey(field) || (field.startsWith(CUSTOM_ATTRIBUTE_PREFIX)
+                    && !field.substring(CUSTOM_ATTRIBUTE_PREFIX.length()).isBlank()))) {
                 throw BizException.badRequest("INVALID_CHARACTER_LOCK", "字段不可锁定: " + field);
             }
             result.add(field);
@@ -794,7 +851,8 @@ public class LoreService {
                 c.getId(), c.getBookId(), c.getName(), c.getRoleType(),
                 c.getPersonality(), c.getRealmOrLevel(), c.getCurrentLocation(),
                 c.getStatusNotes(), c.getInventory(), c.getUpdatedAt(), safeText(c.getAliases()),
-                lifecycle(c), lastSeen(c), safeText(c.getArcScope()), readLockedFields(c)
+                lifecycle(c), lastSeen(c), safeText(c.getArcScope()), readLockedFields(c),
+                CharacterState.readCustomAttributes(c.getCustomAttributes())
         );
     }
 
