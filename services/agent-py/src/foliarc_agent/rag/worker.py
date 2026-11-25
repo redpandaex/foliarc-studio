@@ -496,9 +496,9 @@ class RagIngestionWorker:
         bible = await self._fetch_bible(owner_id, book_id)
         known_chars = [str(c.get("name", "")) for c in (bible or {}).get("characters", []) if c.get("name")]
         open_clues = [
-            f"{f.get('title', '')}：{f.get('description', '')}"
-            for f in (bible or {}).get("foreshadowings", [])
-            if str(f.get("status", "")).upper() in ("OPEN", "PLANNED", "PLANTED", "HINTED")
+            f"{(f.get('code') + ' ') if f.get('code') else ''}{f.get('title', '')}：{f.get('surfaceClue') or f.get('description', '')}"
+            for f in ((bible or {}).get("openForeshadowings") or (bible or {}).get("foreshadowings") or [])
+            if str(f.get("status", "")).upper() in ("OPEN", "PLANNED", "PLANTED", "HINTED", "TRIGGERED")
         ]
 
         distilled = await self._distiller.distill_section(
@@ -525,23 +525,39 @@ class RagIngestionWorker:
             "characterUpdates": [
                 {
                     "name": str(c.get("name") or "").strip(),
+                    "aliases": (
+                        ",".join(str(a).strip() for a in c.get("aliases", []) if str(a).strip())
+                        if isinstance(c.get("aliases"), list)
+                        else str(c.get("aliases") or "").strip() or None
+                    ),
+                    "lifecycleStatus": str(c.get("lifecycleStatus") or "").strip() or None,
                     "currentLocation": str(c.get("currentLocation") or "").strip() or None,
                     "statusNotes": str(c.get("statusNotes") or "").strip() or None,
                     "inventory": str(c.get("inventoryDelta") or c.get("inventory") or "").strip() or None,
+                    "isHighRisk": bool(c.get("isHighRisk", False)),
                 }
                 for c in (raw_mem.get("characterUpdates") or [])
                 if str(c.get("name") or "").strip()
             ],
             "foreshadowingUpdates": [
                 {
+                    "code": str(f.get("code") or "").strip() or None,
                     "title": str(f.get("title") or "").strip(),
                     "description": str(f.get("description") or f.get("quote") or "").strip() or None,
+                    "surfaceClue": str(f.get("description") or "").strip() or None,
+                    "plantedQuote": str(f.get("quote") or "").strip() or None,
                     "plantedChapterNo": ch_no if str(f.get("action", "")).upper() != "RESOLVED" else None,
                     "resolvedChapterNo": ch_no if str(f.get("action", "")).upper() == "RESOLVED" else None,
-                    "status": "RESOLVED" if str(f.get("action", "")).upper() == "RESOLVED" else "OPEN",
+                    "status": (
+                        "RESOLVED"
+                        if str(f.get("action", "")).upper() == "RESOLVED"
+                        else "HINTED"
+                        if str(f.get("action", "")).upper() == "HINTED"
+                        else "PLANTED"
+                    ),
                 }
                 for f in (raw_mem.get("foreshadowingSignals") or [])
-                if str(f.get("title") or "").strip()
+                if str(f.get("title") or "").strip() or str(f.get("code") or "").strip()
             ],
             "relations": [
                 {
@@ -550,6 +566,7 @@ class RagIngestionWorker:
                     "relationType": str(r.get("relationType") or "关联").strip(),
                     "description": str(r.get("description") or "").strip() or None,
                     "sinceChapterNo": ch_no,
+                    "knownBy": str(r.get("knownBy") or "PUBLIC").strip() or "PUBLIC",
                 }
                 for r in (raw_mem.get("relations") or [])
                 if str(r.get("sourceCharacter") or "").strip() and str(r.get("targetCharacter") or "").strip()
@@ -561,6 +578,7 @@ class RagIngestionWorker:
                     "summary": str(t.get("summary") or "").strip() or None,
                     "involvedCharacters": str(t.get("involvedCharacters") or "").strip() or None,
                     "location": str(t.get("location") or "").strip() or None,
+                    "knownBy": str(t.get("knownBy") or "PUBLIC").strip() or "PUBLIC",
                 }
                 for t in (raw_mem.get("timelineEvents") or [])
                 if str(t.get("eventTitle") or "").strip()

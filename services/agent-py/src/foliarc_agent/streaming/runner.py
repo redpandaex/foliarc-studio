@@ -153,6 +153,10 @@ class RunManager:
                 previous_chapters_context=req.previous_chapters_context,
                 rolling_summary_context=req.rolling_summary_context,
                 active_state_brief=req.active_state_brief,
+                pov_character=req.pov_character,
+                foreshadowing_writer_pack=req.foreshadowing_writer_pack,
+                foreshadowing_critic_pack=req.foreshadowing_critic_pack,
+                critic_guard_brief=req.critic_guard_brief,
                 instruction=req.instruction,
                 accumulated_text="",
                 start_seq=0,
@@ -193,6 +197,10 @@ class RunManager:
                 previous_chapters_context=req.previous_chapters_context,
                 rolling_summary_context=req.rolling_summary_context,
                 active_state_brief=req.active_state_brief,
+                pov_character=req.pov_character,
+                foreshadowing_writer_pack=req.foreshadowing_writer_pack,
+                foreshadowing_critic_pack=req.foreshadowing_critic_pack,
+                critic_guard_brief=req.critic_guard_brief,
                 instruction=req.instruction,
                 accumulated_text=req.accumulated_text,
                 start_seq=req.last_seq,
@@ -281,6 +289,10 @@ class RunManager:
         previous_chapters_context: str = "",
         rolling_summary_context: str = "",
         active_state_brief: str = "",
+        pov_character: str = "",
+        foreshadowing_writer_pack: str = "",
+        foreshadowing_critic_pack: str = "",
+        critic_guard_brief: str = "",
         instruction: str,
         accumulated_text: str,
         start_seq: int,
@@ -425,6 +437,10 @@ class RunManager:
                         previous_chapters_context=previous_chapters_context,
                         rolling_summary_context=rolling_summary_context,
                         active_state_brief=active_state_brief,
+                        pov_character=pov_character,
+                        foreshadowing_writer_pack=foreshadowing_writer_pack,
+                        foreshadowing_critic_pack=foreshadowing_critic_pack,
+                        critic_guard_brief=critic_guard_brief,
                         instruction=instruction,
                         requested_model_alias=model_alias,
                         require_outline_approval=require_outline_approval,
@@ -465,7 +481,15 @@ class RunManager:
                         )
                     if active_state_brief.strip():
                         user_parts.append(
-                            f"【当前活跃人物状态与未回收伏笔（L3）】\n{active_state_brief.strip()[:1600]}"
+                            f"【当前活跃人物状态与未回收伏笔（L3）】\n{active_state_brief.strip()[:1800]}"
+                        )
+                    if pov_character.strip():
+                        user_parts.append(
+                            f"【本章叙事视角（POV）】{pov_character.strip()}（严禁视角角色凭空知晓幕后客观事实！）"
+                        )
+                    if foreshadowing_writer_pack.strip():
+                        user_parts.append(
+                            f"【本章强制伏笔导演包（严格遵守防剧透红线）】\n{foreshadowing_writer_pack.strip()[:2200]}"
                         )
                     if previous_chapters_context.strip():
                         user_parts.append(
@@ -517,6 +541,8 @@ class RunManager:
                         previous_chapters_context=previous_chapters_context,
                         rolling_summary_context=rolling_summary_context,
                         active_state_brief=active_state_brief,
+                        pov_character=pov_character,
+                        foreshadowing_writer_pack=foreshadowing_writer_pack,
                         instruction=instruction,
                         accumulated_text=accumulated_text,
                     )

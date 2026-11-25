@@ -64,6 +64,8 @@ def build_novel_messages(
     story_charter: str = "",
     rolling_summary_context: str = "",
     active_state_brief: str = "",
+    pov_character: str = "",
+    foreshadowing_writer_pack: str = "",
 ) -> list[dict[str, str]]:
     action_guides = {
         "CONTINUE": (
@@ -100,7 +102,15 @@ def build_novel_messages(
     if rolling_summary_context.strip():
         user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{rolling_summary_context.strip()[:4200]}")
     if active_state_brief.strip():
-        user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{active_state_brief.strip()[:1600]}")
+        user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{active_state_brief.strip()[:1800]}")
+    if pov_character.strip():
+        user_parts.append(
+            f"【本章叙事视角（POV）】{pov_character.strip()}（严禁视角角色凭空知晓幕后客观事实或出现读心术！）"
+        )
+    if foreshadowing_writer_pack.strip():
+        user_parts.append(
+            f"【本章强制伏笔导演包（严格遵守埋入/照应/启用与防剧透红线）】\n{foreshadowing_writer_pack.strip()[:2200]}"
+        )
     if previous_chapters_context.strip():
         user_parts.append(
             f"【前文章节承接（L1 热窗口，必须紧密衔接上一章结尾，严禁割裂或重启剧情）】\n{previous_chapters_context.strip()[-2800:]}"

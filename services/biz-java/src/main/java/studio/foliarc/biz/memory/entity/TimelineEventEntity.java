@@ -22,6 +22,10 @@ public class TimelineEventEntity {
     private String summary;
     private String involvedCharacters;
     private String location;
+    private UUID sourceSectionId;
+    private Long narrativeOrder;
+    private String source;
+    private String knownBy;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -45,6 +49,14 @@ public class TimelineEventEntity {
     public void setInvolvedCharacters(String involvedCharacters) { this.involvedCharacters = involvedCharacters; }
     public String getLocation() { return location; }
     public void setLocation(String location) { this.location = location; }
+    public UUID getSourceSectionId() { return sourceSectionId; }
+    public void setSourceSectionId(UUID sourceSectionId) { this.sourceSectionId = sourceSectionId; }
+    public Long getNarrativeOrder() { return narrativeOrder; }
+    public void setNarrativeOrder(Long narrativeOrder) { this.narrativeOrder = narrativeOrder; }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+    public String getKnownBy() { return knownBy; }
+    public void setKnownBy(String knownBy) { this.knownBy = knownBy; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

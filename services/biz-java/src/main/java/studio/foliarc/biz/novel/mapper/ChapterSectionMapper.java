@@ -17,6 +17,9 @@ public interface ChapterSectionMapper extends BaseMapper<ChapterSectionEntity> {
     @Select("SELECT COALESCE(MAX(section_no), 0) FROM chapter_sections WHERE chapter_id = #{chapterId}")
     int findMaxSectionNo(@Param("chapterId") UUID chapterId);
 
+    @Select("SELECT COALESCE(MAX(narrative_order), 0) FROM chapter_sections WHERE book_id = #{bookId}")
+    long findMaxNarrativeOrder(@Param("bookId") UUID bookId);
+
     @Select("SELECT LEFT(content, 500) FROM chapter_sections WHERE book_id = #{bookId} ORDER BY narrative_order LIMIT 1")
     String firstSectionSample(@Param("bookId") UUID bookId);
 

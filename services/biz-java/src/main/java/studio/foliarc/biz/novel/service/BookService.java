@@ -119,7 +119,7 @@ public class BookService {
         return book;
     }
 
-    void lockStructure(UUID bookId) {
+    public void lockStructure(UUID bookId) {
         bookMapper.lockForStructure(bookId);
     }
 

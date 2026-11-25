@@ -7,10 +7,12 @@ import {
   booksApi,
   libraryApi,
   loreApi,
+  memoryProposalsApi,
   type BookCharterItem,
   type CharacterItem,
   type ForeshadowingItem,
   type LibraryDocumentItem,
+  type MemoryProposalItem,
   type WorldEntryItem,
 } from "@/lib/api";
 
@@ -18,6 +20,25 @@ const ROLE_LABELS: Record<string, string> = {
   PROTAGONIST: "主角",
   SUPPORTING: "配角",
   ANTAGONIST: "反派",
+};
+
+const LIFECYCLE_LABELS: Record<string, { label: string; className: string }> = {
+  CORE_PINNED: {
+    label: "常驻核心",
+    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  },
+  ACTIVE: {
+    label: "活跃",
+    className: "bg-muted text-muted-foreground",
+  },
+  DORMANT: {
+    label: "休眠",
+    className: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  },
+  DEAD: {
+    label: "已退场",
+    className: "bg-rose-500/15 text-rose-700 dark:text-rose-400",
+  },
 };
 
 const WORLD_CATEGORY_LABELS: Record<string, string> = {
@@ -28,6 +49,37 @@ const WORLD_CATEGORY_LABELS: Record<string, string> = {
   LOCATION: "地标秘境",
   RULE: "铁律禁忌",
 };
+
+const FORESHADOW_STATUS_META: Record<string, { label: string; className: string }> = {
+  PLANNED: { label: "待埋设", className: "bg-muted text-muted-foreground" },
+  PLANTED: { label: "已埋设", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
+  OPEN: { label: "已埋设", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
+  HINTED: { label: "已照应", className: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400" },
+  TRIGGERED: { label: "待引爆", className: "bg-amber-500/20 text-amber-700 dark:text-amber-400" },
+  RESOLVED: { label: "已回收", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
+  DORMANT_CLUE: { label: "沉睡", className: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+  ABANDONED: { label: "已弃用", className: "bg-muted/70 text-muted-foreground line-through" },
+};
+
+const IMPORTANCE_LABELS: Record<string, string> = {
+  MAIN_ARC: "主线",
+  SUBPLOT: "支线",
+  DETAIL: "细节",
+};
+
+const REVEAL_POLICY_LABELS: Record<string, string> = {
+  HIDE_TRUTH: "严守底牌",
+  HINT_ONLY: "只许暗示",
+  REVEAL_NOW: "允许揭晓",
+};
+
+const PROPOSAL_TYPE_LABELS: Record<string, string> = {
+  CHARACTER_DEATH: "人物退场确认",
+  FORESHADOWING_RESOLVE: "伏笔回收确认",
+  CORE_IDENTITY_SHIFT: "核心设定变更",
+};
+
+const DEFAULT_LOCKED_CHARACTER_FIELDS = ["personality", "realmOrLevel", "roleType"];
 
 interface LorePanelProps {
   bookId: string;
@@ -46,11 +98,14 @@ export function LorePanel({ bookId }: LorePanelProps) {
   const [characters, setCharacters] = useState<CharacterItem[]>([]);
   const [worldEntries, setWorldEntries] = useState<WorldEntryItem[]>([]);
   const [foreshadowings, setForeshadowings] = useState<ForeshadowingItem[]>([]);
+  const [proposals, setProposals] = useState<MemoryProposalItem[]>([]);
+  const [decidingProposalId, setDecidingProposalId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Character form
   const [cName, setCName] = useState("");
   const [cRole, setCRole] = useState("PROTAGONIST");
+  const [cAliases, setCAliases] = useState("");
   const [cRealm, setCRealm] = useState("");
   const [cLocation, setCLocation] = useState("");
   const [cNotes, setCNotes] = useState("");
@@ -63,8 +118,15 @@ export function LorePanel({ bookId }: LorePanelProps) {
 
   // Foreshadowing form
   const [fTitle, setFTitle] = useState("");
-  const [fDesc, setFDesc] = useState("");
-  const [fChapter, setFChapter] = useState("1");
+  const [fImportance, setFImportance] = useState("SUBPLOT");
+  const [fRevealPolicy, setFRevealPolicy] = useState("HIDE_TRUTH");
+  const [fStatus, setFStatus] = useState("PLANNED");
+  const [fChapter, setFChapter] = useState("");
+  const [fTargetMin, setFTargetMin] = useState("");
+  const [fTargetMax, setFTargetMax] = useState("");
+  const [fSurfaceClue, setFSurfaceClue] = useState("");
+  const [fHiddenTruth, setFHiddenTruth] = useState("");
+  const [fAuthorLocked, setFAuthorLocked] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -74,8 +136,9 @@ export function LorePanel({ bookId }: LorePanelProps) {
       loreApi.listForeshadowings(bookId),
       booksApi.getCharter(bookId).catch(() => null),
       libraryApi.list(bookId).catch(() => []),
+      memoryProposalsApi.list(bookId, "PENDING").catch(() => []),
     ])
-      .then(([chars, worlds, clues, charterData, libDocs]) => {
+      .then(([chars, worlds, clues, charterData, libDocs, pendingProposals]) => {
         if (!active) return;
         setCharacters(chars);
         setWorldEntries(worlds);
@@ -83,6 +146,7 @@ export function LorePanel({ bookId }: LorePanelProps) {
         setCharter(charterData);
         setCharterDraft(charterData?.effectiveCharter ?? "");
         setLibraryDocs(libDocs);
+        setProposals(pendingProposals);
         setError(null);
       })
       .catch((err) => {
@@ -93,6 +157,27 @@ export function LorePanel({ bookId }: LorePanelProps) {
       active = false;
     };
   }, [bookId]);
+
+  async function handleDecideProposal(proposal: MemoryProposalItem, decision: "ACCEPT" | "REJECT") {
+    setDecidingProposalId(proposal.id);
+    setError(null);
+    try {
+      await memoryProposalsApi.decide(bookId, proposal.id, decision);
+      setProposals((prev) => prev.filter((item) => item.id !== proposal.id));
+      if (decision === "ACCEPT") {
+        const [chars, clues] = await Promise.all([
+          loreApi.listCharacters(bookId),
+          loreApi.listForeshadowings(bookId),
+        ]);
+        setCharacters(chars);
+        setForeshadowings(clues);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "处理设定变更确认失败");
+    } finally {
+      setDecidingProposalId(null);
+    }
+  }
 
   async function handleSaveCharter(e: FormEvent) {
     e.preventDefault();
@@ -133,6 +218,7 @@ export function LorePanel({ bookId }: LorePanelProps) {
       const saved = await loreApi.upsertCharacter(bookId, {
         name: cName.trim(),
         roleType: cRole,
+        aliases: cAliases.trim(),
         realmOrLevel: cRealm.trim(),
         currentLocation: cLocation.trim(),
         statusNotes: cNotes.trim(),
@@ -143,12 +229,35 @@ export function LorePanel({ bookId }: LorePanelProps) {
         return [saved, ...rest];
       });
       setCName("");
+      setCAliases("");
       setCRealm("");
       setCLocation("");
       setCNotes("");
       setCInventory("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存人物失败");
+    }
+  }
+
+  async function handleWakeCharacter(ch: CharacterItem) {
+    setError(null);
+    try {
+      const updated = await loreApi.wakeCharacter(bookId, ch.id);
+      setCharacters((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "唤醒人物失败");
+    }
+  }
+
+  async function handleToggleCharacterLock(ch: CharacterItem) {
+    setError(null);
+    const hasLocks = (ch.lockedFields?.length ?? 0) > 0;
+    const nextLocks = hasLocks ? [] : DEFAULT_LOCKED_CHARACTER_FIELDS;
+    try {
+      const updated = await loreApi.updateCharacterLocks(bookId, ch.id, nextLocks);
+      setCharacters((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新人物锁定失败");
     }
   }
 
@@ -175,40 +284,105 @@ export function LorePanel({ bookId }: LorePanelProps) {
     if (!fTitle.trim()) return;
     setError(null);
     try {
-      const chapterNo = Number.parseInt(fChapter, 10);
+      const plantedNo = Number.parseInt(fChapter, 10);
+      const minNo = Number.parseInt(fTargetMin, 10);
+      const maxNo = Number.parseInt(fTargetMax, 10);
+      const surface = fSurfaceClue.trim();
       const saved = await loreApi.upsertForeshadowing(bookId, {
         title: fTitle.trim(),
-        description: fDesc.trim(),
-        plantedChapterNo: Number.isNaN(chapterNo) ? undefined : chapterNo,
-        status: "OPEN",
+        description: surface,
+        surfaceClue: surface,
+        hiddenTruth: fHiddenTruth.trim(),
+        importance: fImportance,
+        revealPolicy: fRevealPolicy,
+        status: fStatus,
+        plantedChapterNo: Number.isNaN(plantedNo) ? undefined : plantedNo,
+        targetChapterMin: Number.isNaN(minNo) ? undefined : minNo,
+        targetChapterMax: Number.isNaN(maxNo) ? undefined : maxNo,
+        authorLocked: fAuthorLocked,
       });
       setForeshadowings((prev) => {
         const rest = prev.filter((item) => item.id !== saved.id);
         return [saved, ...rest];
       });
       setFTitle("");
-      setFDesc("");
+      setFChapter("");
+      setFTargetMin("");
+      setFTargetMax("");
+      setFSurfaceClue("");
+      setFHiddenTruth("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存伏笔失败");
     }
   }
 
-  async function handleToggleForeshadowing(item: ForeshadowingItem) {
-    const nextStatus = item.status === "OPEN" ? "RESOLVED" : "OPEN";
-    const saved = await loreApi.upsertForeshadowing(bookId, {
-      title: item.title,
-      description: item.description,
-      plantedChapterNo: item.plantedChapterNo ?? undefined,
-      status: nextStatus,
-    });
-    setForeshadowings((prev) => prev.map((f) => (f.id === saved.id ? saved : f)));
+  async function handleTransitionForeshadowing(item: ForeshadowingItem, targetStatus: string) {
+    setError(null);
+    try {
+      const saved = await loreApi.transitionForeshadowing(bookId, item.id, {
+        targetStatus,
+      });
+      setForeshadowings((prev) => prev.map((f) => (f.id === saved.id ? saved : f)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新伏笔状态失败");
+    }
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
       <div className="border-b border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-        维护人物、世界观与伏笔，AI 创作时会自动参考并保持前后一致
+        维护故事档案、人物、世界观与伏笔底牌，AI 创作时会自动参考并严守防剧透纪律
       </div>
+
+      {proposals.length > 0 && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+            <span>待确认的重要设定变更（{proposals.length}）</span>
+            <span className="text-[10px] font-normal">需你确认后才会生效</span>
+          </div>
+          <ul className="space-y-1.5">
+            {proposals.slice(0, 3).map((proposal) => {
+              const busy = decidingProposalId === proposal.id;
+              return (
+                <li
+                  key={proposal.id}
+                  className="rounded border border-amber-500/30 bg-background/90 p-2 space-y-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-foreground truncate">
+                      {proposal.targetName || "设定变更"}
+                    </span>
+                    <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+                      {PROPOSAL_TYPE_LABELS[proposal.proposalType] ?? proposal.proposalType}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    {proposal.summary}
+                  </p>
+                  <div className="flex justify-end gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleDecideProposal(proposal, "REJECT")}
+                      className="rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted disabled:opacity-50"
+                    >
+                      驳回
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleDecideProposal(proposal, "ACCEPT")}
+                      className="rounded bg-amber-600 px-2 py-0.5 text-[10px] text-white hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {busy ? "处理中..." : "采纳生效"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-4 border-b border-border text-[11px] font-medium">
         <button
@@ -355,9 +529,13 @@ export function LorePanel({ bookId }: LorePanelProps) {
             </div>
           </>
         )}
+
         {subTab === "characters" && (
           <>
-            <form onSubmit={handleAddCharacter} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
+            <form
+              onSubmit={handleAddCharacter}
+              className="space-y-1.5 rounded-lg border border-border bg-background p-2.5"
+            >
               <div className="flex gap-1.5">
                 <input
                   required
@@ -376,6 +554,12 @@ export function LorePanel({ bookId }: LorePanelProps) {
                   <option value="ANTAGONIST">反派</option>
                 </select>
               </div>
+              <input
+                value={cAliases}
+                onChange={(e) => setCAliases(e.target.value)}
+                placeholder="别名/化名/称谓（逗号分隔，如：青莲居士, 小林）"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
               <div className="grid grid-cols-2 gap-1.5">
                 <input
                   value={cRealm}
@@ -408,53 +592,92 @@ export function LorePanel({ bookId }: LorePanelProps) {
             </form>
 
             <ul className="space-y-2">
-              {characters.map((ch) => (
-                <li key={ch.id} className="rounded-lg border border-border bg-background p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold">{ch.name}</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
-                        {ch.realmOrLevel || ROLE_LABELS[ch.roleType] || ch.roleType}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void loreApi
-                            .deleteCharacter(bookId, ch.id)
-                            .then(() =>
-                              setCharacters((prev) => prev.filter((x) => x.id !== ch.id)),
-                            )
-                        }
-                        className="text-destructive hover:underline"
-                      >
-                        删
-                      </button>
+              {characters.map((ch) => {
+                const lifeMeta =
+                  LIFECYCLE_LABELS[ch.lifecycleStatus ?? "ACTIVE"] ?? LIFECYCLE_LABELS.ACTIVE;
+                const isLocked = (ch.lockedFields?.length ?? 0) > 0;
+                return (
+                  <li key={ch.id} className="rounded-lg border border-border bg-background p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate font-semibold">{ch.name}</span>
+                        <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${lifeMeta.className}`}>
+                          {lifeMeta.label}
+                        </span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                          {ch.realmOrLevel || ROLE_LABELS[ch.roleType] || ch.roleType}
+                        </span>
+                        <button
+                          type="button"
+                          title="锁定后 AI 自动整理不会覆盖该人物的性格、境界与定位"
+                          onClick={() => void handleToggleCharacterLock(ch)}
+                          className={`rounded px-1.5 py-0.5 text-[10px] ${
+                            isLocked
+                              ? "bg-primary/15 text-primary"
+                              : "border border-border text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {isLocked ? "已锁" : "锁定"}
+                        </button>
+                        {ch.lifecycleStatus === "DORMANT" && (
+                          <button
+                            type="button"
+                            onClick={() => void handleWakeCharacter(ch)}
+                            className="rounded bg-amber-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-amber-700"
+                          >
+                            唤醒
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void loreApi
+                              .deleteCharacter(bookId, ch.id)
+                              .then(() =>
+                                setCharacters((prev) => prev.filter((x) => x.id !== ch.id)),
+                              )
+                          }
+                          className="text-destructive hover:underline"
+                        >
+                          删
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  {ch.currentLocation && (
-                    <div className="mt-1 text-[11px] text-muted-foreground">
-                      位置：{ch.currentLocation}
-                    </div>
-                  )}
-                  {ch.inventory && (
-                    <div className="text-[11px] text-muted-foreground">
-                      物品：{ch.inventory}
-                    </div>
-                  )}
-                  {ch.statusNotes && (
-                    <div className="mt-1 text-[11px] text-muted-foreground">
-                      状态：{ch.statusNotes}
-                    </div>
-                  )}
-                </li>
-              ))}
+                    {ch.aliases && (
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        别名：{ch.aliases}
+                      </div>
+                    )}
+                    {ch.currentLocation && (
+                      <div className="mt-0.5 text-[11px] text-muted-foreground">
+                        位置：{ch.currentLocation}
+                      </div>
+                    )}
+                    {ch.inventory && (
+                      <div className="text-[11px] text-muted-foreground">
+                        物品：{ch.inventory}
+                      </div>
+                    )}
+                    {ch.statusNotes && (
+                      <div className="mt-0.5 text-[11px] text-muted-foreground">
+                        状态：{ch.statusNotes}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </>
         )}
 
         {subTab === "world" && (
           <>
-            <form onSubmit={handleAddWorld} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
+            <form
+              onSubmit={handleAddWorld}
+              className="space-y-1.5 rounded-lg border border-border bg-background p-2.5"
+            >
               <div className="flex gap-1.5">
                 <select
                   value={wCat}
@@ -523,78 +746,238 @@ export function LorePanel({ bookId }: LorePanelProps) {
 
         {subTab === "foreshadowing" && (
           <>
-            <form onSubmit={handleAddForeshadowing} className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
-              <div className="flex gap-1.5">
-                <input
-                  required
-                  value={fTitle}
-                  onChange={(e) => setFTitle(e.target.value)}
-                  placeholder="伏笔标题（如：残缺玉佩）"
-                  className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
-                />
+            <form
+              onSubmit={handleAddForeshadowing}
+              className="space-y-1.5 rounded-lg border border-border bg-background p-2.5"
+            >
+              <input
+                required
+                value={fTitle}
+                onChange={(e) => setFTitle(e.target.value)}
+                placeholder="伏笔标题（如：残缺青铜玉佩）"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <div className="grid grid-cols-3 gap-1">
+                <select
+                  value={fImportance}
+                  onChange={(e) => setFImportance(e.target.value)}
+                  className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                >
+                  <option value="MAIN_ARC">主线伏笔</option>
+                  <option value="SUBPLOT">支线伏笔</option>
+                  <option value="DETAIL">细节呼应</option>
+                </select>
+                <select
+                  value={fRevealPolicy}
+                  onChange={(e) => setFRevealPolicy(e.target.value)}
+                  className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                >
+                  <option value="HIDE_TRUTH">严守底牌</option>
+                  <option value="HINT_ONLY">只许暗示</option>
+                  <option value="REVEAL_NOW">允许揭晓</option>
+                </select>
+                <select
+                  value={fStatus}
+                  onChange={(e) => setFStatus(e.target.value)}
+                  className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                >
+                  <option value="PLANNED">待埋设</option>
+                  <option value="PLANTED">已埋设</option>
+                  <option value="HINTED">已照应</option>
+                  <option value="TRIGGERED">待引爆</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
                 <input
                   type="number"
                   min={1}
                   value={fChapter}
                   onChange={(e) => setFChapter(e.target.value)}
-                  placeholder="章节"
-                  className="w-16 rounded border border-input bg-background px-2 py-1 text-xs"
+                  placeholder="埋设章(选填)"
+                  className="rounded border border-input bg-background px-2 py-1 text-[11px]"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={fTargetMin}
+                  onChange={(e) => setFTargetMin(e.target.value)}
+                  placeholder="预计起收章"
+                  className="rounded border border-input bg-background px-2 py-1 text-[11px]"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={fTargetMax}
+                  onChange={(e) => setFTargetMax(e.target.value)}
+                  placeholder="最晚回收章"
+                  className="rounded border border-input bg-background px-2 py-1 text-[11px]"
                 />
               </div>
               <textarea
                 rows={2}
-                value={fDesc}
-                onChange={(e) => setFDesc(e.target.value)}
-                placeholder="埋设细节与预计回收时机..."
+                value={fSurfaceClue}
+                onChange={(e) => setFSurfaceClue(e.target.value)}
+                placeholder="表面线索（读者与主角可见：玉佩遇血发烫、刻有半截残纹……）"
                 className="w-full resize-none rounded border border-input bg-background px-2 py-1 text-xs"
               />
+              <textarea
+                rows={2}
+                value={fHiddenTruth}
+                onChange={(e) => setFHiddenTruth(e.target.value)}
+                placeholder="幕后真相/底牌（选填：未启用引爆前，AI 写手绝不可提前剧透）"
+                className="w-full resize-none rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={fAuthorLocked}
+                  onChange={(e) => setFAuthorLocked(e.target.checked)}
+                />
+                <span>作者锁定（AI 整理记忆时需你确认才可标为已回收）</span>
+              </label>
               <Button type="submit" size="xs" className="w-full">
                 登记伏笔
               </Button>
             </form>
 
             <ul className="space-y-2">
-              {foreshadowings.map((f) => (
-                <li key={f.id} className="rounded-lg border border-border bg-background p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold">{f.title}</span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void handleToggleForeshadowing(f)}
-                        className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                          f.status === "OPEN"
-                            ? "bg-amber-500/15 text-amber-600"
-                            : "bg-emerald-500/15 text-emerald-600"
-                        }`}
-                      >
-                        {f.status === "OPEN" ? "未回收" : "已回收"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void loreApi
-                            .deleteForeshadowing(bookId, f.id)
-                            .then(() =>
-                              setForeshadowings((prev) => prev.filter((x) => x.id !== f.id)),
-                            )
-                        }
-                        className="text-destructive hover:underline"
-                      >
-                        删
-                      </button>
+              {foreshadowings.map((f) => {
+                const statusMeta =
+                  FORESHADOW_STATUS_META[f.status] ?? {
+                    label: f.status,
+                    className: "bg-muted text-muted-foreground",
+                  };
+                const surfaceText = f.surfaceClue || f.description;
+                const isActive =
+                  f.status === "PLANTED" ||
+                  f.status === "OPEN" ||
+                  f.status === "HINTED" ||
+                  f.status === "TRIGGERED";
+                return (
+                  <li key={f.id} className="rounded-lg border border-border bg-background p-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1">
+                          {f.code && (
+                            <span className="font-mono text-[10px] font-semibold text-primary">
+                              {f.code}
+                            </span>
+                          )}
+                          <span className="font-semibold">{f.title}</span>
+                          {f.importance && (
+                            <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">
+                              {IMPORTANCE_LABELS[f.importance] ?? f.importance}
+                            </span>
+                          )}
+                          {f.authorLocked && (
+                            <span className="rounded bg-primary/10 px-1 py-0.5 text-[9px] text-primary">
+                              锁
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] ${statusMeta.className}`}>
+                          {statusMeta.label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void loreApi
+                              .deleteForeshadowing(bookId, f.id)
+                              .then(() =>
+                                setForeshadowings((prev) => prev.filter((x) => x.id !== f.id)),
+                              )
+                          }
+                          className="text-destructive hover:underline"
+                        >
+                          删
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  {f.plantedChapterNo && (
-                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                      埋设于第 {f.plantedChapterNo} 章
+
+                    <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
+                      {f.plantedChapterNo && <span>埋设:第{f.plantedChapterNo}章</span>}
+                      {(f.targetChapterMin || f.targetChapterMax) && (
+                        <span>
+                          预计回收:第{f.targetChapterMin ?? "?"}~{f.targetChapterMax ?? "?"}章
+                        </span>
+                      )}
+                      {f.resolvedChapterNo && <span>回收:第{f.resolvedChapterNo}章</span>}
                     </div>
-                  )}
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {f.description}
-                  </p>
-                </li>
-              ))}
+
+                    {surfaceText && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">{surfaceText}</p>
+                    )}
+
+                    {f.hiddenTruth && (
+                      <div className="mt-1.5 rounded border border-dashed border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px]">
+                        <div className="flex items-center justify-between text-[10px] text-amber-700 dark:text-amber-400">
+                          <span className="font-medium">幕后底牌</span>
+                          <span>
+                            {REVEAL_POLICY_LABELS[f.revealPolicy ?? "HIDE_TRUTH"] ?? f.revealPolicy}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-muted-foreground">{f.hiddenTruth}</p>
+                      </div>
+                    )}
+
+                    {f.plantedQuote && (
+                      <p className="mt-1 border-l-2 border-primary/40 pl-2 text-[10px] italic text-muted-foreground">
+                        「{f.plantedQuote}」
+                      </p>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {f.status === "PLANNED" && (
+                        <button
+                          type="button"
+                          onClick={() => void handleTransitionForeshadowing(f, "PLANTED")}
+                          className="rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-muted"
+                        >
+                          标为已埋
+                        </button>
+                      )}
+                      {f.status === "DORMANT_CLUE" && (
+                        <button
+                          type="button"
+                          onClick={() => void handleTransitionForeshadowing(f, "PLANTED")}
+                          className="rounded bg-amber-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-amber-700"
+                        >
+                          唤醒线索
+                        </button>
+                      )}
+                      {isActive && (
+                        <button
+                          type="button"
+                          onClick={() => void handleTransitionForeshadowing(f, "RESOLVED")}
+                          className="rounded bg-emerald-600/90 px-1.5 py-0.5 text-[10px] text-white hover:bg-emerald-600"
+                        >
+                          标为已回收
+                        </button>
+                      )}
+                      {(isActive || f.status === "PLANNED" || f.status === "DORMANT_CLUE") && (
+                        <button
+                          type="button"
+                          onClick={() => void handleTransitionForeshadowing(f, "ABANDONED")}
+                          className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+                        >
+                          弃用
+                        </button>
+                      )}
+                      {(f.status === "RESOLVED" || f.status === "ABANDONED") && (
+                        <button
+                          type="button"
+                          onClick={() => void handleTransitionForeshadowing(f, "PLANTED")}
+                          className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+                        >
+                          重新激活
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </>
         )}

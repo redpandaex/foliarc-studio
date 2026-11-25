@@ -9,7 +9,9 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
-@TableName("agent_runs")
+import studio.foliarc.biz.config.mybatis.PostgresJsonbTypeHandler;
+
+@TableName(value = "agent_runs", autoResultMap = true)
 public class AgentRunEntity {
 
     @TableId(type = IdType.INPUT)
@@ -40,6 +42,9 @@ public class AgentRunEntity {
     private Long frozenMicros;
     private Long settledMicros;
     private String billingStatus;
+    private String povCharacter;
+    @TableField(typeHandler = PostgresJsonbTypeHandler.class)
+    private String foreshadowingDirectivesJson;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -99,6 +104,10 @@ public class AgentRunEntity {
     public void setSettledMicros(Long settledMicros) { this.settledMicros = settledMicros; }
     public String getBillingStatus() { return billingStatus; }
     public void setBillingStatus(String billingStatus) { this.billingStatus = billingStatus; }
+    public String getPovCharacter() { return povCharacter; }
+    public void setPovCharacter(String povCharacter) { this.povCharacter = povCharacter; }
+    public String getForeshadowingDirectivesJson() { return foreshadowingDirectivesJson; }
+    public void setForeshadowingDirectivesJson(String foreshadowingDirectivesJson) { this.foreshadowingDirectivesJson = foreshadowingDirectivesJson; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

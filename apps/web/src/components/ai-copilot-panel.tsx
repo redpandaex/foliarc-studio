@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ForeshadowingDirectorSlot } from "@/components/foreshadowing-director-slot";
 import { Button } from "@/components/ui/button";
 import {
   getRunStreamUrl,
   runsApi,
   type AgentRunItem,
+  type ForeshadowingDirective,
   type RunAction,
   type RunMode,
 } from "@/lib/api";
@@ -146,6 +148,10 @@ export function AiCopilotPanel({
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [instruction, setInstruction] = useState("");
+  const [povCharacter, setPovCharacter] = useState("");
+  const [foreshadowingDirectives, setForeshadowingDirectives] = useState<
+    ForeshadowingDirective[]
+  >([]);
   const [revisedInstruction, setRevisedInstruction] = useState("");
 
   const [runId, setRunId] = useState<string | null>(null);
@@ -799,6 +805,9 @@ export function AiCopilotPanel({
         instruction,
         chapterContext: chapterContent,
         requireOutlineApproval: effectiveApproval,
+        povCharacter: povCharacter.trim() || undefined,
+        foreshadowingDirectives:
+          foreshadowingDirectives.length > 0 ? foreshadowingDirectives : undefined,
       });
       setRunId(created.id);
       flushSnapshotNow({
@@ -1129,6 +1138,16 @@ export function AiCopilotPanel({
               onChange={(e) => setInstruction(e.target.value)}
               placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写）..."
               className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+            />
+
+            <ForeshadowingDirectorSlot
+              bookId={bookId}
+              chapterNo={chapterNo ?? null}
+              disabled={isRunning}
+              povCharacter={povCharacter}
+              onPovCharacterChange={setPovCharacter}
+              directives={foreshadowingDirectives}
+              onDirectivesChange={setForeshadowingDirectives}
             />
 
             <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">

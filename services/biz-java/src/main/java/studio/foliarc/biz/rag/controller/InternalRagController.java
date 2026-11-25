@@ -151,7 +151,7 @@ public class InternalRagController {
             @RequestParam(required = false) Integer maxChapterNo
     ) {
         verifyToken(token);
-        return memoryService.getStructuredMemory(parseOwner(ownerId), bookId, maxChapterNo);
+        return memoryService.getAgentStructuredMemory(parseOwner(ownerId), bookId, maxChapterNo);
     }
 
     @PostMapping("/books/{bookId}/memory/apply")

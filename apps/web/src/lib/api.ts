@@ -252,6 +252,11 @@ export interface CharacterItem {
   currentLocation: string;
   statusNotes: string;
   inventory: string;
+  aliases?: string;
+  lifecycleStatus?: "CORE_PINNED" | "ACTIVE" | "DORMANT" | "DEAD" | string;
+  lastSeenOrder?: number;
+  arcScope?: string;
+  lockedFields?: string[];
   updatedAt: string | null;
 }
 
@@ -268,12 +273,54 @@ export interface WorldEntryItem {
 export interface ForeshadowingItem {
   id: string;
   bookId: string;
+  code?: string;
   title: string;
   description: string;
+  importance?: "MAIN_ARC" | "SUBPLOT" | "DETAIL" | string;
+  revealPolicy?: "HIDE_TRUTH" | "HINT_ONLY" | "REVEAL_NOW" | string;
+  surfaceClue?: string;
+  hiddenTruth?: string;
   plantedChapterNo: number | null;
   resolvedChapterNo: number | null;
+  plantedSectionId?: string | null;
+  plantedNarrativeOrder?: number | null;
+  plantedQuote?: string;
+  resolvedSectionId?: string | null;
+  targetChapterMin?: number | null;
+  targetChapterMax?: number | null;
+  involvedCharacters?: string;
+  hintHistoryJson?: string;
+  source?: string;
+  authorLocked?: boolean;
   status: string;
   updatedAt: string | null;
+}
+
+export interface DueForeshadowingsResponse {
+  chapterNo: number;
+  dueNow: ForeshadowingItem[];
+  readyToPlant: ForeshadowingItem[];
+  activePlanted: ForeshadowingItem[];
+}
+
+export interface ForeshadowingDirective {
+  foreshadowingId: string;
+  mode: "PLANT" | "HINT" | "PAYOFF";
+  resolveType?: "FULL_RESOLVE" | "PARTIAL_REVEAL";
+}
+
+export interface MemoryProposalItem {
+  id: string;
+  bookId: string;
+  sectionId: string | null;
+  proposalType: "CHARACTER_DEATH" | "FORESHADOWING_RESOLVE" | "CORE_IDENTITY_SHIFT" | string;
+  targetEntityId: string | null;
+  targetName: string;
+  summary: string;
+  diffJson: string;
+  status: "PENDING" | "ACCEPTED" | "REJECTED" | string;
+  createdAt: string | null;
+  resolvedAt: string | null;
 }
 
 export interface NovelBible {
@@ -901,6 +948,8 @@ export const runsApi = {
     instruction?: string;
     chapterContext?: string;
     requireOutlineApproval?: boolean;
+    povCharacter?: string;
+    foreshadowingDirectives?: ForeshadowingDirective[];
   }): Promise<AgentRunItem> {
     return request<AgentRunItem>("/api/v1/runs", {
       method: "POST",
@@ -965,12 +1014,35 @@ export const loreApi = {
       currentLocation?: string;
       statusNotes?: string;
       inventory?: string;
+      aliases?: string;
+      lifecycleStatus?: string;
+      arcScope?: string;
+      lockedFields?: string[];
     },
   ): Promise<CharacterItem> {
     return request<CharacterItem>(`/api/v1/books/${bookId}/characters`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+  wakeCharacter(bookId: string, characterId: string): Promise<CharacterItem> {
+    return request<CharacterItem>(
+      `/api/v1/books/${bookId}/characters/${characterId}/wake`,
+      { method: "POST" },
+    );
+  },
+  updateCharacterLocks(
+    bookId: string,
+    characterId: string,
+    lockedFields: string[],
+  ): Promise<CharacterItem> {
+    return request<CharacterItem>(
+      `/api/v1/books/${bookId}/characters/${characterId}/locks`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ lockedFields }),
+      },
+    );
   },
   deleteCharacter(bookId: string, characterId: string): Promise<void> {
     return request<void>(`/api/v1/books/${bookId}/characters/${characterId}`, {
@@ -997,12 +1069,32 @@ export const loreApi = {
   listForeshadowings(bookId: string): Promise<ForeshadowingItem[]> {
     return request<ForeshadowingItem[]>(`/api/v1/books/${bookId}/foreshadowings`);
   },
+  listDueForeshadowings(
+    bookId: string,
+    chapterNo: number,
+  ): Promise<DueForeshadowingsResponse> {
+    return request<DueForeshadowingsResponse>(
+      `/api/v1/books/${bookId}/foreshadowings/due?chapterNo=${chapterNo}`,
+    );
+  },
   upsertForeshadowing(
     bookId: string,
     payload: {
+      id?: string;
+      code?: string;
       title: string;
       description?: string;
+      importance?: string;
+      revealPolicy?: string;
+      surfaceClue?: string;
+      hiddenTruth?: string;
       plantedChapterNo?: number;
+      resolvedChapterNo?: number;
+      targetChapterMin?: number;
+      targetChapterMax?: number;
+      involvedCharacters?: string;
+      plantedQuote?: string;
+      authorLocked?: boolean;
       status?: string;
     },
   ): Promise<ForeshadowingItem> {
@@ -1011,10 +1103,51 @@ export const loreApi = {
       body: JSON.stringify(payload),
     });
   },
+  transitionForeshadowing(
+    bookId: string,
+    foreshadowingId: string,
+    payload: {
+      targetStatus: string;
+      sectionId?: string;
+      chapterNo?: number;
+      quote?: string;
+      note?: string;
+    },
+  ): Promise<ForeshadowingItem> {
+    return request<ForeshadowingItem>(
+      `/api/v1/books/${bookId}/foreshadowings/${foreshadowingId}/transition`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  },
   deleteForeshadowing(bookId: string, foreshadowingId: string): Promise<void> {
     return request<void>(
       `/api/v1/books/${bookId}/foreshadowings/${foreshadowingId}`,
       { method: "DELETE" },
+    );
+  },
+};
+
+export const memoryProposalsApi = {
+  list(bookId: string, status = "PENDING"): Promise<MemoryProposalItem[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request<MemoryProposalItem[]>(
+      `/api/v1/books/${bookId}/memory/proposals${q}`,
+    );
+  },
+  decide(
+    bookId: string,
+    proposalId: string,
+    decision: "ACCEPT" | "REJECT",
+  ): Promise<MemoryProposalItem> {
+    return request<MemoryProposalItem>(
+      `/api/v1/books/${bookId}/memory/proposals/${proposalId}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      },
     );
   },
 };

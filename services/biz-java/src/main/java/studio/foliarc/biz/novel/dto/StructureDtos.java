@@ -55,22 +55,39 @@ public final class StructureDtos {
 
     public record CreateSectionRequest(
             @Size(max = 200) String title,
-            String content
-    ) {}
+            String content,
+            @Size(max = 100) String povCharacter
+    ) {
+        public CreateSectionRequest(String title, String content) {
+            this(title, content, null);
+        }
+    }
 
     public record UpdateSectionRequest(
             @Size(max = 200) String title,
             @NotNull String content,
             @NotNull Long version,
             Boolean createSnapshot,
-            @Size(max = 255) String changeSummary
-    ) {}
+            @Size(max = 255) String changeSummary,
+            @Size(max = 100) String povCharacter
+    ) {
+        public UpdateSectionRequest(String title, String content, Long version, Boolean createSnapshot, String changeSummary) {
+            this(title, content, version, createSnapshot, changeSummary, null);
+        }
+    }
 
     public record SectionDetailResponse(
             UUID id, UUID bookId, UUID chapterId, int chapterNo, int sectionNo, long narrativeOrder,
             String title, String content, int wordCount, String contentHash, boolean isDefault,
-            boolean summaryDirty, Long version, OffsetDateTime createdAt, OffsetDateTime updatedAt
-    ) {}
+            boolean summaryDirty, Long version, OffsetDateTime createdAt, OffsetDateTime updatedAt, String povCharacter
+    ) {
+        public SectionDetailResponse(UUID id, UUID bookId, UUID chapterId, int chapterNo, int sectionNo, long narrativeOrder,
+                                     String title, String content, int wordCount, String contentHash, boolean isDefault,
+                                     boolean summaryDirty, Long version, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+            this(id, bookId, chapterId, chapterNo, sectionNo, narrativeOrder, title, content, wordCount, contentHash,
+                    isDefault, summaryDirty, version, createdAt, updatedAt, "");
+        }
+    }
 
     public record FullChapterPreviewResponse(
             UUID chapterId, int chapterNo, String title, String structureMode,

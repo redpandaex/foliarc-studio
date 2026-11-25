@@ -9,7 +9,9 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
-@TableName("characters")
+import studio.foliarc.biz.config.mybatis.PostgresJsonbTypeHandler;
+
+@TableName(value = "characters", autoResultMap = true)
 public class CharacterEntity {
 
     @TableId(type = IdType.INPUT)
@@ -23,6 +25,12 @@ public class CharacterEntity {
     private String currentLocation;
     private String statusNotes;
     private String inventory;
+    private String aliases;
+    private String lifecycleStatus;
+    private Long lastSeenOrder;
+    private String arcScope;
+    @TableField(typeHandler = PostgresJsonbTypeHandler.class)
+    private String lockedFields;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -48,6 +56,16 @@ public class CharacterEntity {
     public void setStatusNotes(String statusNotes) { this.statusNotes = statusNotes; }
     public String getInventory() { return inventory; }
     public void setInventory(String inventory) { this.inventory = inventory; }
+    public String getAliases() { return aliases; }
+    public void setAliases(String aliases) { this.aliases = aliases; }
+    public String getLifecycleStatus() { return lifecycleStatus; }
+    public void setLifecycleStatus(String lifecycleStatus) { this.lifecycleStatus = lifecycleStatus; }
+    public Long getLastSeenOrder() { return lastSeenOrder; }
+    public void setLastSeenOrder(Long lastSeenOrder) { this.lastSeenOrder = lastSeenOrder; }
+    public String getArcScope() { return arcScope; }
+    public void setArcScope(String arcScope) { this.arcScope = arcScope; }
+    public String getLockedFields() { return lockedFields; }
+    public void setLockedFields(String lockedFields) { this.lockedFields = lockedFields; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

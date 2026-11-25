@@ -13,7 +13,7 @@ import studio.foliarc.biz.lore.dto.LoreDtos;
 import studio.foliarc.biz.lore.service.LoreService;
 
 @RestController
-@RequestMapping("/api/v1/books/{bookId}")
+@RequestMapping({"/api/v1/books/{bookId}", "/api/v1/books/{bookId}/lore"})
 public class LoreController {
 
     private final LoreService loreService;
@@ -57,6 +57,20 @@ public class LoreController {
             @PathVariable UUID characterId
     ) {
         loreService.deleteCharacter(actor.userId(), bookId, characterId);
+    }
+
+    @PostMapping("/characters/{characterId}/wake")
+    public LoreDtos.CharacterResponse wakeCharacter(@AuthenticationPrincipal AuthenticatedUser actor,
+                                                    @PathVariable UUID bookId, @PathVariable UUID characterId) {
+        return loreService.wakeCharacter(actor.userId(), bookId, characterId);
+    }
+
+    @PutMapping("/characters/{characterId}/locks")
+    public LoreDtos.CharacterResponse updateCharacterLocks(
+            @AuthenticationPrincipal AuthenticatedUser actor, @PathVariable UUID bookId, @PathVariable UUID characterId,
+            @Valid @RequestBody LoreDtos.UpdateCharacterLocksRequest body
+    ) {
+        return loreService.updateCharacterLocks(actor.userId(), bookId, characterId, body);
     }
 
     @GetMapping("/worldbook")
@@ -105,6 +119,20 @@ public class LoreController {
             @Valid @RequestBody LoreDtos.UpsertForeshadowingRequest body
     ) {
         return loreService.upsertForeshadowing(actor.userId(), bookId, body);
+    }
+
+    @PostMapping("/foreshadowings/{foreshadowingId}/transition")
+    public LoreDtos.ForeshadowingResponse transitionForeshadowing(
+            @AuthenticationPrincipal AuthenticatedUser actor, @PathVariable UUID bookId, @PathVariable UUID foreshadowingId,
+            @Valid @RequestBody LoreDtos.TransitionForeshadowingRequest body
+    ) {
+        return loreService.transitionForeshadowing(actor.userId(), bookId, foreshadowingId, body);
+    }
+
+    @GetMapping("/foreshadowings/due")
+    public LoreDtos.DueForeshadowingsResponse dueForeshadowings(@AuthenticationPrincipal AuthenticatedUser actor,
+                                                              @PathVariable UUID bookId, @RequestParam int chapterNo) {
+        return loreService.dueForeshadowings(actor.userId(), bookId, chapterNo);
     }
 
     @DeleteMapping("/foreshadowings/{foreshadowingId}")

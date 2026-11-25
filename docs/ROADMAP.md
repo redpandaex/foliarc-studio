@@ -150,8 +150,10 @@ flowchart LR
 - [x] **2.6.2A 万章级三级柔性结构、4 层对数记忆树与 Coarse-to-Fine 检索（Phase 5.8A，已完成）** `★`
   - **三级柔性文学结构（Volume → Chapter → Section）**：支持网文隐式单节无感写作与古典/严肃文学大章制（单节上限 10 万字联动 VIP 配额、单章聚合 20 万字，超 1.2 万字自动 Map-Reduce 并行压缩）；全链路切换为单调叙事刻度 `narrative_order = chapter_no * 1000 + section_no`。
   - **万章级 O(1) 4 层对数摘要树 + 统一编译**：`story_rollup_summaries`（Tier 1 卷 / Tier 2 篇 / Tier 3 纪元）+ 三档自适应精度（`PRECISE`/`EXPEDITION`/`EPIC`）+ 反向预算装配（≤ 4,100 字绝不截断近期章节）+ `ChapterDistiller` 单次统一编译 + Milvus `chunks_v2` / `summary_vectors` Coarse-to-Fine 两阶段万章检索 + 前端卷/章/小节柔性目录树与整章预览。
-- [ ] **2.6.2B 伏笔导演台、6 大题材档案包与双向蝴蝶效应引擎（Phase 5.8B~D，详见 [`docs/architecture/00-ARCHITECTURE-OVERVIEW.md`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）** `★`
-  - **伏笔全生命周期导演台与连续性防线（5.8B）**：6 态伏笔状态机（策划/埋入/潜伏防剧透/照应/启用引爆/回收 + 原文精准回捞）、人物别名归一、POV 视角信息隔离、按节状态快照时间旅行与 `memory_proposals` 防污染闸门。
+- [x] **2.6.2B 伏笔全生命周期导演台与连续性防线（Phase 5.8B，已完成）** `★`
+  - **6 态伏笔状态机与防提前剧透双层隔离**：支持 `PLANNED / PLANTED / HINTED / TRIGGERED / RESOLVED / DORMANT_CLUE / ABANDONED` 状态流转与 `#F01` 编号；`surface_clue` 与 `hidden_truth` 物理隔离，Writer 仅见表象与导演指令，Critic 持有潜伏底牌清单与 `PAYOFF` 埋设原文锚点（精准回捞当年原文）。
+  - **人物与事实连续性防线**：人物别名归一（Alias）、冷热休眠与一键唤醒（`CORE_PINNED / ACTIVE / DORMANT / DEAD`）、字段锁定防 AI 覆盖（`locked_fields`）、按节状态快照时间旅行（`character_state_snapshots`）、源小节归属回滚（`source_section_id`）、POV 视角信息隔离（`known_by`）以及高危变更审批闸门（`memory_proposals`）。
+- [ ] **2.6.2C 6 大题材档案包与双向蝴蝶效应引擎（Phase 5.8C~D，详见 [`docs/architecture/00-ARCHITECTURE-OVERVIEW.md`](./architecture/00-ARCHITECTURE-OVERVIEW.md)）** `★`
   - **题材分类档案包（5.8C）**：内置 6 大标准主分类（仙侠/恐怖/古典/悬疑/科幻/都市）+ 自由副标签，联动分层 Skill 路由、人物 `JSONB` 动态表单、Critic 差异化 Rubric、少样本黄金文风锚点（Style Anchors）与公共 RAG 标准化匹配。
   - **双向自选范围蝴蝶效应引擎（5.8D）**：原生对接 Phase 5.5 已落地的 VIP 动态权益中台，支持自由框选前文倒推、后文顺延、双向窗口或指定卷（`Fact Diff` → `Impact Radar` → 分批稀疏 Git Diff 补丁 + 人工逐章采纳）。
 - [x] **2.7 多 Agent 架构与协作编排**

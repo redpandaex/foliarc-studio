@@ -40,7 +40,10 @@ public class InternalLoreController {
             @PathVariable UUID bookId
     ) {
         verifyToken(token);
-        return loreService.getNovelBible(parseOwner(ownerId), bookId);
+        LoreDtos.NovelBibleResponse bible = loreService.getNovelBible(parseOwner(ownerId), bookId);
+        return new LoreDtos.NovelBibleResponse(bible.bookId(), bible.bookTitle(), bible.genre(), bible.synopsis(),
+                bible.characters(), bible.worldEntries(),
+                bible.openForeshadowings().stream().map(LoreDtos.ForeshadowingResponse::forAgent).toList());
     }
 
     @GetMapping("/books/{bookId}/lore/characters")
@@ -62,7 +65,7 @@ public class InternalLoreController {
             @Valid @RequestBody LoreDtos.UpsertCharacterRequest body
     ) {
         verifyToken(token);
-        return loreService.upsertCharacter(parseOwner(ownerId), bookId, body);
+        return loreService.upsertAgentCharacter(parseOwner(ownerId), bookId, body);
     }
 
     @GetMapping("/books/{bookId}/lore/worldbook")
@@ -84,7 +87,8 @@ public class InternalLoreController {
             @RequestParam(required = false) String status
     ) {
         verifyToken(token);
-        return loreService.listForeshadowings(parseOwner(ownerId), bookId, status);
+        return loreService.listForeshadowings(parseOwner(ownerId), bookId, status).stream()
+                .map(LoreDtos.ForeshadowingResponse::forAgent).toList();
     }
 
     @PostMapping("/books/{bookId}/lore/foreshadowings")
@@ -95,7 +99,7 @@ public class InternalLoreController {
             @Valid @RequestBody LoreDtos.UpsertForeshadowingRequest body
     ) {
         verifyToken(token);
-        return loreService.upsertForeshadowing(parseOwner(ownerId), bookId, body);
+        return loreService.upsertAgentForeshadowing(parseOwner(ownerId), bookId, body).forAgent();
     }
 
     @GetMapping("/books/{bookId}/lore/chapters/{chapterNo}")

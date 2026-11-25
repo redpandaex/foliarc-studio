@@ -28,6 +28,10 @@ class RunStartRequest(BaseModel):
     previous_chapters_context: str = ""
     rolling_summary_context: str = ""
     active_state_brief: str = ""
+    pov_character: str = ""
+    foreshadowing_writer_pack: str = ""
+    foreshadowing_critic_pack: str = ""
+    critic_guard_brief: str = ""
     instruction: str = ""
     require_outline_approval: bool = True
 
@@ -53,6 +57,10 @@ class RunResumeRequest(BaseModel):
     previous_chapters_context: str = ""
     rolling_summary_context: str = ""
     active_state_brief: str = ""
+    pov_character: str = ""
+    foreshadowing_writer_pack: str = ""
+    foreshadowing_critic_pack: str = ""
+    critic_guard_brief: str = ""
     instruction: str = ""
     accumulated_text: str = ""
     last_seq: int = Field(default=0, ge=0)

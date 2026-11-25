@@ -23,6 +23,10 @@ public class CharacterRelationEntity {
     private String description;
     private Integer sinceChapterNo;
     private Double confidence;
+    private UUID sourceSectionId;
+    private Long narrativeOrder;
+    private String source;
+    private String knownBy;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
@@ -48,6 +52,14 @@ public class CharacterRelationEntity {
     public void setSinceChapterNo(Integer sinceChapterNo) { this.sinceChapterNo = sinceChapterNo; }
     public Double getConfidence() { return confidence; }
     public void setConfidence(Double confidence) { this.confidence = confidence; }
+    public UUID getSourceSectionId() { return sourceSectionId; }
+    public void setSourceSectionId(UUID sourceSectionId) { this.sourceSectionId = sourceSectionId; }
+    public Long getNarrativeOrder() { return narrativeOrder; }
+    public void setNarrativeOrder(Long narrativeOrder) { this.narrativeOrder = narrativeOrder; }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+    public String getKnownBy() { return knownBy; }
+    public void setKnownBy(String knownBy) { this.knownBy = knownBy; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

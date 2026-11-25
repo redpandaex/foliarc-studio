@@ -208,6 +208,7 @@ public class StructureService {
             chapterSectionMapper.insert(sections.getFirst());
         }
         ChapterSectionEntity section = newSection(chapter, sectionNo, clean(input.title()), content, false);
+        section.setPovCharacter(clean(input.povCharacter()));
         chapterSectionMapper.insert(section);
         sections.add(section);
         updateChapterAfterSectionChange(chapter, sections);
@@ -246,6 +247,7 @@ public class StructureService {
         String hash = StoryMemoryContextService.sha256Hex(input.content());
         boolean contentChanged = !hash.equals(section.getContentHash());
         if (input.title() != null) section.setTitle(clean(input.title()));
+        if (input.povCharacter() != null) section.setPovCharacter(clean(input.povCharacter()));
         section.setContent(input.content());
         section.setWordCount(WordCounter.count(input.content()));
         section.setContentHash(hash);
@@ -470,7 +472,7 @@ public class StructureService {
         return new StructureDtos.SectionDetailResponse(
                 s.getId(), s.getBookId(), s.getChapterId(), s.getChapterNo(), s.getSectionNo(), s.getNarrativeOrder(),
                 s.getTitle(), s.getContent(), s.getWordCount(), s.getContentHash(), Boolean.TRUE.equals(s.getIsDefault()),
-                Boolean.TRUE.equals(s.getSummaryDirty()), s.getVersion(), s.getCreatedAt(), s.getUpdatedAt()
+                Boolean.TRUE.equals(s.getSummaryDirty()), s.getVersion(), s.getCreatedAt(), s.getUpdatedAt(), clean(s.getPovCharacter())
         );
     }
 

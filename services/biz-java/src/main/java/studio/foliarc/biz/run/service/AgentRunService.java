@@ -43,6 +43,8 @@ import studio.foliarc.biz.run.mapper.AgentCheckpointMapper;
 import studio.foliarc.biz.run.mapper.AgentRunMapper;
 import studio.foliarc.biz.vip.dto.VipDtos;
 import studio.foliarc.biz.vip.service.VipEntitlementService;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class AgentRunService {
@@ -50,6 +52,7 @@ public class AgentRunService {
     private static final Set<String> VALID_ACTIONS = Set.of("CONTINUE", "REWRITE", "OUTLINE");
     private static final Set<String> VALID_MODES = Set.of("AGENT", "DIRECT", "MULTI_AGENT");
     private static final Duration STREAM_TTL = Duration.ofHours(2);
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final AgentRunMapper runMapper;
     private final AgentCheckpointMapper checkpointMapper;
@@ -171,15 +174,19 @@ public class AgentRunService {
             rateLimiter.acquireOrThrow(ownerId, estTokens);
         }
 
+        String pov = resolvePov(req.povCharacter(), section);
+        List<RunDtos.ForeshadowingDirective> directives = req.foreshadowingDirectives() == null
+                ? List.of() : req.foreshadowingDirectives();
         StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
-                ownerId, book, chapter, section, chapterContext, instruction
-        );
+                ownerId, book, chapter, section, chapterContext, instruction, pov, directives);
 
         AgentRunEntity run = new AgentRunEntity();
         run.setId(UUID.randomUUID());
         run.setBookId(book.getId());
         run.setChapterId(chapter != null ? chapter.getId() : null);
         run.setSectionId(section != null ? section.getId() : null);
+        run.setPovCharacter(pov);
+        run.setForeshadowingDirectivesJson(JSON.writeValueAsString(directives));
         run.setOwnerId(ownerId);
         run.setMode(mode);
         run.setAction(action);
@@ -328,14 +335,18 @@ public class AgentRunService {
                 : requireSection(book.getId(), run.getSectionId(), run.getChapterId());
         run.setSectionId(section != null ? section.getId() : null);
 
+        String pov = resolvePov(run.getPovCharacter(), section);
         StoryMemoryContextService.FiveLayerContext fiveLayer = resolveFiveLayerContext(
                 ownerId,
                 book,
                 chapter,
                 section,
                 run.getChapterContext() == null ? "" : run.getChapterContext(),
-                run.getInstruction() == null ? "" : run.getInstruction()
+                run.getInstruction() == null ? "" : run.getInstruction(),
+                pov,
+                readDirectives(run.getForeshadowingDirectivesJson())
         );
+        run.setPovCharacter(pov);
 
         run.setStatus("RUNNING");
         run.setErrorMessage(null);
@@ -506,9 +517,15 @@ public class AgentRunService {
             ChapterEntity chapter,
             ChapterSectionEntity section,
             String chapterContext,
-            String instruction
+            String instruction,
+            String pov,
+            List<RunDtos.ForeshadowingDirective> directives
     ) {
         if (storyMemoryContextService != null) {
+            if (!pov.isBlank() || !directives.isEmpty()) {
+                return storyMemoryContextService.buildAdaptiveContext(
+                        ownerId, book, chapter, section, chapterContext, instruction, pov, directives);
+            }
             return section == null
                     ? storyMemoryContextService.buildFiveLayerContext(ownerId, book, chapter, chapterContext, instruction)
                     : storyMemoryContextService.buildAdaptiveContext(ownerId, book, chapter, section, chapterContext, instruction);
@@ -518,6 +535,16 @@ public class AgentRunService {
         long precedingUnits = chapter == null || chapter.getChapterNo() == null ? 0L : chapter.getChapterNo() - 1L;
         return new StoryMemoryContextService.FiveLayerContext(charter, fallbackPrev, "", "", fallbackPrev,
                 StoryMemoryContextService.determinePrecisionMode(book, precedingUnits));
+    }
+
+    private static String resolvePov(String pov, ChapterSectionEntity section) {
+        if (pov != null && !pov.isBlank()) return pov.strip();
+        return section != null && section.getPovCharacter() != null ? section.getPovCharacter().strip() : "";
+    }
+
+    private static List<RunDtos.ForeshadowingDirective> readDirectives(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        return JSON.readValue(json, new TypeReference<List<RunDtos.ForeshadowingDirective>>() {});
     }
 
     private ChapterSectionEntity requireSection(UUID bookId, UUID sectionId, UUID chapterId) {
@@ -545,6 +572,10 @@ public class AgentRunService {
         long order = StoryMemoryContextService.currentNarrativeOrder(chapter, section);
         body.put("narrative_order", order > 0 ? order : null);
         body.put("precision_mode", context.effectivePrecisionMode());
+        body.put("pov_character", run.getPovCharacter());
+        body.put("foreshadowing_writer_pack", context.foreshadowingWriterPack());
+        body.put("foreshadowing_critic_pack", context.foreshadowingCriticPack());
+        body.put("critic_guard_brief", context.criticGuardBrief());
     }
 
     public String buildPreviousChaptersContext(UUID bookId, ChapterEntity currentChapter) {

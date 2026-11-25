@@ -1,10 +1,13 @@
 package studio.foliarc.biz.run.dto;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
@@ -35,13 +38,24 @@ public final class RunDtos {
 
             Boolean requireOutlineApproval,
 
-            UUID sectionId
+            UUID sectionId,
+
+            @Size(max = 100) String povCharacter,
+            List<@Valid ForeshadowingDirective> foreshadowingDirectives
     ) {
+        public StartRunRequest(UUID bookId, UUID chapterId, String mode, String action, String modelAlias,
+                               String instruction, String chapterContext, Boolean requireOutlineApproval, UUID sectionId) {
+            this(bookId, chapterId, mode, action, modelAlias, instruction, chapterContext,
+                    requireOutlineApproval, sectionId, null, null);
+        }
+
         public StartRunRequest(UUID bookId, UUID chapterId, String mode, String action, String modelAlias,
                                String instruction, String chapterContext, Boolean requireOutlineApproval) {
             this(bookId, chapterId, mode, action, modelAlias, instruction, chapterContext, requireOutlineApproval, null);
         }
     }
+
+    public record ForeshadowingDirective(@NotNull UUID foreshadowingId, @NotBlank String mode, String resolveType) {}
 
     public record ResumeRunRequest(
             @Size(max = 4000)

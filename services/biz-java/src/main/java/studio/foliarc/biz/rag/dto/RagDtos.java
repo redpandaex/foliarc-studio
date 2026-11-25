@@ -131,17 +131,44 @@ public final class RagDtos {
             String description,
             Integer sinceChapterNo,
             Double confidence,
-            OffsetDateTime updatedAt
-    ) {}
+            OffsetDateTime updatedAt,
+            UUID sourceSectionId,
+            Long narrativeOrder,
+            String source,
+            String knownBy
+    ) {
+        public CharacterRelationResponse(UUID id, UUID bookId, String sourceCharacter, String targetCharacter,
+                                         String relationType, String description, Integer sinceChapterNo,
+                                         Double confidence, OffsetDateTime updatedAt) {
+            this(id, bookId, sourceCharacter, targetCharacter, relationType, description, sinceChapterNo,
+                    confidence, updatedAt, null, 0L, "AUTHOR", "PUBLIC");
+        }
+    }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpsertRelationRequest(
             @NotBlank String sourceCharacter,
             @NotBlank String targetCharacter,
             @NotBlank String relationType,
             String description,
             Integer sinceChapterNo,
-            Double confidence
-    ) {}
+            Double confidence,
+            UUID sourceSectionId,
+            Long narrativeOrder,
+            String source,
+            String knownBy
+    ) {
+        public UpsertRelationRequest(String sourceCharacter, String targetCharacter, String relationType,
+                                     String description, Integer sinceChapterNo, Double confidence) {
+            this(sourceCharacter, targetCharacter, relationType, description, sinceChapterNo, confidence, null);
+        }
+
+        public UpsertRelationRequest(String sourceCharacter, String targetCharacter, String relationType,
+                                     String description, Integer sinceChapterNo, Double confidence, String knownBy) {
+            this(sourceCharacter, targetCharacter, relationType, description, sinceChapterNo, confidence,
+                    null, null, null, knownBy);
+        }
+    }
 
     public record TimelineEventResponse(
             UUID id,
@@ -151,16 +178,41 @@ public final class RagDtos {
             String summary,
             String involvedCharacters,
             String location,
-            OffsetDateTime updatedAt
-    ) {}
+            OffsetDateTime updatedAt,
+            UUID sourceSectionId,
+            Long narrativeOrder,
+            String source,
+            String knownBy
+    ) {
+        public TimelineEventResponse(UUID id, UUID bookId, Integer chapterNo, String eventTitle,
+                                     String summary, String involvedCharacters, String location, OffsetDateTime updatedAt) {
+            this(id, bookId, chapterNo, eventTitle, summary, involvedCharacters, location,
+                    updatedAt, null, 0L, "AUTHOR", "PUBLIC");
+        }
+    }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpsertTimelineEventRequest(
             Integer chapterNo,
             @NotBlank String eventTitle,
             String summary,
             String involvedCharacters,
-            String location
-    ) {}
+            String location,
+            UUID sourceSectionId,
+            Long narrativeOrder,
+            String source,
+            String knownBy
+    ) {
+        public UpsertTimelineEventRequest(Integer chapterNo, String eventTitle, String summary,
+                                          String involvedCharacters, String location) {
+            this(chapterNo, eventTitle, summary, involvedCharacters, location, null);
+        }
+
+        public UpsertTimelineEventRequest(Integer chapterNo, String eventTitle, String summary,
+                                          String involvedCharacters, String location, String knownBy) {
+            this(chapterNo, eventTitle, summary, involvedCharacters, location, null, null, null, knownBy);
+        }
+    }
 
     public record StructuredMemoryResponse(
             UUID bookId,

@@ -8,12 +8,10 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HexFormat;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -27,17 +25,17 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import studio.foliarc.biz.common.BizException;
-import studio.foliarc.biz.lore.dto.LoreDtos;
 import studio.foliarc.biz.lore.service.LoreService;
 import studio.foliarc.biz.memory.entity.ChapterSummaryEntity;
-import studio.foliarc.biz.memory.entity.CharacterRelationEntity;
 import studio.foliarc.biz.memory.entity.SectionSummaryEntity;
 import studio.foliarc.biz.memory.entity.StoryRollupSummaryEntity;
 import studio.foliarc.biz.memory.entity.VolumeSummaryEntity;
 import studio.foliarc.biz.memory.mapper.ChapterSummaryMapper;
 import studio.foliarc.biz.memory.mapper.CharacterRelationMapper;
+import studio.foliarc.biz.memory.mapper.CharacterStateSnapshotMapper;
 import studio.foliarc.biz.memory.mapper.SectionSummaryMapper;
 import studio.foliarc.biz.memory.mapper.StoryRollupSummaryMapper;
+import studio.foliarc.biz.memory.mapper.TimelineEventMapper;
 import studio.foliarc.biz.memory.mapper.VolumeSummaryMapper;
 import studio.foliarc.biz.novel.dto.NovelDtos;
 import studio.foliarc.biz.novel.entity.BookEntity;
@@ -54,6 +52,7 @@ import studio.foliarc.biz.novel.service.WordCounter;
 import studio.foliarc.biz.outbox.RabbitMqTopologyConfig;
 import studio.foliarc.biz.outbox.service.OutboxService;
 import studio.foliarc.biz.rag.dto.RagDtos;
+import studio.foliarc.biz.run.dto.RunDtos.ForeshadowingDirective;
 
 /**
  * Builds story context from the charter, preceding prose, rollup tree and active story entities.
@@ -80,6 +79,8 @@ public class StoryMemoryContextService {
     private SectionSummaryMapper sectionSummaryMapper;
     private StoryRollupSummaryMapper storyRollupSummaryMapper;
     private MemoryService memoryService;
+    private CharacterStateSnapshotMapper snapshotMapper;
+    private TimelineEventMapper timelineMapper;
 
     public StoryMemoryContextService(
             BookService bookService,
@@ -126,17 +127,43 @@ public class StoryMemoryContextService {
         this.memoryService = memoryService;
     }
 
+    @Autowired(required = false)
+    public void setCharacterStateSnapshotMapper(CharacterStateSnapshotMapper snapshotMapper) {
+        this.snapshotMapper = snapshotMapper;
+    }
+
+    @Autowired(required = false)
+    public void setTimelineEventMapper(TimelineEventMapper timelineMapper) {
+        this.timelineMapper = timelineMapper;
+    }
+
     public record FiveLayerContext(
             String storyCharter,
             String hotWindowContext,
             String rollingSummaryContext,
             String activeStateBrief,
             String previousChaptersCombined,
-            String effectivePrecisionMode
+            String effectivePrecisionMode,
+            String foreshadowingWriterPack,
+            String foreshadowingCriticPack,
+            String criticGuardBrief
     ) {
+        public FiveLayerContext(String storyCharter, String hotWindowContext, String rollingSummaryContext,
+                                String activeStateBrief, String previousChaptersCombined, String effectivePrecisionMode) {
+            this(storyCharter, hotWindowContext, rollingSummaryContext, activeStateBrief, previousChaptersCombined,
+                    effectivePrecisionMode, "", "", "");
+        }
+
         public FiveLayerContext(String storyCharter, String hotWindowContext, String rollingSummaryContext,
                                 String activeStateBrief, String previousChaptersCombined) {
             this(storyCharter, hotWindowContext, rollingSummaryContext, activeStateBrief, previousChaptersCombined, "PRECISE");
+        }
+
+        public FiveLayerContext(String storyCharter, String hotWindowContext, String rollingSummaryContext,
+                                String activeStateBrief, String previousChaptersCombined, String foreshadowingWriterPack,
+                                String foreshadowingCriticPack, String criticGuardBrief) {
+            this(storyCharter, hotWindowContext, rollingSummaryContext, activeStateBrief, previousChaptersCombined,
+                    "PRECISE", foreshadowingWriterPack, foreshadowingCriticPack, criticGuardBrief);
         }
     }
 
@@ -156,7 +183,7 @@ public class StoryMemoryContextService {
     }
 
     public static long currentNarrativeOrder(ChapterEntity chapter, ChapterSectionEntity section) {
-        if (section != null) return section.getNarrativeOrder();
+        if (section != null && section.getNarrativeOrder() != null) return section.getNarrativeOrder();
         return chapter == null || chapter.getChapterNo() == null ? 0L : StructureService.narrativeOrder(chapter.getChapterNo(), 1);
     }
 
@@ -346,23 +373,35 @@ public class StoryMemoryContextService {
             UUID ownerId, BookEntity book, ChapterEntity currentChapter, ChapterSectionEntity currentSection,
             String currentDraft, String instruction
     ) {
+        return buildAdaptiveContext(ownerId, book, currentChapter, currentSection, currentDraft, instruction, null, List.of());
+    }
+
+    public FiveLayerContext buildAdaptiveContext(
+            UUID ownerId, BookEntity book, ChapterEntity currentChapter, ChapterSectionEntity currentSection,
+            String currentDraft, String instruction, String povCharacter, List<ForeshadowingDirective> foreshadowingDirectives
+    ) {
+        String pov = safe(povCharacter);
+        if (pov.isEmpty() && currentSection != null) pov = safe(currentSection.getPovCharacter());
+        List<ForeshadowingDirective> directives = foreshadowingDirectives == null ? List.of() : foreshadowingDirectives;
+        String probe = String.join("\n", safe(currentDraft), safe(instruction), pov);
         if (chapterSectionMapper == null) {
-            return buildLegacyContext(ownerId, book, currentChapter, currentDraft, instruction);
+            return buildLegacyContext(ownerId, book, currentChapter, probe, pov, directives);
         }
         UUID bookId = book.getId();
         long currentOrder = currentNarrativeOrder(currentChapter, currentSection);
+        int chapterNo = Math.max(1, (int) (currentOrder / 1000));
         long totalUnits = chapterSectionMapper.selectCount(new LambdaQueryWrapper<ChapterSectionEntity>()
                 .eq(ChapterSectionEntity::getBookId, bookId)
                 .lt(currentOrder > 0, ChapterSectionEntity::getNarrativeOrder, currentOrder));
         String mode = determinePrecisionMode(book, totalUnits);
         if (currentOrder == 0) {
-            return new FiveLayerContext(resolveEffectiveCharter(book), "", "",
-                    buildEntityScopedState(ownerId, bookId, 1, "", currentDraft, instruction, ""), "", mode);
+            return withEntityMemory(new FiveLayerContext(resolveEffectiveCharter(book), "", "", "", "", mode),
+                    ownerId, bookId, chapterNo, currentOrder, probe, pov, directives);
         }
         if (totalUnits == 0 && currentSection == null && chapterSectionMapper.selectOne(
                 new LambdaQueryWrapper<ChapterSectionEntity>().select(ChapterSectionEntity::getId)
                         .eq(ChapterSectionEntity::getBookId, bookId).last("LIMIT 1")) == null) {
-            return buildLegacyContext(ownerId, book, currentChapter, currentDraft, instruction);
+            return buildLegacyContext(ownerId, book, currentChapter, probe, pov, directives);
         }
 
         ChapterSectionEntity preceding = chapterSectionMapper.selectOne(new LambdaQueryWrapper<ChapterSectionEntity>()
@@ -398,11 +437,9 @@ public class StoryMemoryContextService {
         VolumeEntity volume = findVolume(bookId, currentChapter == null ? null : currentChapter.getVolumeId());
         String rolling = AdaptiveMemoryAssembler.assemble(storyRollupSummaryMapper, bookId, currentOrder, mode,
                 volume == null ? "" : volume.getArcGoal(), recent);
-        int maxChapterNo = preceding == null ? (int) (currentOrder / 1000) - 1 : preceding.getChapterNo();
-        String activeState = buildEntityScopedState(ownerId, bookId, Math.max(1, maxChapterNo),
-                hotTail, currentDraft, instruction, previousCharacters);
-        return new FiveLayerContext(resolveEffectiveCharter(book), hotWindow, rolling, activeState,
-                combineContext(rolling, hotWindow), mode);
+        return withEntityMemory(new FiveLayerContext(resolveEffectiveCharter(book), hotWindow, rolling, "",
+                        combineContext(rolling, hotWindow), mode),
+                ownerId, bookId, chapterNo, currentOrder, String.join("\n", hotTail, probe, previousCharacters), pov, directives);
     }
 
     private VolumeEntity findVolume(UUID bookId, UUID volumeId) {
@@ -413,13 +450,15 @@ public class StoryMemoryContextService {
     }
 
     private FiveLayerContext buildLegacyContext(
-            UUID ownerId, BookEntity book, ChapterEntity currentChapter, String currentDraft, String instruction
+            UUID ownerId, BookEntity book, ChapterEntity currentChapter, String probe, String pov,
+            List<ForeshadowingDirective> directives
     ) {
         String storyCharter = resolveEffectiveCharter(book);
+        long order = currentNarrativeOrder(currentChapter, null);
 
         if (currentChapter == null || currentChapter.getChapterNo() == null || currentChapter.getChapterNo() <= 1) {
-            String l3 = buildEntityScopedState(ownerId, book.getId(), 1, "", currentDraft, instruction, "");
-            return new FiveLayerContext(storyCharter, "", "", l3, "", determinePrecisionMode(book, 0));
+            return withEntityMemory(new FiveLayerContext(storyCharter, "", "", "", "", determinePrecisionMode(book, 0)),
+                    ownerId, book.getId(), 1, order, probe, pov, directives);
         }
 
         int currentNo = currentChapter.getChapterNo();
@@ -441,8 +480,8 @@ public class StoryMemoryContextService {
                 .toList();
 
         if (nonEmptyEarlier.isEmpty()) {
-            String l3 = buildEntityScopedState(ownerId, book.getId(), currentNo - 1, "", currentDraft, instruction, "");
-            return new FiveLayerContext(storyCharter, "", "", l3, "", precisionMode);
+            return withEntityMemory(new FiveLayerContext(storyCharter, "", "", "", "", precisionMode),
+                    ownerId, book.getId(), currentNo, order, probe, pov, directives);
         }
 
         // L1 Hot Window: verbatim tail of immediately preceding non-empty chapter (N-1)
@@ -553,19 +592,9 @@ public class StoryMemoryContextService {
         }
         String rollingSummary = AdaptiveMemoryAssembler.assembleLegacy(l2.toString().trim(), recentLines);
 
-        // L3 Entity-Scoped Dynamic State (Protagonists + characters appearing in N-1/draft/instruction + OPEN foreshadowings)
-        String activeState = buildEntityScopedState(
-                ownerId,
-                book.getId(),
-                currentNo - 1,
-                hotTail,
-                currentDraft,
-                instruction,
-                prevInvolvedChars
-        );
-
-        return new FiveLayerContext(storyCharter, hotWindow, rollingSummary, activeState,
-                combineContext(rollingSummary, hotWindow), precisionMode);
+        return withEntityMemory(new FiveLayerContext(storyCharter, hotWindow, rollingSummary, "",
+                        combineContext(rollingSummary, hotWindow), precisionMode),
+                ownerId, book.getId(), currentNo, order, String.join("\n", hotTail, probe, prevInvolvedChars), pov, directives);
     }
 
     private static String hotTail(String content) {
@@ -581,111 +610,19 @@ public class StoryMemoryContextService {
         return hotWindow.isBlank() ? rolling : rolling + "\n\n" + hotWindow;
     }
 
-    private String buildEntityScopedState(
-            UUID ownerId,
-            UUID bookId,
-            int maxChapterNo,
-            String hotTail,
-            String currentDraft,
-            String instruction,
-            String prevInvolvedChars
-    ) {
+    private FiveLayerContext withEntityMemory(FiveLayerContext base, UUID ownerId, UUID bookId, int chapterNo,
+                                              long order, String probe, String pov, List<ForeshadowingDirective> directives) {
         try {
-            List<LoreDtos.CharacterResponse> allChars = loreService.listCharacters(ownerId, bookId, null);
-            List<LoreDtos.ForeshadowingResponse> openClues = loreService.listForeshadowings(ownerId, bookId, "OPEN");
-
-            String contextProbe = (hotTail == null ? "" : hotTail) + "\n"
-                    + (currentDraft == null ? "" : currentDraft) + "\n"
-                    + (instruction == null ? "" : instruction) + "\n"
-                    + (prevInvolvedChars == null ? "" : prevInvolvedChars);
-
-            List<LoreDtos.CharacterResponse> scopedChars = new ArrayList<>();
-            Set<String> activeNames = new LinkedHashSet<>();
-            for (LoreDtos.CharacterResponse c : allChars) {
-                boolean isProtagonist = "PROTAGONIST".equalsIgnoreCase(c.roleType());
-                boolean mentioned = c.name() != null && !c.name().isBlank() && contextProbe.contains(c.name());
-                if (isProtagonist || mentioned) {
-                    scopedChars.add(c);
-                    activeNames.add(c.name());
-                }
-                if (scopedChars.size() >= 10) {
-                    break;
-                }
-            }
-            // Fallback: if book has <= 6 characters total and none matched probe yet, include them all
-            if (scopedChars.isEmpty() && !allChars.isEmpty()) {
-                for (LoreDtos.CharacterResponse c : allChars.subList(0, Math.min(6, allChars.size()))) {
-                    scopedChars.add(c);
-                    activeNames.add(c.name());
-                }
-            }
-
-            var relQuery = new LambdaQueryWrapper<CharacterRelationEntity>()
-                    .eq(CharacterRelationEntity::getBookId, bookId)
-                    .orderByDesc(CharacterRelationEntity::getUpdatedAt);
-            if (maxChapterNo > 0) {
-                relQuery.and(w -> w.isNull(CharacterRelationEntity::getSinceChapterNo)
-                        .or().le(CharacterRelationEntity::getSinceChapterNo, maxChapterNo));
-            }
-            List<CharacterRelationEntity> allRels = relationMapper.selectList(relQuery);
-            List<CharacterRelationEntity> scopedRels = (allRels == null ? List.<CharacterRelationEntity>of() : allRels)
-                    .stream()
-                    .filter(r -> activeNames.isEmpty()
-                            || activeNames.contains(r.getSourceCharacter())
-                            || activeNames.contains(r.getTargetCharacter()))
-                    .limit(8)
-                    .toList();
-
-            List<LoreDtos.ForeshadowingResponse> scopedClues = openClues.stream()
-                    .filter(f -> f.plantedChapterNo() == null || maxChapterNo <= 0 || f.plantedChapterNo() <= maxChapterNo)
-                    .limit(10)
-                    .toList();
-
-            StringBuilder sb = new StringBuilder();
-            if (!scopedChars.isEmpty()) {
-                sb.append("【当前活跃人物状态】\n");
-                for (LoreDtos.CharacterResponse c : scopedChars) {
-                    sb.append("- ").append(c.name());
-                    List<String> attrs = new ArrayList<>();
-                    if (c.realmOrLevel() != null && !c.realmOrLevel().isBlank()) attrs.add("境界:" + c.realmOrLevel());
-                    if (c.currentLocation() != null && !c.currentLocation().isBlank()) attrs.add("位置:" + c.currentLocation());
-                    if (c.inventory() != null && !c.inventory().isBlank()) attrs.add("物品:" + c.inventory());
-                    if (c.statusNotes() != null && !c.statusNotes().isBlank()) attrs.add("状态:" + c.statusNotes());
-                    if (!attrs.isEmpty()) {
-                        sb.append("（").append(String.join("；", attrs)).append("）");
-                    }
-                    sb.append("\n");
-                }
-            }
-            if (!scopedRels.isEmpty()) {
-                sb.append("\n【相关人物关系】\n");
-                for (CharacterRelationEntity r : scopedRels) {
-                    sb.append("- ").append(r.getSourceCharacter()).append(" -[").append(r.getRelationType())
-                            .append("]-> ").append(r.getTargetCharacter());
-                    if (r.getDescription() != null && !r.getDescription().isBlank()) {
-                        sb.append("：").append(r.getDescription());
-                    }
-                    sb.append("\n");
-                }
-            }
-            if (!scopedClues.isEmpty()) {
-                sb.append("\n【待回收伏笔（OPEN）】\n");
-                for (LoreDtos.ForeshadowingResponse f : scopedClues) {
-                    sb.append("- ");
-                    if (f.plantedChapterNo() != null) {
-                        sb.append("[第").append(f.plantedChapterNo()).append("章] ");
-                    }
-                    sb.append(f.title());
-                    if (f.description() != null && !f.description().isBlank()) {
-                        sb.append("：").append(f.description());
-                    }
-                    sb.append("\n");
-                }
-            }
-            return sb.toString().trim();
-        } catch (Exception ex) {
+            EntityScopedMemory.Brief brief = new EntityScopedMemory(
+                    loreService, relationMapper, timelineMapper, snapshotMapper, chapterSectionMapper)
+                    .assemble(ownerId, bookId, chapterNo, order, probe, pov, directives);
+            return new FiveLayerContext(base.storyCharter(), base.hotWindowContext(), base.rollingSummaryContext(),
+                    brief.activeState(), base.previousChaptersCombined(), base.effectivePrecisionMode(),
+                    brief.writerPack(), brief.criticPack(), brief.criticGuard());
+        } catch (RuntimeException ex) {
+            if (ex instanceof BizException || !directives.isEmpty() || !pov.isBlank()) throw ex;
             log.warn("Entity-scoped state assembly skipped for book {}: {}", bookId, ex.getMessage());
-            return "";
+            return base;
         }
     }
 
@@ -790,8 +727,19 @@ public class StoryMemoryContextService {
                     .set(ChapterEntity::getSummaryDirty, false));
         }
 
+        long order = section.getNarrativeOrder();
+        ChapterSectionEntity latest = chapterSectionMapper.selectOne(new LambdaQueryWrapper<ChapterSectionEntity>()
+                .select(ChapterSectionEntity::getNarrativeOrder)
+                .eq(ChapterSectionEntity::getBookId, bookId)
+                .orderByDesc(ChapterSectionEntity::getNarrativeOrder).last("LIMIT 1"));
+        long maxOrder = latest == null || latest.getNarrativeOrder() == null ? order : Math.max(order, latest.getNarrativeOrder());
         RagDtos.ApplyExtractedMemoryResponse appliedMemory = null;
-        if (req.memory() != null && memoryService != null) {
+        if (memoryService != null && memoryService.supportsSectionMemory()) {
+            long totalUnits = "AUTO".equals(configuredPrecisionMode(book)) ? chapterSectionMapper.selectCount(
+                    new LambdaQueryWrapper<ChapterSectionEntity>().eq(ChapterSectionEntity::getBookId, bookId)) : 0;
+            appliedMemory = memoryService.applySectionMemory(book.getOwnerId(), bookId, section, req.memory(),
+                    maxOrder, determinePrecisionMode(book, totalUnits));
+        } else if (req.memory() != null && memoryService != null) {
             RagDtos.ApplyExtractedMemoryRequest memory = req.memory();
             if (!section.getChapterNo().equals(memory.chapterNo())) {
                 memory = new RagDtos.ApplyExtractedMemoryRequest(section.getChapterNo(), memory.characterUpdates(),
@@ -800,13 +748,8 @@ public class StoryMemoryContextService {
             appliedMemory = memoryService.applyExtractedMemory(book.getOwnerId(), bookId, memory);
         }
 
-        long order = section.getNarrativeOrder();
         markStoryRollupsStale(bookId, order, order);
-        ChapterSectionEntity latest = chapterSectionMapper.selectOne(new LambdaQueryWrapper<ChapterSectionEntity>()
-                .select(ChapterSectionEntity::getNarrativeOrder)
-                .eq(ChapterSectionEntity::getBookId, bookId)
-                .orderByDesc(ChapterSectionEntity::getNarrativeOrder).last("LIMIT 1"));
-        if (latest != null && latest.getNarrativeOrder() - order > EAGER_ROLLUP_DISTANCE) {
+        if (maxOrder - order > EAGER_ROLLUP_DISTANCE) {
             return new RagDtos.InternalApplyDistillResponse(true, sectionId, summary.getId(), false, false, appliedMemory);
         }
 

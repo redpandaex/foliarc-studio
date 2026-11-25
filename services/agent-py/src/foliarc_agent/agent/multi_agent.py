@@ -49,6 +49,10 @@ class EditorialBlackboard(BaseModel):
     previous_chapters_context: str = ""
     rolling_summary_context: str = ""
     active_state_brief: str = ""
+    pov_character: str = ""
+    foreshadowing_writer_pack: str = ""
+    foreshadowing_critic_pack: str = ""
+    critic_guard_brief: str = ""
     director_lore_brief: str = ""
     instruction: str = ""
     requested_model_alias: str = "writer-main"
@@ -931,9 +935,18 @@ class EditorialTeamOrchestrator:
         if state.rolling_summary_context.strip():
             user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:4200]}")
         if state.active_state_brief.strip():
-            user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1500]}")
+            user_parts.append(f"【当前活跃人物与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1800]}")
         elif state.director_lore_brief.strip():
             user_parts.append(f"【作品核心设定与伏笔】\n{state.director_lore_brief.strip()}")
+        if state.pov_character.strip():
+            user_parts.append(
+                f"【本章指定叙事视角（POV）】{state.pov_character.strip()}（安排场景节拍时须严格遵守该角色的认知边界，严禁读心术）"
+            )
+        if state.foreshadowing_writer_pack.strip():
+            user_parts.append(
+                "【本章强制伏笔导演包（最高优先级：必须为每条 PLANT/HINT/PAYOFF 分配明确场景节拍；PLANT 须遵守冰山原则自然藏入动作/物件，严禁暴露隐藏底牌）】\n"
+                + state.foreshadowing_writer_pack.strip()[:2200]
+            )
         if state.previous_chapters_context.strip():
             user_parts.append(
                 f"【前文章节承接（L1 热窗口，必须紧密衔接上一章结尾，严禁脱节）】\n{state.previous_chapters_context.strip()[-2800:]}"
@@ -957,6 +970,7 @@ class EditorialTeamOrchestrator:
             "请严格按照总编拟定并经作者批准的【章节大纲】、【前文章节承接】与设定管家提供的【设定核验简报】撰写高质量中文小说正文。",
             "跨章连贯铁律：必须紧接上一章的结尾场景、时间线、人物状态、对话余韵与未解悬念自然展开，禁止另起炉灶、凭空切换无关场景或重复介绍前文已交代的背景。",
             "参考资料冲突优先级：本书已写正文与本书设定（BOOK） > 作者个人资料库（USER） > 平台定向资料（ASSIGNED） > 平台公共资料（GLOBAL）。发生冲突时一律以本书原创设定为准。",
+            "伏笔与视角铁律：严格执行【本章伏笔导演包】中的埋入/照应/启用指令；对标有【严禁提前点破真相】的潜伏伏笔只写表面现象绝不挑破底牌；严格遵守 POV 视角边界，绝不允许当前视角角色凭空知晓【幕后客观事实】。",
             "严禁出现人设 OOC、战力境界矛盾、时间线错乱或“吃书”现象；直接输出小说正文，不要输出任何大纲标题或元说明。",
         ]
         if state.book_title:
@@ -976,7 +990,15 @@ class EditorialTeamOrchestrator:
         if state.rolling_summary_context.strip():
             user_parts.append(f"【前文阶段脉络与近期章摘（L2）】\n{state.rolling_summary_context.strip()[:4200]}")
         if state.active_state_brief.strip():
-            user_parts.append(f"【当前活跃人物状态与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1500]}")
+            user_parts.append(f"【当前活跃人物状态与待回收伏笔（L3）】\n{state.active_state_brief.strip()[:1800]}")
+        if state.pov_character.strip():
+            user_parts.append(
+                f"【本章叙事视角（POV）】{state.pov_character.strip()}（仅可描写该角色亲见/亲闻/已知的信息，严禁越权读心）"
+            )
+        if state.foreshadowing_writer_pack.strip():
+            user_parts.append(
+                f"【本章伏笔导演包（只含允许落笔信息，严禁提前泄底）】\n{state.foreshadowing_writer_pack.strip()[:2400]}"
+            )
         if state.previous_chapters_context.strip():
             user_parts.append(
                 f"【上一章及前文衔接（L1 热窗口，必须紧接其结尾展开，严禁割裂）】\n{state.previous_chapters_context.strip()[-2800:]}"
@@ -1007,6 +1029,8 @@ class EditorialTeamOrchestrator:
             "2. 战力境界、持有物品或地点时间线矛盾（吃书）\n"
             "3. 遗漏大纲核心节拍或文风质量明显不足\n"
             "4. 跨章衔接断层：若提供了【上一章结尾参考】，本章必须自然承接上一章末尾的剧情、人物状态与悬念；若另起炉灶、与上一章关联薄弱或重复前文，必须扣分并打回重写\n"
+            "5. 伏笔导演与防剧透红线：检查本章指定的 PLANT 是否自然埋入、PAYOFF 是否与当年埋设原文零矛盾，以及是否存在把【严禁提前点破真相】的潜伏底牌意外剧透的严重失误\n"
+            "6. 死亡墓碑与视角红线：检查是否出现已亡角色无故复活，或当前 POV 视角角色凭空知晓【幕后客观事实】（读心术/视角越权）\n"
             '请仅输出严格 JSON 对象：{"passed": true/false, "score": 0-100, "issues": ["问题1"], "revision_guidance": "具体修改指令"}'
             "\n评分 >= 78 且无硬伤时 passed 为 true；否则 passed 为 false 并给出可执行修改意见。"
         )
@@ -1016,7 +1040,15 @@ class EditorialTeamOrchestrator:
         if state.story_charter.strip():
             user_sections.append(f"【作品故事宪章】\n{state.story_charter.strip()[:800]}")
         if state.active_state_brief.strip():
-            user_sections.append(f"【当前活跃状态与伏笔】\n{state.active_state_brief.strip()[:1200]}")
+            user_sections.append(f"【当前活跃状态与伏笔】\n{state.active_state_brief.strip()[:1500]}")
+        if state.foreshadowing_critic_pack.strip():
+            user_sections.append(
+                f"【伏笔导演与隐藏底牌核验包（含潜伏真相防提前剧透审查 + 当年原文锚点）】\n{state.foreshadowing_critic_pack.strip()[:2400]}"
+            )
+        if state.critic_guard_brief.strip():
+            user_sections.append(
+                f"【连续性硬红线（已亡角色墓碑 / POV 视角约束）】\n{state.critic_guard_brief.strip()[:1000]}"
+            )
         if state.previous_chapters_context.strip():
             user_sections.append(f"【上一章结尾参考】\n{state.previous_chapters_context.strip()[-1800:]}")
         user_sections.append(f"【设定核验简报】\n{state.lore_brief[:2500]}")

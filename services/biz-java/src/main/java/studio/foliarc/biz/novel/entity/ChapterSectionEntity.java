@@ -26,6 +26,7 @@ public class ChapterSectionEntity {
     private String contentHash;
     private Boolean summaryDirty;
     private Boolean isDefault;
+    private String povCharacter;
 
     @Version
     private Long version;
@@ -62,6 +63,8 @@ public class ChapterSectionEntity {
     public void setIsDefault(Boolean isDefault) { this.isDefault = isDefault; }
     public Long getVersion() { return version; }
     public void setVersion(Long version) { this.version = version; }
+    public String getPovCharacter() { return povCharacter; }
+    public void setPovCharacter(String povCharacter) { this.povCharacter = povCharacter; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
