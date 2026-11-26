@@ -73,6 +73,12 @@ foliarc:
     rpm-limit: ${GATEWAY_RPM_LIMIT:20}
     tpm-limit: ${GATEWAY_TPM_LIMIT:120000}
     bulkhead-max-concurrent: ${GATEWAY_BULKHEAD_MAX_CONCURRENT:20}
+    global-rate-limit:
+      enabled: ${GATEWAY_GLOBAL_RL_ENABLED:true}
+      burst-per-10s: ${GATEWAY_GLOBAL_BURST_10S:60}
+      rpm-limit: ${GATEWAY_GLOBAL_RPM_LIMIT:240}
+  http-log:
+    enabled: ${HTTP_ACCESS_LOG_ENABLED:true}
   billing:
     starter-grant-micros: ${BILLING_STARTER_GRANT_MICROS:50000000}
     default-monthly-budget-micros: ${BILLING_DEFAULT_MONTHLY_BUDGET_MICROS:100000000}

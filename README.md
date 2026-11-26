@@ -6,6 +6,7 @@
 - 万章级跨体裁长篇架构总览（5.8A–5.8D） 👉 [docs/architecture/00-ARCHITECTURE-OVERVIEW.md](./docs/architecture/00-ARCHITECTURE-OVERVIEW.md)
 - VIP 动态权益中台设计 👉 [docs/architecture/05-VIP-ENTITLEMENTS-SYSTEM.md](./docs/architecture/05-VIP-ENTITLEMENTS-SYSTEM.md)
 - 独立运营后台与 Java 多模块拆分方案 👉 [docs/architecture/06-ADMIN-SYSTEM-SEPARATION.md](./docs/architecture/06-ADMIN-SYSTEM-SEPARATION.md)
+- 入口网关、全站限流与 HTTP 可观测性设计 👉 [docs/architecture/07-INGRESS-RATE-LIMIT-AND-OBSERVABILITY.md](./docs/architecture/07-INGRESS-RATE-LIMIT-AND-OBSERVABILITY.md)
 
 ---
 
@@ -34,7 +35,8 @@ foliarc-studio/
 ├── contracts/                # 跨服务共享契约（SSE & Trace 事件协议 Schema）
 ├── evals/                    # 30 条跨题材路由、防剧透 RAG、蝴蝶效应与安全护栏黄金评测集
 ├── infra/
-│   └── docker-compose.yml    # 分层 profiles：core / rag / app / admin / all（共 12 服务）
+│   ├── nginx/nginx.conf      # 统一入口网关（JSON Access Log、IP 兜底限流、SSE 长连接代理）
+│   └── docker-compose.yml    # 分层 profiles：core / rag / app / admin / all（含 gateway 共 13 服务）
 ├── docs/
 │   ├── ROADMAP.md            # 全栈学习清单与 Phase 0–6 实战路线
 │   └── architecture/         # 00–06 核心架构与演进设计文档
@@ -78,6 +80,7 @@ make dev-admin-web   # Next.js Ops Console (:3001)
 
 ## 健康检查端点
 
+- **Nginx Ingress Gateway**: `http://localhost:8088` · `http://localhost:8088/nginx-health`
 - **Author Web**: `http://localhost:3000` · `http://localhost:3000/api/health`
 - **Admin Console**: `http://localhost:3001` · `http://localhost:3001/api/health`
 - **Java Biz & Gateway**: `http://localhost:8080/api/v1/health` · `http://localhost:8080/api/v1/health/agent`

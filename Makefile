@@ -7,7 +7,7 @@ COMPOSE_FILE := infra/docker-compose.yml
 ENV_FILE := .env
 
 .PHONY: help env infra-core-up infra-core-down infra-rag-up infra-rag-down infra-ps \
-        app-up app-down app-logs admin-up admin-down full-up smoke \
+        app-up app-down app-logs gateway-logs admin-up admin-down full-up smoke \
         dev-py dev-java dev-admin-java dev-web dev-admin-web \
         test-py test-java test-web test-admin test-all
 
@@ -24,7 +24,8 @@ help:
 	@echo "  make full-up         Build & start ALL containers including RAG + Admin (profile: all)"
 	@echo "  make app-down        Stop containerized app + core stack"
 	@echo "  make admin-down      Stop containerized admin stack"
-	@echo "  make app-logs        Follow logs for containerized web, biz-java, agent-py, admin"
+	@echo "  make app-logs        Follow logs for gateway, web, biz-java, agent-py, admin"
+	@echo "  make gateway-logs    Follow Nginx gateway JSON access logs"
 	@echo "  make dev-py          Start Python FastAPI Agent Engine (:8000)"
 	@echo "  make dev-java        Start Java 21 Author Biz Gateway (:8080)"
 	@echo "  make dev-admin-java  Start Java 21 Independent Admin API (:8081)"
@@ -70,7 +71,10 @@ admin-down:
 	docker compose -f $(COMPOSE_FILE) --profile admin down
 
 app-logs:
-	docker compose -f $(COMPOSE_FILE) --profile all logs -f agent-py biz-java admin-java web admin
+	docker compose -f $(COMPOSE_FILE) --profile all logs -f gateway agent-py biz-java admin-java web admin
+
+gateway-logs:
+	docker compose -f $(COMPOSE_FILE) --profile all logs -f gateway
 
 dev-py: env
 	uv --directory services/agent-py run uvicorn foliarc_agent.main:app --reload --host 0.0.0.0 --port 8000

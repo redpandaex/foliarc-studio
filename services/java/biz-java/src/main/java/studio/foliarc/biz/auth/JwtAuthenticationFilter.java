@@ -14,6 +14,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import studio.foliarc.biz.common.TraceContext;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -39,6 +40,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + user.role()));
                 var authentication = new UsernamePasswordAuthenticationToken(user, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(authentication);
+                request.setAttribute(TraceContext.USER_ID_ATTRIBUTE, user.userId().toString());
             });
         }
         filterChain.doFilter(request, response);

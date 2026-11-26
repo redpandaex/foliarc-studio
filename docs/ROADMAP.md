@@ -221,7 +221,7 @@ flowchart LR
 - [x] **4.2 统一 AI 网关与流式代理（Gateway & SSE Bridge）**
   - Java 作为统一入口代理 Python 的 SSE 流（开启 JDK 21 虚拟线程，结合 `SseEmitter` / `StreamingResponseBody` 或 WebFlux `WebClient`）。
   - **Redis Streams 流缓冲层** `★`：Python 产出的每个事件先写入 Redis Stream（`XADD`，设 TTL）并推送给网关；网关断线重连时直接从 `Last-Event-ID` 位置 `XREAD` 补发，实现高可用断点续连。
-  - **多维度限流**：Redis + Lua 脚本实现令牌桶/滑动窗口，同时控制 **RPM（每分钟请求数）** 和 **TPM（每分钟 Token 数）** `★`。
+  - **多维度限流**：Redis + Lua 脚本实现令牌桶/滑动窗口，同时控制 **RPM（每分钟请求数）** 和 **TPM（每分钟 Token 数）** `★`；并补充 **全站通用 API 双窗口限流**（10s 突发防死循环 + 60s 持续限流，按 UserID/IP 隔离）与 **Nginx 入口反代网关**（统一 JSON Access Log + SSE 长连接保护 + IP 兜底限流，详见 [`07-INGRESS-RATE-LIMIT-AND-OBSERVABILITY.md`](./architecture/07-INGRESS-RATE-LIMIT-AND-OBSERVABILITY.md)）。
   - **韧性保护**：集成 Resilience4j 实现超时控制、熔断降级、舱壁隔离（Bulkhead，防止慢 LLM 请求拖垮业务线程池）。
 - [x] **4.3 企业级计费、配额与成本管控（Billing & Cost）** `★`
   - **预冻结 + 精准结算模型（两阶段扣费）**：
@@ -252,7 +252,7 @@ flowchart LR
 - [x] **5.3 Agent 与 RAG 自动化评测体系（Eval）**
   - 落地 30 条小说领域黄金评测集（`evals/golden_dataset.json` + `NovelEvalHarness` + `POST /internal/v1/evals/run`）：覆盖跨题材 Skill 路由（10 题）、6 大题材防 AI 味 Rubric（6 题）、多作用域防剧透 RAG Recall@5（4 题）、蝴蝶效应 Fact Diff（4 题）与输入/输出安全护栏（6 题），并纳入 Python 自动化回归测试。
 - [x] **5.4 容器化与工程规范**
-  - 一键 `docker-compose.yml` 分层 profiles（`core` / `rag` / `app` / `admin` / `all`）与 5 服务多阶段非 root `Dockerfile`（`biz-java`、`admin-java`、`agent-py`、`web`、`admin`），配套统一 `Makefile` 任务编排。
+  - 一键 `docker-compose.yml` 分层 profiles（`core` / `rag` / `app` / `admin` / `all`）与 5 服务多阶段非 root `Dockerfile`（`biz-java`、`admin-java`、`agent-py`、`web`、`admin`）+ **Nginx 统一入口网关容器（`gateway :8088`）** + `foliarc-common` 统一 HTTP Access Log，配套统一 `Makefile` 任务编排（详见 [`07-INGRESS-RATE-LIMIT-AND-OBSERVABILITY.md`](./architecture/07-INGRESS-RATE-LIMIT-AND-OBSERVABILITY.md)）。
 
 ---
 

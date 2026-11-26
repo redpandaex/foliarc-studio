@@ -16,6 +16,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import studio.foliarc.biz.auth.JwtTokenService;
 import studio.foliarc.biz.auth.mapper.UserMapper;
+import studio.foliarc.biz.common.TraceContext;
 
 public class AdminJwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -41,6 +42,7 @@ public class AdminJwtAuthenticationFilter extends OncePerRequestFilter {
                         var authentication = UsernamePasswordAuthenticationToken.authenticated(
                                 user, null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
                         SecurityContextHolder.getContext().setAuthentication(authentication);
+                        request.setAttribute(TraceContext.USER_ID_ATTRIBUTE, user.userId().toString());
                     });
         }
         chain.doFilter(request, response);

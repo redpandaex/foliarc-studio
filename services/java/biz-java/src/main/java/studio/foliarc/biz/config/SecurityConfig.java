@@ -28,6 +28,8 @@ import jakarta.servlet.DispatcherType;
 import studio.foliarc.biz.auth.InternalTokenFilter;
 import studio.foliarc.biz.auth.JwtAuthenticationFilter;
 import studio.foliarc.biz.common.TraceContext;
+import studio.foliarc.biz.gateway.GlobalApiRateLimitFilter;
+import studio.foliarc.biz.gateway.GlobalApiRateLimiter;
 
 @Configuration
 public class SecurityConfig {
@@ -39,10 +41,13 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            GlobalApiRateLimiter globalApiRateLimiter,
+            @Value("${foliarc.gateway.global-rate-limit.enabled:true}") boolean globalRateLimitEnabled,
             @Value("${foliarc.agent.internal-token}") String internalToken
     ) throws Exception {
         var rippleTokenFilter = new InternalTokenFilter(
                 PathPatternRequestMatcher.pathPattern("/internal/v1/ripple/**"), internalToken);
+        var globalRateLimitFilter = new GlobalApiRateLimitFilter(globalApiRateLimiter, globalRateLimitEnabled);
         return http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
@@ -71,6 +76,7 @@ public class SecurityConfig {
                 )
                 .addFilterBefore(rippleTokenFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(globalRateLimitFilter, JwtAuthenticationFilter.class)
                 .build();
     }
 
@@ -80,7 +86,14 @@ public class SecurityConfig {
         config.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",")).map(String::trim).toList());
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
-        config.setExposedHeaders(List.of("Last-Event-ID", TraceContext.HEADER_NAME, HttpHeaders.CONTENT_DISPOSITION));
+        config.setExposedHeaders(List.of(
+                "Last-Event-ID",
+                TraceContext.HEADER_NAME,
+                HttpHeaders.CONTENT_DISPOSITION,
+                HttpHeaders.RETRY_AFTER,
+                "X-RateLimit-Limit",
+                "X-RateLimit-Remaining"
+        ));
         config.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

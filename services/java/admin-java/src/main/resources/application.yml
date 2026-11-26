@@ -60,6 +60,8 @@ foliarc:
     bucket-docs: ${MINIO_BUCKET_DOCS:foliarc-docs}
   outbox:
     enabled: false
+  http-log:
+    enabled: ${HTTP_ACCESS_LOG_ENABLED:true}
   billing:
     starter-grant-micros: ${BILLING_STARTER_GRANT_MICROS:50000000}
     default-monthly-budget-micros: ${BILLING_DEFAULT_MONTHLY_BUDGET_MICROS:100000000}
