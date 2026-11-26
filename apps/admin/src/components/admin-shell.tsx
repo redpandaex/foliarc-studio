@@ -1,5 +1,8 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
+
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
@@ -94,10 +97,10 @@ export function AdminShell({
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar">
         <div className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-blue-400" />
+            <ShieldCheck className="h-5 w-5 text-primary" />
             <span className="font-semibold tracking-tight">FoliarcAdmin</span>
           </div>
           <p className="mt-1 font-mono text-[10px] text-muted-foreground">
@@ -113,9 +116,10 @@ export function AdminShell({
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
                   active
-                    ? "bg-blue-600/20 text-blue-300 ring-1 ring-blue-500/40"
+                    ? "bg-accent text-accent-foreground"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
@@ -133,14 +137,16 @@ export function AdminShell({
           <div className="mb-3 truncate font-mono text-[10px] text-muted-foreground">
             {adminUser?.email ?? ADMIN_API_BASE}
           </div>
-          <button
+          <Button
             type="button"
             onClick={handleLogout}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            variant="outline"
+            size="sm"
+            className="w-full"
           >
             <LogOut className="h-3.5 w-3.5" />
             退出运营后台
-          </button>
+          </Button>
         </div>
       </aside>
 
@@ -150,7 +156,10 @@ export function AdminShell({
             <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
             {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           </div>
-          {actions && <div className="flex items-center gap-2">{actions}</div>}
+          <div className="flex flex-wrap items-center gap-2">
+            {actions}
+            <ThemeToggle />
+          </div>
         </header>
         <main className="flex-1 space-y-6 p-6">{children}</main>
       </div>

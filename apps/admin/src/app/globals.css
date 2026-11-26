@@ -1,40 +1,22 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "./palette.css";
+@import "./ui-contract.css";
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-border: var(--border);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-destructive: var(--destructive);
-}
-
-:root {
-  --background: #0b0f17;
-  --foreground: #e6edf3;
-  --card: #121824;
-  --card-foreground: #e6edf3;
-  --muted: #1b2434;
-  --muted-foreground: #8b9bb4;
-  --border: #243047;
-  --primary: #3b82f6;
-  --primary-foreground: #ffffff;
-  --destructive: #ef4444;
-}
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="ink"], [data-theme="ink"] *, [data-theme="ops-dark"], [data-theme="ops-dark"] *));
 
 @layer base {
   * {
     @apply border-border;
   }
-  body {
-    @apply bg-background text-foreground antialiased;
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  html {
+    @apply bg-background font-sans text-foreground;
   }
-  code, pre, .font-mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  body {
+    @apply min-h-full bg-background text-foreground antialiased;
+  }
+  :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 }

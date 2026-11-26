@@ -4,7 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { ApiClientError } from "@/lib/api";
 
 export default function LoginPage() {
@@ -41,7 +45,10 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-6 py-12">
-      <div className="rounded-xl border border-border bg-card p-6 shadow-xs">
+      <div className="mb-3 flex justify-end">
+        <ThemeToggle />
+      </div>
+      <Card surface="elevated" className="p-6">
         <div className="mb-6 space-y-1">
           <p className="font-mono text-xs text-muted-foreground">
             FoliarcStudio · 卷弧工坊
@@ -54,10 +61,10 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label htmlFor="email" className="text-sm font-medium">
+            <label htmlFor="email" className="text-xs font-medium text-muted-foreground">
               邮箱
             </label>
-            <input
+            <Input
               id="email"
               type="email"
               required
@@ -65,15 +72,15 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="author@foliarc.studio"
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              className="h-9 text-sm"
             />
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="password" className="text-sm font-medium">
+            <label htmlFor="password" className="text-xs font-medium text-muted-foreground">
               密码
             </label>
-            <input
+            <Input
               id="password"
               type="password"
               required
@@ -81,17 +88,17 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="请输入至少 8 位密码"
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              className="h-9 text-sm"
             />
           </div>
 
           {error && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <Alert status="danger" announce="assertive">
               {error}
-            </div>
+            </Alert>
           )}
 
-          <Button type="submit" className="w-full" disabled={submitting}>
+          <Button type="submit" size="lg" className="w-full" loading={submitting}>
             {submitting ? "登录中..." : "登录进入书架"}
           </Button>
         </form>
@@ -104,7 +111,7 @@ export default function LoginPage() {
             还没有账号？去注册
           </Link>
         </div>
-      </div>
+      </Card>
     </main>
   );
 }

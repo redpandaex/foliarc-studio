@@ -31,19 +31,19 @@ const ROLE_LABELS: Record<string, string> = {
 const LIFECYCLE_LABELS: Record<string, { label: string; className: string }> = {
   CORE_PINNED: {
     label: "常驻核心",
-    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+    className: "border border-status-success-border bg-status-success-bg text-status-success",
   },
   ACTIVE: {
     label: "活跃",
-    className: "bg-muted text-muted-foreground",
+    className: "border border-border bg-muted text-muted-foreground",
   },
   DORMANT: {
     label: "休眠",
-    className: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+    className: "border border-status-warning-border bg-status-warning-bg text-status-warning",
   },
   DEAD: {
     label: "已退场",
-    className: "bg-rose-500/15 text-rose-700 dark:text-rose-400",
+    className: "border border-status-danger-border bg-status-danger-bg text-status-danger",
   },
 };
 
@@ -57,14 +57,14 @@ const WORLD_CATEGORY_LABELS: Record<string, string> = {
 };
 
 const FORESHADOW_STATUS_META: Record<string, { label: string; className: string }> = {
-  PLANNED: { label: "待埋设", className: "bg-muted text-muted-foreground" },
-  PLANTED: { label: "已埋设", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
-  OPEN: { label: "已埋设", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
-  HINTED: { label: "已照应", className: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400" },
-  TRIGGERED: { label: "待引爆", className: "bg-amber-500/20 text-amber-700 dark:text-amber-400" },
-  RESOLVED: { label: "已回收", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
-  DORMANT_CLUE: { label: "沉睡", className: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
-  ABANDONED: { label: "已弃用", className: "bg-muted/70 text-muted-foreground line-through" },
+  PLANNED: { label: "待埋设", className: "border border-border bg-muted text-muted-foreground" },
+  PLANTED: { label: "已埋设", className: "border border-status-info-border bg-status-info-bg text-status-info" },
+  OPEN: { label: "已埋设", className: "border border-status-info-border bg-status-info-bg text-status-info" },
+  HINTED: { label: "已照应", className: "border border-status-ai-border bg-status-ai-bg text-status-ai" },
+  TRIGGERED: { label: "待引爆", className: "border border-status-warning-border bg-status-warning-bg text-status-warning" },
+  RESOLVED: { label: "已回收", className: "border border-status-success-border bg-status-success-bg text-status-success" },
+  DORMANT_CLUE: { label: "沉睡", className: "border border-status-warning-border bg-status-warning-bg text-status-warning opacity-80" },
+  ABANDONED: { label: "已弃用", className: "border border-border bg-muted/70 text-muted-foreground line-through" },
 };
 
 const IMPORTANCE_LABELS: Record<string, string> = {
@@ -431,8 +431,8 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
       </div>
 
       {proposals.length > 0 && (
-        <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 space-y-1.5">
-          <div className="flex items-center justify-between text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+        <div className="space-y-1.5 border-b border-status-warning-border bg-status-warning-bg px-3 py-2">
+          <div className="flex items-center justify-between text-[11px] font-semibold text-status-warning">
             <span>待确认的重要设定变更（{proposals.length}）</span>
             <span className="text-[10px] font-normal">需你确认后才会生效</span>
           </div>
@@ -442,36 +442,35 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
               return (
                 <li
                   key={proposal.id}
-                  className="rounded border border-amber-500/30 bg-background/90 p-2 space-y-1"
+                  className="space-y-1 rounded border border-status-warning-border bg-card p-2"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-foreground truncate">
+                    <span className="truncate font-medium text-foreground">
                       {proposal.targetName || "设定变更"}
                     </span>
-                    <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+                    <span className="shrink-0 rounded border border-status-warning-border bg-status-warning-bg px-1.5 py-0.5 text-[10px] text-status-warning">
                       {PROPOSAL_TYPE_LABELS[proposal.proposalType] ?? proposal.proposalType}
                     </span>
                   </div>
-                  <p className="text-[11px] text-muted-foreground leading-snug">
+                  <p className="text-[11px] leading-snug text-muted-foreground">
                     {proposal.summary}
                   </p>
                   <div className="flex justify-end gap-1.5 pt-0.5">
-                    <button
-                      type="button"
+                    <Button
+                      size="xs"
+                      variant="outline"
                       disabled={busy}
                       onClick={() => void handleDecideProposal(proposal, "REJECT")}
-                      className="rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted disabled:opacity-50"
                     >
                       驳回
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      size="xs"
                       disabled={busy}
                       onClick={() => void handleDecideProposal(proposal, "ACCEPT")}
-                      className="rounded bg-amber-600 px-2 py-0.5 text-[10px] text-white hover:bg-amber-700 disabled:opacity-50"
                     >
                       {busy ? "处理中..." : "采纳生效"}
-                    </button>
+                    </Button>
                   </div>
                 </li>
               );
@@ -545,10 +544,10 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                 <span
                   className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
                     charter?.charterSource === "AUTHOR_DEFINED"
-                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                      ? "border border-status-success-border bg-status-success-bg text-status-success"
                       : charter?.charterSource === "AUTO_INFERRED"
-                        ? "bg-sky-500/15 text-sky-700 dark:text-sky-400"
-                        : "bg-muted text-muted-foreground"
+                        ? "border border-status-info-border bg-status-info-bg text-status-info"
+                        : "border border-border bg-muted text-muted-foreground"
                   }`}
                 >
                   {charter?.charterSource === "AUTHOR_DEFINED"
@@ -569,7 +568,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                 className="w-full resize-none rounded border border-input bg-background p-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring"
               />
               {charterNotice && (
-                <div className="rounded bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                <div className="rounded border border-status-success-border bg-status-success-bg px-2 py-1 text-[11px] text-status-success">
                   {charterNotice}
                 </div>
               )}
@@ -595,7 +594,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
               </p>
 
               {anchorQuotaError && (
-                <div className="flex items-center justify-between gap-2 rounded bg-amber-500/15 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+                <div className="flex items-center justify-between gap-2 rounded border border-status-vip-border bg-status-vip-bg px-2 py-1.5 text-[11px] text-status-vip">
                   <span>{anchorQuotaError}</span>
                   <Link href="/vip" className="shrink-0 font-semibold underline">
                     升级权益 →
@@ -818,7 +817,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                           <button
                             type="button"
                             onClick={() => void handleWakeCharacter(ch)}
-                            className="rounded bg-amber-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-amber-700"
+                            className="rounded border border-status-warning-border bg-status-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-status-warning hover:opacity-85"
                           >
                             唤醒
                           </button>
@@ -1122,8 +1121,8 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                     )}
 
                     {f.hiddenTruth && (
-                      <div className="mt-1.5 rounded border border-dashed border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px]">
-                        <div className="flex items-center justify-between text-[10px] text-amber-700 dark:text-amber-400">
+                      <div className="mt-1.5 rounded border border-dashed border-status-warning-border bg-status-warning-bg px-2 py-1 text-[11px]">
+                        <div className="flex items-center justify-between text-[10px] text-status-warning">
                           <span className="font-medium">幕后底牌</span>
                           <span>
                             {REVEAL_POLICY_LABELS[f.revealPolicy ?? "HIDE_TRUTH"] ?? f.revealPolicy}
@@ -1153,7 +1152,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                         <button
                           type="button"
                           onClick={() => void handleTransitionForeshadowing(f, "PLANTED")}
-                          className="rounded bg-amber-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-amber-700"
+                          className="rounded border border-status-warning-border bg-status-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-status-warning hover:opacity-85"
                         >
                           唤醒线索
                         </button>
@@ -1162,7 +1161,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                         <button
                           type="button"
                           onClick={() => void handleTransitionForeshadowing(f, "RESOLVED")}
-                          className="rounded bg-emerald-600/90 px-1.5 py-0.5 text-[10px] text-white hover:bg-emerald-600"
+                          className="rounded border border-status-success-border bg-status-success-bg px-1.5 py-0.5 text-[10px] font-medium text-status-success hover:opacity-85"
                         >
                           标为已回收
                         </button>

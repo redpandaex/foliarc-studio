@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { Alert } from "@/components/ui/alert";
+import { Badge, type UiStatus } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ApiClientError,
@@ -19,17 +21,17 @@ import {
 
 type RangeMode = "BIDIRECTIONAL" | "FORWARD" | "BACKWARD" | "CUSTOM_RANGE" | "FULL_BOOK";
 
-const JOB_STATUS_LABELS: Record<string, { label: string; className: string }> = {
-  ANALYZING: { label: "正在扫描影响范围...", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
-  NO_CHANGE: { label: "无实质设定冲突", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
-  READY_TO_PATCH: { label: "已定位受影响章节", className: "bg-amber-500/15 text-amber-700 dark:text-amber-400" },
-  BLAST_RADIUS_EXCEEDED: { label: "冲突较多 · 建议分批修补", className: "bg-rose-500/15 text-rose-700 dark:text-rose-400" },
-  PATCHING: { label: "正在生成局部修订建议...", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
-  READY_FOR_REVIEW: { label: "局部修改建议待审阅", className: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400" },
-  PARTIALLY_APPLIED: { label: "已部分采纳 · 可继续修补", className: "bg-amber-500/15 text-amber-700 dark:text-amber-400" },
-  APPLIED: { label: "全部修改已同步完成", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
-  FAILED: { label: "扫描失败", className: "bg-destructive/15 text-destructive" },
-  CANCELLED: { label: "已取消", className: "bg-muted text-muted-foreground" },
+const JOB_STATUS_LABELS: Record<string, { label: string; status: UiStatus }> = {
+  ANALYZING: { label: "正在扫描影响范围...", status: "info" },
+  NO_CHANGE: { label: "无实质设定冲突", status: "success" },
+  READY_TO_PATCH: { label: "已定位受影响章节", status: "warning" },
+  BLAST_RADIUS_EXCEEDED: { label: "冲突较多 · 建议分批修补", status: "danger" },
+  PATCHING: { label: "正在生成局部修订建议...", status: "info" },
+  READY_FOR_REVIEW: { label: "局部修改建议待审阅", status: "ai" },
+  PARTIALLY_APPLIED: { label: "已部分采纳 · 可继续修补", status: "warning" },
+  APPLIED: { label: "全部修改已同步完成", status: "success" },
+  FAILED: { label: "扫描失败", status: "danger" },
+  CANCELLED: { label: "已取消", status: "neutral" },
 };
 
 const PATCH_STATUS_LABELS: Record<string, string> = {
@@ -289,9 +291,9 @@ export function RippleEditDrawer({
                 key={imp.id}
                 className={`rounded-lg border p-2 text-xs ${
                   isApplied
-                    ? "border-emerald-500/30 bg-emerald-500/5 opacity-80"
+                    ? "border-status-success-border bg-status-success-bg opacity-85"
                     : isStrong
-                      ? "border-amber-500/40 bg-amber-500/5"
+                      ? "border-status-warning-border bg-status-warning-bg"
                       : "border-border bg-background"
                 }`}
               >
@@ -302,7 +304,7 @@ export function RippleEditDrawer({
                       disabled={isApplied}
                       checked={checked}
                       onChange={() => toggleImpact(imp.id)}
-                      className="mt-0.5"
+                      className="mt-0.5 accent-primary"
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -322,17 +324,12 @@ export function RippleEditDrawer({
                       )}
                     </div>
                   </label>
-                  <span
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
-                      isApplied
-                        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                        : isStrong
-                          ? "bg-rose-500/15 text-rose-700 dark:text-rose-400"
-                          : "bg-muted text-muted-foreground"
-                    }`}
+                  <Badge
+                    status={isApplied ? "success" : isStrong ? "danger" : "neutral"}
+                    className="shrink-0 text-[10px]"
                   >
                     {isApplied ? "已同步" : isStrong ? "强冲突" : "轻度提及"}
-                  </span>
+                  </Badge>
                 </div>
               </li>
             );
@@ -344,11 +341,11 @@ export function RippleEditDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/40"
+      className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-[1px]"
       onClick={onClose}
     >
       <div
-        className="flex h-full w-[600px] max-w-full flex-col border-l border-border bg-card shadow-2xl"
+        className="flex h-full w-[600px] max-w-full flex-col border-l border-border bg-surface-elevated shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -372,17 +369,21 @@ export function RippleEditDrawer({
 
         <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
           {quotaError && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-800 dark:text-amber-300">
-              <span>{quotaError}</span>
-              <Link href="/vip" className="shrink-0 font-semibold underline">
-                升级权益 →
-              </Link>
-            </div>
+            <Alert
+              status="vip"
+              action={
+                <Link href="/vip" className="shrink-0 font-semibold underline">
+                  升级权益 →
+                </Link>
+              }
+            >
+              {quotaError}
+            </Alert>
           )}
           {error && (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+            <Alert status="danger" announce="assertive">
               {error}
-            </div>
+            </Alert>
           )}
 
           {/* Stage 1: Range Selector */}
@@ -547,13 +548,12 @@ export function RippleEditDrawer({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="font-semibold">2. 双向影响雷达报告</span>
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                      JOB_STATUS_LABELS[detail.job.status]?.className ?? "bg-muted text-muted-foreground"
-                    }`}
+                  <Badge
+                    status={JOB_STATUS_LABELS[detail.job.status]?.status ?? "neutral"}
+                    className="text-[10px]"
                   >
                     {JOB_STATUS_LABELS[detail.job.status]?.label ?? detail.job.status}
-                  </span>
+                  </Badge>
                 </div>
                 {(detail.job.status === "ANALYZING" || detail.job.status === "PATCHING") && (
                   <Button size="xs" variant="outline" disabled={submitting} onClick={() => void handleCancelJob()}>
@@ -589,9 +589,9 @@ export function RippleEditDrawer({
               )}
 
               {detail.job.status === "BLAST_RADIUS_EXCEEDED" && (
-                <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-700 dark:text-rose-400">
+                <Alert status="danger" className="py-2 text-[11px]">
                   本次改动波及强冲突章节超出单批上限（每次最多勾选 {detail.job.maxPatchBatchLimit} 章），请分批勾选生成修改建议并逐步采纳。
-                </div>
+                </Alert>
               )}
 
               {renderImpactList("前文倒推排查（统一铺垫/消除旧矛盾）", detail.backwardImpacts)}
@@ -639,12 +639,12 @@ export function RippleEditDrawer({
               </div>
 
               {applySummary && (
-                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+                <Alert status="success" className="py-2 text-[11px]">
                   已成功写回 {applySummary.appliedCount} 章（均已自动保存改前快照并触发记忆刷新）
                   {applySummary.conflictCount > 0 && `，${applySummary.conflictCount} 章版本冲突已跳过`}
                   {applySummary.manualReviewCount > 0 && `，${applySummary.manualReviewCount} 章需手动校对`}
                   。
-                </div>
+                </Alert>
               )}
 
               <ul className="space-y-2.5">
@@ -687,10 +687,10 @@ export function RippleEditDrawer({
                                   改动说明：{h.reason}
                                 </div>
                               )}
-                              <div className="bg-rose-500/10 px-2.5 py-1.5 text-rose-800 dark:text-rose-300 line-through whitespace-pre-wrap">
+                              <div className="bg-status-danger-bg px-2.5 py-1.5 text-status-danger line-through whitespace-pre-wrap">
                                 - {h.originalParagraph}
                               </div>
-                              <div className="bg-emerald-500/10 px-2.5 py-1.5 text-emerald-800 dark:text-emerald-300 whitespace-pre-wrap">
+                              <div className="bg-status-success-bg px-2.5 py-1.5 text-status-success whitespace-pre-wrap">
                                 + {h.patchedParagraph}
                               </div>
                             </div>

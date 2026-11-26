@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { Alert } from "@/components/ui/alert";
+import { Badge, type UiStatus } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { useToast } from "@/components/ui/toast";
 import {
   ApiClientError,
   libraryApi,
@@ -21,10 +30,10 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   CHAPTER: "历史文稿",
 };
 
-const ACCESS_LABELS: Record<string, { text: string; cls: string }> = {
-  USER: { text: "个人资料", cls: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
-  ASSIGNED: { text: "专属资料", cls: "bg-violet-500/15 text-violet-700 dark:text-violet-400" },
-  GLOBAL: { text: "公共资料", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
+const ACCESS_META: Record<string, { text: string; status: UiStatus }> = {
+  USER: { text: "个人资料", status: "info" },
+  ASSIGNED: { text: "专属资料", status: "ai" },
+  GLOBAL: { text: "公共资料", status: "success" },
 };
 
 function formatFileSize(bytes: number): string {
@@ -33,19 +42,17 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function statusDisplay(status: LibraryDocumentItem["status"]): { text: string; cls: string } {
-  if (status === "READY") {
-    return { text: "已就绪", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
-  }
-  if (status === "FAILED") {
-    return { text: "解析失败", cls: "bg-rose-500/15 text-rose-600" };
-  }
-  return { text: "处理中...", cls: "bg-amber-500/15 text-amber-700 dark:text-amber-400" };
+function statusDisplay(status: LibraryDocumentItem["status"]): { text: string; tone: UiStatus } {
+  if (status === "READY") return { text: "已就绪", tone: "success" };
+  if (status === "FAILED") return { text: "解析失败", tone: "danger" };
+  return { text: "处理中...", tone: "warning" };
 }
 
 export default function PersonalLibraryPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
+  const toast = useToast();
   const [docs, setDocs] = useState<LibraryDocumentItem[]>([]);
   const [vipStatus, setVipStatus] = useState<MyVipStatus | null>(null);
   const [quotaHint, setQuotaHint] = useState<{
@@ -54,7 +61,6 @@ export default function PersonalLibraryPage() {
     recommendedLimit?: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -100,9 +106,7 @@ export default function PersonalLibraryPage() {
         }
       })
       .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -126,7 +130,6 @@ export default function PersonalLibraryPage() {
     setUploading(true);
     setError(null);
     setQuotaHint(null);
-    setNotice(null);
     try {
       await libraryApi.upload({
         file: selectedFile,
@@ -137,7 +140,7 @@ export default function PersonalLibraryPage() {
       setSelectedFile(null);
       setTitle("");
       setGenreTags("");
-      setNotice("资料已上传，系统正在后台整理，就绪后所有作品均可按需启用。");
+      toast.success("资料已上传，系统正在后台整理，就绪后所有作品均可按需启用。");
       await loadDocs();
     } catch (err) {
       if (err instanceof ApiClientError && err.code === "VIP_QUOTA_EXCEEDED") {
@@ -147,7 +150,7 @@ export default function PersonalLibraryPage() {
           recommendedLimit: err.details.recommendedLimit,
         });
       } else {
-        setError(err instanceof ApiClientError ? err.message : "上传资料失败");
+        toast.error(err instanceof ApiClientError ? err.message : "上传资料失败");
       }
     } finally {
       setUploading(false);
@@ -155,17 +158,18 @@ export default function PersonalLibraryPage() {
   }
 
   async function handleDelete(doc: LibraryDocumentItem) {
-    if (!window.confirm(`确认从个人资料库移除「${doc.title}」？`)) {
-      return;
-    }
-    setError(null);
-    setNotice(null);
-    try {
-      await libraryApi.remove(doc.id);
-      setDocs((prev) => prev.filter((item) => item.id !== doc.id));
-      setNotice("已删除个人资料。");
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "删除失败");
+    const result = await confirm({
+      title: `移除个人资料「${doc.title}」？`,
+      description: `确认从个人资料库移除「${doc.title}」？移除后对应向量索引也将同步清理。`,
+      confirmLabel: "确认移除",
+      variant: "destructive",
+      onConfirm: async () => {
+        await libraryApi.remove(doc.id);
+        setDocs((prev) => prev.filter((item) => item.id !== doc.id));
+      },
+    });
+    if (result === "succeeded") {
+      toast.success("已删除个人资料。");
     }
   }
 
@@ -191,9 +195,12 @@ export default function PersonalLibraryPage() {
             <span className="text-muted-foreground">/</span>
             <h1 className="text-sm font-semibold">我的资料库</h1>
           </div>
-          <Link href="/books" className={buttonVariants({ variant: "outline", size: "sm" })}>
-            作品列表
-          </Link>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Link href="/books" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              作品列表
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -206,80 +213,74 @@ export default function PersonalLibraryPage() {
           </p>
         </div>
 
-        {notice && (
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-700 dark:text-emerald-400">
-            {notice}
-          </div>
-        )}
         {quotaHint && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">
-            <span>{quotaHint.message}</span>
-            <Link
-              href="/vip"
-              className="rounded-md bg-amber-600 px-3 py-1 font-medium text-white hover:bg-amber-700"
-            >
-              升级{quotaHint.recommendedPlanName ? `至 ${quotaHint.recommendedPlanName}` : "会员"} →
-            </Link>
-          </div>
+          <Alert
+            status="vip"
+            action={
+              <Link href="/vip" className={buttonVariants({ size: "xs" })}>
+                升级{quotaHint.recommendedPlanName ? `至 ${quotaHint.recommendedPlanName}` : "会员"} →
+              </Link>
+            }
+          >
+            {quotaHint.message}
+          </Alert>
         )}
         {error && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-xs text-destructive">
+          <Alert status="danger" announce="assertive">
             {error}
-          </div>
+          </Alert>
         )}
 
-        {/* Upload Card */}
-        <form
-          onSubmit={handleUpload}
-          className="grid gap-3 rounded-xl border border-border bg-card p-5 shadow-xs sm:grid-cols-2"
-        >
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className="text-xs font-medium">选择文件 *</label>
-            <input
-              type="file"
-              accept=".pdf,.docx,.md,.txt"
-              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-              className="w-full text-xs file:mr-3 file:rounded-md file:border file:border-border file:bg-muted file:px-3 file:py-1.5 file:text-xs"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium">资料用途</label>
-            <select
-              value={docType}
-              onChange={(e) => setDocType(e.target.value as KnowledgeDocType)}
-              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
-            >
-              <option value="WORLDBOOK">世界观设定</option>
-              <option value="STYLE_REF">文风参考</option>
-              <option value="OUTLINE">大纲笔记</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium">资料标题（可选）</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="默认使用文件名"
-              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className="text-xs font-medium">适用题材标签（可选，逗号分隔）</label>
-            <div className="flex gap-2">
-              <input
-                value={genreTags}
-                onChange={(e) => setGenreTags(e.target.value)}
-                placeholder="例如：东方玄幻, 武侠（留空表示所有作品通用）"
-                className="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+        <Card className="p-5">
+          <form onSubmit={handleUpload} className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5 sm:col-span-2">
+              <label className="text-xs font-medium text-muted-foreground">选择文件 *</label>
+              <Input
+                type="file"
+                accept=".pdf,.docx,.md,.txt"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
               />
-              <Button type="submit" size="sm" disabled={!selectedFile || uploading}>
-                {uploading ? "上传中..." : "上传到个人资料库"}
-              </Button>
             </div>
-          </div>
-        </form>
+            <Select
+              id="library-doc-type"
+              label="资料用途"
+              value={docType}
+              options={[
+                { value: "WORLDBOOK", label: "世界观设定" },
+                { value: "STYLE_REF", label: "文风参考" },
+                { value: "OUTLINE", label: "大纲笔记" },
+              ]}
+              onValueChange={(v) => {
+                if (v) setDocType(v as KnowledgeDocType);
+              }}
+            />
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">资料标题（可选）</label>
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="默认使用文件名"
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <label className="text-xs font-medium text-muted-foreground">
+                适用题材标签（可选，逗号分隔）
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  value={genreTags}
+                  onChange={(e) => setGenreTags(e.target.value)}
+                  placeholder="例如：东方玄幻, 武侠（留空表示所有作品通用）"
+                  className="min-w-0 flex-1"
+                />
+                <Button type="submit" size="sm" disabled={!selectedFile} loading={uploading}>
+                  {uploading ? "上传中..." : "上传到个人资料库"}
+                </Button>
+              </div>
+            </div>
+          </form>
+        </Card>
 
-        {/* Personal Docs List */}
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">我上传的资料 ({personalDocs.length})</h3>
@@ -291,7 +292,7 @@ export default function PersonalLibraryPage() {
                     {formatFileSize(vipStatus.libraryUsage.usedBytes)} /{" "}
                     {formatFileSize(vipStatus.libraryUsage.maxTotalBytes)}
                   </span>
-                  <Link href="/vip" className="text-amber-700 underline hover:text-amber-600 dark:text-amber-400">
+                  <Link href="/vip" className="text-status-vip underline hover:opacity-80">
                     扩容
                   </Link>
                 </>
@@ -303,47 +304,41 @@ export default function PersonalLibraryPage() {
           {loading ? (
             <p className="py-6 text-center text-xs text-muted-foreground">加载中...</p>
           ) : personalDocs.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground">
-              还没有上传个人资料。上传后即可在你名下的多部作品间复用。
-            </div>
+            <EmptyState
+              title="还没有上传个人资料"
+              description="上传后即可在你名下的多部作品间复用，并支持按本书随时开关启用。"
+            />
           ) : (
             <ul className="space-y-2">
               {personalDocs.map((doc) => {
                 const st = statusDisplay(doc.status);
                 return (
-                  <li
-                    key={doc.id}
-                    className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 text-xs"
-                  >
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-semibold">{doc.title}</span>
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${st.cls}`}>
-                          {st.text}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>{DOC_TYPE_LABELS[doc.docType] ?? doc.docType}</span>
-                        <span>·</span>
-                        <span>{formatFileSize(doc.fileSize)}</span>
-                        {doc.genreTags && (
-                          <>
-                            <span>·</span>
-                            <span>标签：{doc.genreTags}</span>
-                          </>
+                  <li key={doc.id}>
+                    <Card className="flex items-center justify-between gap-4 p-4 text-xs">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate font-semibold">{doc.title}</span>
+                          <Badge status={st.tone}>{st.text}</Badge>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{DOC_TYPE_LABELS[doc.docType] ?? doc.docType}</span>
+                          <span>·</span>
+                          <span>{formatFileSize(doc.fileSize)}</span>
+                          {doc.genreTags && (
+                            <>
+                              <span>·</span>
+                              <span>标签：{doc.genreTags}</span>
+                            </>
+                          )}
+                        </div>
+                        {doc.errorMessage && (
+                          <p className="text-[11px] text-status-danger">{doc.errorMessage}</p>
                         )}
                       </div>
-                      {doc.errorMessage && (
-                        <p className="text-[11px] text-rose-600">{doc.errorMessage}</p>
-                      )}
-                    </div>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => void handleDelete(doc)}
-                    >
-                      删除
-                    </Button>
+                      <Button size="xs" variant="destructive" onClick={() => void handleDelete(doc)}>
+                        删除
+                      </Button>
+                    </Card>
                   </li>
                 );
               })}
@@ -351,7 +346,6 @@ export default function PersonalLibraryPage() {
           )}
         </section>
 
-        {/* Platform / Assigned Read-Only Reference Packs */}
         {platformDocs.length > 0 && (
           <section className="space-y-3">
             <h3 className="text-sm font-semibold">
@@ -359,35 +353,30 @@ export default function PersonalLibraryPage() {
             </h3>
             <ul className="space-y-2">
               {platformDocs.map((doc) => {
-                const acc = ACCESS_LABELS[doc.accessType] ?? ACCESS_LABELS.GLOBAL;
+                const acc = ACCESS_META[doc.accessType] ?? ACCESS_META.GLOBAL;
                 const st = statusDisplay(doc.status);
                 return (
-                  <li
-                    key={doc.id}
-                    className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card/70 p-4 text-xs"
-                  >
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-semibold">{doc.title}</span>
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${acc.cls}`}>
-                          {acc.text}
-                        </span>
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${st.cls}`}>
-                          {st.text}
-                        </span>
+                  <li key={doc.id}>
+                    <Card className="flex items-center justify-between gap-4 p-4 text-xs">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate font-semibold">{doc.title}</span>
+                          <Badge status={acc.status}>{acc.text}</Badge>
+                          <Badge status={st.tone}>{st.text}</Badge>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{DOC_TYPE_LABELS[doc.docType] ?? doc.docType}</span>
+                          {doc.genreTags && (
+                            <>
+                              <span>·</span>
+                              <span>适用题材：{doc.genreTags}</span>
+                            </>
+                          )}
+                          <span>·</span>
+                          <span>只读（可在单部作品中开关启用）</span>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>{DOC_TYPE_LABELS[doc.docType] ?? doc.docType}</span>
-                        {doc.genreTags && (
-                          <>
-                            <span>·</span>
-                            <span>适用题材：{doc.genreTags}</span>
-                          </>
-                        )}
-                        <span>·</span>
-                        <span>只读（可在单部作品中开关启用）</span>
-                      </div>
-                    </div>
+                    </Card>
                   </li>
                 );
               })}

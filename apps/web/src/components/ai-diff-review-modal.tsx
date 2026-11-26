@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 export interface DiffHunk {
@@ -256,66 +257,50 @@ export function AiDiffReviewModal({
                     key={h.id}
                     className={`overflow-hidden rounded-lg border text-xs ${
                       accepted
-                        ? "border-emerald-500/40 bg-card"
-                        : "border-amber-500/40 bg-card/70"
+                        ? "border-status-success-border bg-card"
+                        : "border-status-warning-border bg-card"
                     }`}
                   >
-                    <div className="flex items-center justify-between border-b border-border/70 bg-muted/40 px-3 py-1.5 text-[11px]">
+                    <div className="flex items-center justify-between border-b border-border bg-muted px-3 py-1.5 text-[11px]">
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-[10px] text-muted-foreground">
                           Hunk #{h.id + 1} · {h.kind}
                         </span>
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                            accepted
-                              ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                              : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                          }`}
-                        >
+                        <Badge status={accepted ? "success" : "warning"}>
                           {accepted ? "将采纳 AI 修改" : "将保留原文"}
-                        </span>
+                        </Badge>
                       </div>
                       <div className="flex gap-1.5">
-                        <button
-                          type="button"
+                        <Button
+                          size="xs"
+                          variant={accepted ? "default" : "outline"}
                           onClick={() =>
                             setDecisions((prev) => ({ ...prev, [h.id]: true }))
                           }
-                          className={`rounded px-2 py-0.5 text-[11px] font-medium ${
-                            accepted
-                              ? "bg-emerald-600 text-white"
-                              : "border border-border hover:bg-muted"
-                          }`}
                         >
                           Accept 采纳
-                        </button>
-                        <button
-                          type="button"
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant={!accepted ? "secondary" : "outline"}
                           onClick={() =>
                             setDecisions((prev) => ({ ...prev, [h.id]: false }))
                           }
-                          className={`rounded px-2 py-0.5 text-[11px] font-medium ${
-                            !accepted
-                              ? "bg-amber-600 text-white"
-                              : "border border-border hover:bg-muted"
-                          }`}
                         >
                           Reject 保留原文
-                        </button>
+                        </Button>
                       </div>
                     </div>
 
                     {h.oldLines.length > 0 && (
                       <div
-                        className={`space-y-1.5 border-b border-border/50 bg-rose-500/10 px-3.5 py-2.5 leading-6 text-rose-900 dark:text-rose-200 ${
-                          accepted ? "opacity-75" : "ring-1 ring-inset ring-amber-500/40"
+                        className={`space-y-1.5 border-b border-border bg-status-danger-bg px-3.5 py-2.5 leading-6 text-status-danger ${
+                          accepted ? "opacity-80" : "ring-1 ring-inset ring-status-warning-border"
                         }`}
                       >
                         {h.oldLines.map((line, i) => (
                           <div key={i} className="flex gap-2">
-                            <span className="select-none font-mono font-bold text-rose-600">
-                              -
-                            </span>
+                            <span className="select-none font-mono font-bold">-</span>
                             <p className="whitespace-pre-wrap">{line}</p>
                           </div>
                         ))}
@@ -324,17 +309,15 @@ export function AiDiffReviewModal({
 
                     {h.newLines.length > 0 && (
                       <div
-                        className={`space-y-1.5 bg-emerald-500/10 px-3.5 py-2.5 leading-6 text-emerald-950 dark:text-emerald-200 ${
+                        className={`space-y-1.5 bg-status-success-bg px-3.5 py-2.5 leading-6 text-status-success ${
                           accepted
-                            ? "ring-1 ring-inset ring-emerald-500/40"
-                            : "opacity-45 line-through"
+                            ? "ring-1 ring-inset ring-status-success-border"
+                            : "opacity-50 line-through"
                         }`}
                       >
                         {h.newLines.map((line, i) => (
                           <div key={i} className="flex gap-2">
-                            <span className="select-none font-mono font-bold text-emerald-600">
-                              +
-                            </span>
+                            <span className="select-none font-mono font-bold">+</span>
                             <p className="whitespace-pre-wrap">{line}</p>
                           </div>
                         ))}

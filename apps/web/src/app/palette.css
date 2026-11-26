@@ -1,0 +1,68 @@
+/* FoliarcStudio Author Studio Palettes — 卷弧文学风 (WCAG 2.2 AA verified OKLCH) */
+:root,
+[data-theme="paper"] {
+  color-scheme: light;
+  --background: oklch(0.963 0.016 85);
+  --card: oklch(0.974 0.012 85);
+  --surface-elevated: oklch(0.984 0.009 85);
+  --popover: oklch(0.978 0.01 85);
+  --muted: oklch(0.915 0.02 85);
+  --sidebar: oklch(0.937 0.019 82);
+  --foreground: oklch(0.265 0.018 62);
+  --muted-foreground: oklch(0.442 0.021 62);
+  --primary: oklch(0.42 0.067 190);
+  --primary-foreground: oklch(0.968 0.012 85);
+  --accent: oklch(0.919 0.029 43);
+  --accent-foreground: oklch(0.404 0.081 42);
+  --border: oklch(0.58 0.018 80);
+  --input: oklch(0.539 0.027 78);
+  --ring: oklch(0.46 0.077 190);
+  --status-text-l: 0.425;
+  --status-bg-l: 0.939;
+  --status-border-l: 0.56;
+}
+
+[data-theme="sepia"] {
+  color-scheme: light;
+  --background: oklch(0.911 0.034 80);
+  --card: oklch(0.927 0.033 82);
+  --surface-elevated: oklch(0.947 0.026 82);
+  --popover: oklch(0.938 0.029 82);
+  --muted: oklch(0.855 0.04 75);
+  --sidebar: oklch(0.884 0.038 78);
+  --foreground: oklch(0.287 0.027 59);
+  --muted-foreground: oklch(0.424 0.027 54);
+  --primary: oklch(0.409 0.059 187);
+  --primary-foreground: oklch(0.954 0.021 85);
+  --accent: oklch(0.866 0.05 53);
+  --accent-foreground: oklch(0.383 0.073 38);
+  --border: oklch(0.54 0.028 75);
+  --input: oklch(0.509 0.031 73);
+  --ring: oklch(0.432 0.062 184);
+  --status-text-l: 0.397;
+  --status-bg-l: 0.901;
+  --status-border-l: 0.53;
+}
+
+[data-theme="ink"],
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.218 0.023 252);
+  --card: oklch(0.247 0.025 251);
+  --surface-elevated: oklch(0.302 0.028 249);
+  --popover: oklch(0.28 0.027 251);
+  --muted: oklch(0.29 0.026 251);
+  --sidebar: oklch(0.196 0.024 254);
+  --foreground: oklch(0.863 0.019 85);
+  --muted-foreground: oklch(0.727 0.022 239);
+  --primary: oklch(0.766 0.078 185);
+  --primary-foreground: oklch(0.223 0.03 193);
+  --accent: oklch(0.317 0.037 39);
+  --accent-foreground: oklch(0.83 0.061 52);
+  --border: oklch(0.582 0.027 249);
+  --input: oklch(0.602 0.029 245);
+  --ring: oklch(0.761 0.083 185);
+  --status-text-l: 0.786;
+  --status-bg-l: 0.28;
+  --status-border-l: 0.598;
+}

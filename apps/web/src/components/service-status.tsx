@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 
 interface ProbeResult {
   status: "idle" | "checking" | "ok" | "error";
@@ -95,8 +97,8 @@ export function ServiceStatus() {
   ];
 
   return (
-    <section className="rounded-xl border border-border bg-card p-6 shadow-xs">
-      <div className="flex items-center justify-between gap-4 pb-4 border-b border-border">
+    <Card className="p-6">
+      <div className="flex items-center justify-between gap-4 border-b border-border pb-4">
         <div>
           <h2 className="text-base font-semibold">三端连通性探测</h2>
           <p className="text-sm text-muted-foreground">
@@ -121,15 +123,25 @@ export function ServiceStatus() {
               </div>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <span
-                className={
+              <Badge
+                status={
                   item.state.status === "ok"
-                    ? "inline-block h-2 w-2 rounded-full bg-emerald-500"
+                    ? "success"
                     : item.state.status === "checking"
-                      ? "inline-block h-2 w-2 rounded-full bg-amber-400"
-                      : "inline-block h-2 w-2 rounded-full bg-rose-500"
+                      ? "warning"
+                      : item.state.status === "error"
+                        ? "danger"
+                        : "neutral"
                 }
-              />
+              >
+                {item.state.status === "ok"
+                  ? "正常"
+                  : item.state.status === "checking"
+                    ? "检测中"
+                    : item.state.status === "error"
+                      ? "异常"
+                      : "待测"}
+              </Badge>
               <span className="font-mono text-muted-foreground">
                 {item.state.detail || item.state.status}
               </span>
@@ -137,6 +149,6 @@ export function ServiceStatus() {
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }

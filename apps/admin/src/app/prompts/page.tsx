@@ -1,5 +1,16 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { DataTable } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast";
+
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AdminShell } from "@/components/admin-shell";
 import {
@@ -17,7 +28,7 @@ export default function AdminPromptsAndAuditPage() {
   const [stage, setStage] = useState("DRAFT");
   const [description, setDescription] = useState("");
   const [templateBody, setTemplateBody] = useState("");
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,7 +39,9 @@ export default function AdminPromptsAndAuditPage() {
       setPrompts(p);
       setAudits(a);
     } catch (err) {
-      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载模板与审计失败");
+      setError(
+        err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载模板与审计失败",
+      );
     }
   }, []);
 
@@ -43,7 +56,9 @@ export default function AdminPromptsAndAuditPage() {
       })
       .catch((err: unknown) => {
         if (!active) return;
-        setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载模板与审计失败");
+        setError(
+          err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载模板与审计失败",
+        );
       });
     return () => {
       active = false;
@@ -54,7 +69,6 @@ export default function AdminPromptsAndAuditPage() {
     e.preventDefault();
     if (!name.trim() || !templateBody.trim()) return;
     setBusy(true);
-    setNotice(null);
     setError(null);
     try {
       const created = await adminPromptsApi.publish({
@@ -63,7 +77,9 @@ export default function AdminPromptsAndAuditPage() {
         description: description.trim(),
         templateBody,
       });
-      setNotice(`已发布 Prompt 模板 ${created.name} v${created.version}（草稿态，可点击一键激活）。`);
+      toast.success(
+        `已发布 Prompt 模板 ${created.name} v${created.version}（草稿态，可点击一键激活）。`,
+      );
       setDescription("");
       setTemplateBody("");
       await loadAll();
@@ -76,11 +92,10 @@ export default function AdminPromptsAndAuditPage() {
 
   async function handleActivate(row: PromptTemplateRow) {
     setBusy(true);
-    setNotice(null);
     setError(null);
     try {
       await adminPromptsApi.activate(row.id);
-      setNotice(`已将 ${row.name} v${row.version} 切换为 ACTIVE，旧版本已归档。`);
+      toast.success(`已将 ${row.name} v${row.version} 切换为 ACTIVE，旧版本已归档。`);
       await loadAll();
     } catch (err) {
       setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "激活版本失败");
@@ -94,164 +109,158 @@ export default function AdminPromptsAndAuditPage() {
       title="Prompt 版本管理 & 后台操作审计"
       subtitle="管理多 Agent 核心 Prompt 模板版本发布、一键灰度激活/回滚，以及全部管理员写操作审计流水"
       actions={
-        <button
-          type="button"
-          onClick={() => void loadAll()}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted"
-        >
+        <Button type="button" onClick={() => void loadAll()} variant="outline" size="sm">
           刷新
-        </button>
+        </Button>
       }
     >
-      {notice && (
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-300">
-          {notice}
-        </div>
-      )}
       {error && (
-        <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-xs text-rose-300">
+        <Alert status="danger" announce="assertive">
           {error}
-        </div>
+        </Alert>
       )}
 
       <section className="grid gap-6 lg:grid-cols-12">
-        <form
-          onSubmit={handlePublish}
-          className="space-y-3 rounded-xl border border-border bg-card p-4 lg:col-span-5"
-        >
-          <h2 className="text-sm font-semibold">发布新版本 Prompt 模板</h2>
-          <div className="grid grid-cols-2 gap-2">
+        <Card className="p-4 lg:col-span-5">
+          <form onSubmit={handlePublish} className="space-y-3">
+            <h2 className="text-sm font-semibold">发布新版本 Prompt 模板</h2>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label htmlFor="name" className="text-xs text-muted-foreground">
+                  模板标识 (name)
+                </label>
+                <Input
+                  id="name"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="font-mono"
+                />
+              </div>
+              <div className="space-y-1">
+                <Select
+                  id="stage"
+                  label="发布状态 (stage)"
+                  value={stage}
+                  onValueChange={(value) => value !== null && setStage(value)}
+                  options={[
+                    { value: "DRAFT", label: "DRAFT（存为草稿）" },
+                    { value: "ACTIVE", label: "ACTIVE（发布并立即激活）" },
+                  ]}
+                />
+              </div>
+            </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">模板标识 (name)</label>
-              <input
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs"
+              <label htmlFor="description" className="text-xs text-muted-foreground">
+                版本说明
+              </label>
+              <Input
+                id="description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="例如：加强中式民俗恐怖反套路约束"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">发布状态 (stage)</label>
-              <select
-                value={stage}
-                onChange={(e) => setStage(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
-              >
-                <option value="DRAFT">DRAFT（存为草稿）</option>
-                <option value="ACTIVE">ACTIVE（发布并立即激活）</option>
-              </select>
+              <label htmlFor="templateBody" className="text-xs text-muted-foreground">
+                模板正文
+              </label>
+              <Textarea
+                id="templateBody"
+                required
+                rows={6}
+                value={templateBody}
+                onChange={(e) => setTemplateBody(e.target.value)}
+                placeholder="输入 System Prompt 模板正文..."
+                className="font-mono"
+              />
             </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">版本说明</label>
-            <input
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="例如：加强中式民俗恐怖反套路约束"
-              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">模板正文</label>
-            <textarea
-              required
-              rows={6}
-              value={templateBody}
-              onChange={(e) => setTemplateBody(e.target.value)}
-              placeholder="输入 System Prompt 模板正文..."
-              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-full rounded-md bg-blue-600 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
-          >
-            发布新版本
-          </button>
-        </form>
+            <Button type="submit" loading={busy} variant="default" size="sm" className="w-full">
+              发布新版本
+            </Button>
+          </form>
+        </Card>
 
-        <div className="rounded-xl border border-border bg-card p-4 lg:col-span-7">
+        <Card className="p-4 lg:col-span-7">
           <h2 className="mb-3 text-sm font-semibold">模板版本清单 ({prompts.length})</h2>
           {prompts.length === 0 ? (
-            <p className="py-8 text-center text-xs text-muted-foreground">暂无 Prompt 模板版本</p>
+            <EmptyState title="暂无 Prompt 模板版本" />
           ) : (
             <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
               {prompts.map((p) => (
-                <div
-                  key={p.id}
-                  className="rounded-lg border border-border/80 bg-background/40 p-3 text-xs"
-                >
+                <Card key={p.id} className="p-3 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-mono font-semibold">
-                      {p.name} <span className="text-blue-400">v{p.version}</span> · {p.stage}
+                      {p.name} <span className="text-primary">v{p.version}</span> · {p.stage}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span
-                        className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                          p.status === "ACTIVE"
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : "bg-muted text-muted-foreground"
-                        }`}
-                      >
+                      <Badge status={p.status === "ACTIVE" ? "success" : "neutral"}>
                         {p.status}
-                      </span>
+                      </Badge>
                       {p.status !== "ACTIVE" && (
-                        <button
+                        <Button
                           type="button"
                           disabled={busy}
                           onClick={() => void handleActivate(p)}
-                          className="rounded border border-blue-500/40 px-2 py-0.5 text-[11px] text-blue-300 hover:bg-blue-500/10"
+                          variant="outline"
+                          size="sm"
                         >
                           激活此版本
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
                   {p.description && <p className="mt-1 text-muted-foreground">{p.description}</p>}
-                  <pre className="mt-2 max-h-24 overflow-x-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-[10px] text-muted-foreground">
+                  <pre className="mt-2 max-h-24 overflow-x-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono text-[10px] text-muted-foreground">
                     {p.templateBody}
                   </pre>
-                </div>
+                </Card>
               ))}
             </div>
           )}
-        </div>
+        </Card>
       </section>
 
-      <section className="rounded-xl border border-border bg-card p-4">
+      <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">管理员操作审计日志 ({audits.length})</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="border-b border-border text-[11px] text-muted-foreground">
-              <tr>
-                <th className="py-2">动作</th>
-                <th className="py-2">操作人</th>
-                <th className="py-2">目标</th>
-                <th className="py-2">来源 IP</th>
-                <th className="py-2">时间</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {audits.map((a) => (
-                <tr key={a.id}>
-                  <td className="py-2 font-mono text-[11px] text-blue-300">{a.action}</td>
-                  <td className="py-2">{a.operatorName}</td>
-                  <td className="py-2 font-mono text-[11px] text-muted-foreground">
-                    {a.targetType}:{a.targetId}
-                  </td>
-                  <td className="py-2 font-mono text-[11px] text-muted-foreground">
-                    {a.clientIp || "-"}
-                  </td>
-                  <td className="py-2 font-mono text-[10px] text-muted-foreground">
-                    {a.createdAt ? new Date(a.createdAt).toLocaleString("zh-CN") : "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+        <DataTable
+          caption="管理员操作审计日志"
+          rows={audits}
+          rowKey={(a) => a.id}
+          empty={<EmptyState title="暂无审计日志" />}
+          columns={[
+            {
+              id: "action",
+              header: "动作",
+              className: "font-mono text-[11px] text-primary",
+              cell: (a) => <Badge status="info">{a.action}</Badge>,
+            },
+            { id: "operator", header: "操作人", cell: (a) => a.operatorName },
+            {
+              id: "target",
+              header: "目标",
+              className: "font-mono text-[11px] text-muted-foreground",
+              cell: (a) => (
+                <>
+                  {a.targetType}:{a.targetId}
+                </>
+              ),
+            },
+            {
+              id: "ip",
+              header: "来源 IP",
+              className: "font-mono text-[11px] text-muted-foreground",
+              cell: (a) => a.clientIp || "-",
+            },
+            {
+              id: "created",
+              header: "时间",
+              className: "font-mono text-[10px] text-muted-foreground",
+              cell: (a) => (a.createdAt ? new Date(a.createdAt).toLocaleString("zh-CN") : "-"),
+            },
+          ]}
+        />
+      </Card>
     </AdminShell>
   );
 }

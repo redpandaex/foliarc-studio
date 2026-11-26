@@ -124,7 +124,7 @@ export function BookStructureTree({
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/50">
+    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-sidebar">
       <div className="space-y-2 border-b border-border p-3">
         <form onSubmit={onCreateChapter} className="flex gap-1.5">
           <input
@@ -293,7 +293,7 @@ export function BookStructureTree({
                                     <span
                                       title="AI 创作进行中"
                                       className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full animate-pulse ${
-                                        isChapterActive ? "bg-primary-foreground" : "bg-emerald-500"
+                                        isChapterActive ? "bg-primary-foreground" : "bg-status-success"
                                       }`}
                                     />
                                   )}

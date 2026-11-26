@@ -1,5 +1,14 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
+import { Badge, type UiStatus } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { DataTable } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+
+import { KpiCard } from "@/components/ui/kpi-card";
+
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin-shell";
@@ -39,11 +48,7 @@ export default function AdminOverviewPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      adminOverviewApi.overview(),
-      adminOverviewApi.listUsers(),
-      adminAuditApi.list(15),
-    ])
+    Promise.all([adminOverviewApi.overview(), adminOverviewApi.listUsers(), adminAuditApi.list(15)])
       .then(([s, u, a]) => {
         if (!active) return;
         setStats(s);
@@ -63,23 +68,23 @@ export default function AdminOverviewPage() {
     };
   }, []);
 
-  const kpis = stats
+  const kpis: { label: string; value: number; status: UiStatus }[] = stats
     ? [
-        { label: "注册用户", value: stats.totalUsers, tone: "text-foreground" },
-        { label: "作品总数", value: stats.totalBooks, tone: "text-foreground" },
-        { label: "Agent 运行总数", value: stats.totalRuns, tone: "text-blue-400" },
+        { label: "注册用户", value: stats.totalUsers, status: "neutral" },
+        { label: "作品总数", value: stats.totalBooks, status: "neutral" },
+        { label: "Agent 运行总数", value: stats.totalRuns, status: "info" },
         {
           label: "失败 Outbox 事件",
           value: stats.failedOutboxEvents,
-          tone: stats.failedOutboxEvents > 0 ? "text-rose-400" : "text-emerald-400",
+          status: stats.failedOutboxEvents > 0 ? "danger" : "success",
         },
-        { label: "排队/处理中文档", value: stats.pendingDocuments, tone: "text-amber-300" },
-        { label: "蝴蝶效应任务", value: stats.totalRippleJobs, tone: "text-sky-400" },
-        { label: "待审记忆提案", value: stats.pendingProposals, tone: "text-violet-300" },
+        { label: "排队/处理中文档", value: stats.pendingDocuments, status: "warning" },
+        { label: "蝴蝶效应任务", value: stats.totalRippleJobs, status: "info" },
+        { label: "待审记忆提案", value: stats.pendingProposals, status: "ai" },
         {
           label: "安全护栏拦截",
           value: stats.guardrailBlocksCount,
-          tone: stats.guardrailBlocksCount > 0 ? "text-amber-400" : "text-emerald-400",
+          status: stats.guardrailBlocksCount > 0 ? "warning" : "success",
         },
       ]
     : [];
@@ -89,19 +94,15 @@ export default function AdminOverviewPage() {
       title="运营总览大盘"
       subtitle="全局用户、作品、异步任务健康度与安全护栏实时快照"
       actions={
-        <button
-          type="button"
-          onClick={() => void loadAll()}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted"
-        >
+        <Button type="button" onClick={() => void loadAll()} variant="outline" size="sm">
           刷新大盘
-        </button>
+        </Button>
       }
     >
       {error && (
-        <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-300">
+        <Alert status="danger" announce="assertive">
           {error}
-        </div>
+        </Alert>
       )}
 
       {loading ? (
@@ -110,61 +111,73 @@ export default function AdminOverviewPage() {
         <>
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {kpis.map((item) => (
-              <div key={item.label} className="rounded-xl border border-border bg-card p-4">
-                <div className="text-xs text-muted-foreground">{item.label}</div>
-                <div className={`mt-2 font-mono text-2xl font-bold ${item.tone}`}>
-                  {item.value.toLocaleString()}
-                </div>
-              </div>
+              <KpiCard
+                key={item.label}
+                label={item.label}
+                value={item.value.toLocaleString()}
+                status={item.status}
+              />
             ))}
           </section>
 
           <section className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-xl border border-border bg-card p-4">
+            <Card className="p-4">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">最近注册用户 ({users.length})</h2>
-                <Link href="/billing" className="text-xs text-blue-400 hover:underline">
+                <Link href="/billing" className="text-xs text-primary hover:underline">
                   VIP 授信管理 →
                 </Link>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-border text-[11px] text-muted-foreground">
-                    <tr>
-                      <th className="py-2">用户</th>
-                      <th className="py-2">角色</th>
-                      <th className="py-2">VIP</th>
-                      <th className="py-2 text-right">余额</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {users.slice(0, 12).map((u) => (
-                      <tr key={u.id}>
-                        <td className="py-2">
-                          <div className="font-medium">{u.username}</div>
-                          <div className="font-mono text-[10px] text-muted-foreground">{u.email}</div>
-                        </td>
-                        <td className="py-2 font-mono text-[11px]">{u.role}</td>
-                        <td className="py-2 font-mono text-[11px] text-amber-300">{u.planCode}</td>
-                        <td className="py-2 text-right font-mono">
-                          {Number(u.balanceCredits ?? 0).toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+              <DataTable
+                caption="最近注册用户"
+                rows={users.slice(0, 12)}
+                rowKey={(u) => u.id}
+                empty={<EmptyState title="暂无注册用户" />}
+                columns={[
+                  {
+                    id: "user",
+                    header: "用户",
+                    cell: (u) => (
+                      <>
+                        <div className="font-medium">{u.username}</div>
+                        <div className="font-mono text-[10px] text-muted-foreground">{u.email}</div>
+                      </>
+                    ),
+                  },
+                  {
+                    id: "role",
+                    header: "角色",
+                    className: "font-mono text-[11px]",
+                    cell: (u) => (
+                      <Badge status={u.role === "ADMIN" ? "info" : "neutral"}>{u.role}</Badge>
+                    ),
+                  },
+                  {
+                    id: "plan",
+                    header: "VIP",
+                    className: "font-mono text-[11px] text-status-warning",
+                    cell: (u) => <Badge status="vip">{u.planCode}</Badge>,
+                  },
+                  {
+                    id: "balance",
+                    header: "余额",
+                    align: "end",
+                    className: "font-mono",
+                    cell: (u) => Number(u.balanceCredits ?? 0).toFixed(2),
+                  },
+                ]}
+              />
+            </Card>
 
-            <div className="rounded-xl border border-border bg-card p-4">
+            <Card className="p-4">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">最近后台审计流水</h2>
-                <Link href="/prompts" className="text-xs text-blue-400 hover:underline">
+                <Link href="/prompts" className="text-xs text-primary hover:underline">
                   查看全部审计 →
                 </Link>
               </div>
               {audits.length === 0 ? (
-                <p className="py-6 text-center text-xs text-muted-foreground">暂无管理操作审计记录</p>
+                <EmptyState title="暂无管理操作审计记录" />
               ) : (
                 <ul className="space-y-2 text-xs">
                   {audits.map((log) => (
@@ -173,9 +186,7 @@ export default function AdminOverviewPage() {
                       className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background/50 px-3 py-2"
                     >
                       <div className="min-w-0">
-                        <span className="rounded bg-blue-500/20 px-1.5 py-0.5 font-mono text-[10px] text-blue-300">
-                          {log.action}
-                        </span>
+                        <Badge status="info">{log.action}</Badge>
                         <span className="ml-2 font-medium">{log.operatorName}</span>
                         <span className="ml-2 font-mono text-[10px] text-muted-foreground">
                           {log.targetType}:{log.targetId.slice(0, 14)}
@@ -188,7 +199,7 @@ export default function AdminOverviewPage() {
                   ))}
                 </ul>
               )}
-            </div>
+            </Card>
           </section>
         </>
       )}

@@ -104,13 +104,13 @@ const STAGE_ORDER = ["router", "director", "lorekeeper", "writer", "critic"];
 
 const STATE_BADGE: Record<StreamConnectionState, { label: string; dot: string }> = {
   idle: { label: "就绪", dot: "bg-muted-foreground/40" },
-  connecting: { label: "正在连接...", dot: "bg-amber-400 animate-pulse" },
-  streaming: { label: "正在创作...", dot: "bg-emerald-500 animate-pulse" },
-  reconnecting: { label: "网络波动，自动续接中...", dot: "bg-amber-500 animate-pulse" },
-  paused: { label: "等待确认", dot: "bg-sky-500" },
-  completed: { label: "创作完成", dot: "bg-emerald-500" },
+  connecting: { label: "正在连接...", dot: "bg-status-warning animate-pulse" },
+  streaming: { label: "正在创作...", dot: "bg-status-ai animate-pulse" },
+  reconnecting: { label: "网络波动，自动续接中...", dot: "bg-status-warning animate-pulse" },
+  paused: { label: "等待确认", dot: "bg-status-info" },
+  completed: { label: "创作完成", dot: "bg-status-success" },
   cancelled: { label: "已取消", dot: "bg-muted-foreground" },
-  error: { label: "生成中断", dot: "bg-rose-500" },
+  error: { label: "生成中断", dot: "bg-status-danger" },
 };
 
 const AGENT_HINT: Record<string, string> = {
@@ -1063,7 +1063,7 @@ export function AiCopilotPanel({
             <span className="font-medium">{badge.label}</span>
           </div>
           {chapterNo != null && chapterNo > 1 && (
-            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-400">
+            <span className="rounded-full border border-status-success-border bg-status-success-bg px-2 py-0.5 text-[10px] font-medium text-status-success">
               自动衔接第 {chapterNo - 1} 章
             </span>
           )}
@@ -1071,9 +1071,9 @@ export function AiCopilotPanel({
 
         {/* Inline Selection Task Banner */}
         {selectionTask && (
-          <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-2.5">
+          <div className="space-y-1.5 rounded-lg border border-status-ai-border bg-status-ai-bg p-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-primary">
+              <span className="font-semibold text-status-ai">
                 {selectionTask.mode === "EXPAND"
                   ? `划词扩写模式（已选 ${selectionTask.text.length} 字）`
                   : `划词改写模式（已选 ${selectionTask.text.length} 字）`}
@@ -1115,8 +1115,8 @@ export function AiCopilotPanel({
 
         {/* HITL Outline Confirmation Card vs Normal Pause vs Instruction Input */}
         {connState === "paused" && outlineApproval ? (
-          <div className="space-y-2 rounded-lg border border-sky-500/50 bg-sky-500/5 p-2.5">
-            <div className="font-semibold text-sky-700 dark:text-sky-400">
+          <div className="space-y-2 rounded-lg border border-status-info-border bg-status-info-bg p-2.5">
+            <div className="font-semibold text-status-info">
               确认本章大纲
             </div>
             <p className="text-[11px] text-muted-foreground">
@@ -1126,13 +1126,13 @@ export function AiCopilotPanel({
               rows={6}
               value={editedOutline}
               onChange={(e) => setEditedOutline(e.target.value)}
-              className="w-full rounded-md border border-border bg-background p-2 text-[11px] leading-relaxed outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-md border border-input bg-card p-2 text-[11px] leading-relaxed outline-none focus-visible:outline-2 focus-visible:outline-ring"
             />
             <input
               value={approvalFeedback}
               onChange={(e) => setApprovalFeedback(e.target.value)}
               placeholder="如不满意，可写下调整方向后点击「重新构思」..."
-              className="w-full rounded-md border border-border bg-background px-2 py-1 text-[11px] outline-none"
+              className="w-full rounded-md border border-input bg-card px-2 py-1 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-ring"
             />
             <div className="flex gap-1.5">
               <Button
@@ -1168,7 +1168,7 @@ export function AiCopilotPanel({
               value={revisedInstruction}
               onChange={(e) => setRevisedInstruction(e.target.value)}
               placeholder="可选：补充或微调接下来的剧情走向..."
-              className="w-full resize-none rounded-md border border-sky-500/50 bg-background px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full resize-none rounded-md border border-status-info-border bg-card px-2.5 py-1.5 text-xs outline-none focus-visible:outline-2 focus-visible:outline-ring"
             />
             <div className="flex gap-1.5">
               <Button
@@ -1326,7 +1326,7 @@ export function AiCopilotPanel({
                     isCurrent
                       ? "bg-primary text-primary-foreground"
                       : isDone
-                        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                        ? "border border-status-success-border bg-status-success-bg text-status-success"
                         : "bg-muted/50 text-muted-foreground"
                   }`}
                 >
@@ -1356,8 +1356,8 @@ export function AiCopilotPanel({
           <div
             className={`rounded-lg border px-2.5 py-2 text-[11px] ${
               criticInfo.passed
-                ? "border-emerald-500/30 bg-emerald-500/5"
-                : "border-amber-500/40 bg-amber-500/10"
+                ? "border-status-success-border bg-status-success-bg text-status-success"
+                : "border-status-warning-border bg-status-warning-bg text-status-warning"
             }`}
           >
             <div className="font-medium">
@@ -1366,7 +1366,7 @@ export function AiCopilotPanel({
                 : "检测到衔接或设定问题，已自动调整重写"}
             </div>
             {criticInfo.issues.length > 0 && (
-              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[10px] text-muted-foreground">
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[10px] text-foreground/85">
                 {criticInfo.issues.map((iss, idx) => (
                   <li key={idx}>{iss}</li>
                 ))}
@@ -1398,9 +1398,9 @@ export function AiCopilotPanel({
 
         {generatedText ? (
           diffReviewOpen && !isRunning ? (
-            <div className="space-y-2 rounded-lg border border-emerald-500/40 bg-background p-2.5">
+            <div className="space-y-2 rounded-lg border border-status-success-border bg-background p-2.5">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                <span className="font-semibold text-status-success">
                   逐段挑选采纳
                 </span>
                 <button
@@ -1419,8 +1419,8 @@ export function AiCopilotPanel({
                       key={idx}
                       className={`rounded border p-2 text-[11px] leading-relaxed ${
                         accepted
-                          ? "border-emerald-500/40 bg-emerald-500/10"
-                          : "border-border bg-muted/30 opacity-50 line-through"
+                          ? "border-status-success-border bg-status-success-bg"
+                          : "border-border bg-muted/40 opacity-55 line-through"
                       }`}
                     >
                       <div className="mb-1 flex items-center justify-between text-[10px]">

@@ -1,17 +1,16 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/components/auth-provider";
+import { UiProviders } from "@/components/ui/providers";
+import { themeConfig } from "@/lib/theme-config";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const themeInit = `(() => {
+  try {
+    const saved = localStorage.getItem(${JSON.stringify(themeConfig.key)});
+    const allowed = ${JSON.stringify(Object.keys(themeConfig.labels))};
+    if (saved && allowed.includes(saved)) document.documentElement.dataset.theme = saved;
+  } catch {}
+})();`;
 
 export const metadata: Metadata = {
   title: "FoliarcStudio | 卷弧工坊",
@@ -23,10 +22,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="zh-CN"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      data-theme={themeConfig.fallback}
+      suppressHydrationWarning
+      className="h-full antialiased"
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">
-        <AuthProvider>{children}</AuthProvider>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInit }} />
+      </head>
+      <body className="flex min-h-full flex-col bg-background text-foreground">
+        <UiProviders>
+          <AuthProvider>{children}</AuthProvider>
+        </UiProviders>
       </body>
     </html>
   );

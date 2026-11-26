@@ -17,7 +17,16 @@ import { AiDiffReviewModal } from "@/components/ai-diff-review-modal";
 import { BookStructureTree } from "@/components/book-structure-tree";
 import { LorePanel } from "@/components/lore-panel";
 import { RippleEditDrawer } from "@/components/ripple-edit-drawer";
-import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/input";
+import { usePrompt } from "@/components/ui/prompt-dialog";
+import { Select, type SelectOption } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { useToast } from "@/components/ui/toast";
 import {
   ApiClientError,
   booksApi,
@@ -41,6 +50,10 @@ const CHAPTER_STATUS_LABELS: Record<string, string> = {
   REVIEWING: "审校中",
   PUBLISHED: "已定稿",
 };
+
+const CHAPTER_STATUS_OPTIONS: SelectOption[] = Object.entries(CHAPTER_STATUS_LABELS).map(
+  ([value, label]) => ({ value, label }),
+);
 
 function countWords(text: string): number {
   return text.replace(/\s+/g, "").length;
@@ -77,6 +90,9 @@ function BookWorkbenchContent() {
   const bookId = params.bookId;
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
+  const toast = useToast();
 
   const [book, setBook] = useState<BookItem | null>(null);
   const [tree, setTree] = useState<BookTreeResponse | null>(null);
@@ -118,11 +134,15 @@ function BookWorkbenchContent() {
     mode: "FULL" | "SELECTION";
     selectionRange?: { start: number; end: number };
   } | null>(null);
-  const [anchorNotice, setAnchorNotice] = useState<string | null>(null);
   const [anchorRefreshKey, setAnchorRefreshKey] = useState(0);
 
   const [runningChapterIds, setRunningChapterIds] = useState<Record<string, boolean>>({});
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const treeRef = useRef<BookTreeResponse | null>(null);
+
+  useEffect(() => {
+    treeRef.current = tree;
+  }, [tree]);
 
   const liveWordCount = useMemo(() => countWords(draftContent), [draftContent]);
 
@@ -146,6 +166,7 @@ function BookWorkbenchContent() {
   const refreshTree = useCallback(async (): Promise<BookTreeResponse | null> => {
     try {
       const next = await structureApi.getTree(bookId);
+      treeRef.current = next;
       setTree(next);
       return next;
     } catch {
@@ -168,7 +189,7 @@ function BookWorkbenchContent() {
         setPreviewVersion(null);
         syncActiveChapterLocation(bookId, detail.id);
 
-        const targetTree = treeSnapshot ?? tree;
+        const targetTree = treeSnapshot ?? treeRef.current;
         const treeChap = flattenTreeChapters(targetTree).find((c) => c.id === targetChapterId);
         const isMulti =
           treeChap &&
@@ -195,7 +216,7 @@ function BookWorkbenchContent() {
         setErrorMsg(err instanceof Error ? err.message : "加载章节失败");
       }
     },
-    [bookId, tree],
+    [bookId],
   );
 
   useEffect(() => {
@@ -213,6 +234,7 @@ function BookWorkbenchContent() {
       .then(async ([bookData, treeData, bookRuns]) => {
         if (!active) return;
         setBook(bookData);
+        treeRef.current = treeData;
         setTree(treeData);
         setErrorMsg(null);
 
@@ -323,6 +345,7 @@ function BookWorkbenchContent() {
           const versionList = await chaptersApi.listVersions(bookId, updated.id);
           setVersions(versionList);
           setSnapshotSummary("");
+          toast.success("已保存当前正文为历史快照");
         }
         setSaveState("saved");
       } catch (err) {
@@ -350,6 +373,7 @@ function BookWorkbenchContent() {
       draftContent,
       draftStatus,
       refreshTree,
+      toast,
     ],
   );
 
@@ -438,62 +462,79 @@ function BookWorkbenchContent() {
   }
 
   async function handleDeleteChapter(ch: ChapterTreeItem) {
-    if (!window.confirm(`确认删除「第 ${ch.chapterNo} 章 ${ch.title}」？`)) {
-      return;
-    }
-    try {
-      await chaptersApi.remove(bookId, ch.id);
-      const latestTree = await refreshTree();
-      const remaining = flattenTreeChapters(latestTree);
-      if (activeId === ch.id) {
-        if (remaining.length > 0) {
-          await loadChapterDetail(remaining[0].id, null, latestTree);
-        } else {
-          setActiveId(null);
-          setActiveChapter(null);
-          setActiveSection(null);
-          setVersions([]);
-          syncActiveChapterLocation(bookId, null);
+    const result = await confirm({
+      title: `删除「第 ${ch.chapterNo} 章 ${ch.title}」`,
+      description: "该章节及其历史快照将被永久删除且无法恢复，确认继续？",
+      confirmLabel: "确认删除",
+      variant: "destructive",
+      onConfirm: async () => {
+        await chaptersApi.remove(bookId, ch.id);
+        const latestTree = await refreshTree();
+        const remaining = flattenTreeChapters(latestTree);
+        if (activeId === ch.id) {
+          if (remaining.length > 0) {
+            await loadChapterDetail(remaining[0].id, null, latestTree);
+          } else {
+            setActiveId(null);
+            setActiveChapter(null);
+            setActiveSection(null);
+            setVersions([]);
+            syncActiveChapterLocation(bookId, null);
+          }
         }
-      }
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "删除章节失败");
+      },
+    });
+    if (result === "succeeded") {
+      toast.success(`已删除「第 ${ch.chapterNo} 章 ${ch.title}」`);
     }
   }
 
   async function handleCreateSection(ch: ChapterTreeItem) {
     const suggested = `第 ${ch.sections.length + 1} 节`;
-    const title = window.prompt(`为「第 ${ch.chapterNo} 章 ${ch.title}」新增小节标题：`, suggested);
+    const title = await prompt({
+      title: "新增小节",
+      description: `为「第 ${ch.chapterNo} 章 ${ch.title}」新增场景小节，便于大章拆分与精准校对。`,
+      label: "小节标题",
+      defaultValue: suggested,
+      submitLabel: "创建小节",
+    });
     if (title === null) return;
     setErrorMsg(null);
     try {
       if (activeChapter && saveState === "dirty") {
         await saveCurrentUnit();
       }
+      const finalTitle = title.trim() || suggested;
       const created = await structureApi.createSection(bookId, ch.id, {
-        title: title.trim() || suggested,
+        title: finalTitle,
         content: "",
       });
       const latestTree = await refreshTree();
       await loadChapterDetail(ch.id, created.id, latestTree);
+      toast.success(`已新增小节「${finalTitle}」`);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "新增小节失败");
+      const msg = err instanceof Error ? err.message : "新增小节失败";
+      setErrorMsg(msg);
+      toast.error(msg);
     }
   }
 
   async function handleDeleteSection(ch: ChapterTreeItem, sec: SectionSummaryItem) {
-    if (!window.confirm(`确认删除小节「§${sec.sectionNo} ${sec.title}」？`)) {
-      return;
-    }
-    setErrorMsg(null);
-    try {
-      await structureApi.deleteSection(bookId, ch.id, sec.id);
-      const latestTree = await refreshTree();
-      if (activeSection?.id === sec.id) {
-        await loadChapterDetail(ch.id, null, latestTree);
-      }
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "删除小节失败");
+    const result = await confirm({
+      title: `删除小节「§${sec.sectionNo} ${sec.title}」`,
+      description: "该小节的正文内容将被删除且无法恢复，确认继续？",
+      confirmLabel: "确认删除",
+      variant: "destructive",
+      onConfirm: async () => {
+        await structureApi.deleteSection(bookId, ch.id, sec.id);
+        const latestTree = await refreshTree();
+        if (activeSection?.id === sec.id) {
+          await loadChapterDetail(ch.id, null, latestTree);
+        }
+      },
+    });
+    if (result === "succeeded") {
+      toast.success(`已删除小节「§${sec.sectionNo} ${sec.title}」`);
     }
   }
 
@@ -541,33 +582,34 @@ function BookWorkbenchContent() {
 
   async function handleRollback(ver: ChapterVersion) {
     if (!activeChapter) return;
-    if (
-      !window.confirm(
-        `确认将当前章节回滚到 v${ver.versionNo}（${ver.changeSummary ?? "历史快照"}）？系统会自动保留一条回滚快照记录。`,
-      )
-    ) {
-      return;
-    }
-    setErrorMsg(null);
-    try {
-      const updated = await chaptersApi.rollback(
-        bookId,
-        activeChapter.id,
-        ver.id,
-        activeChapter.version,
-      );
-      setActiveChapter(updated);
-      setActiveSection(null);
-      setDraftTitle(updated.title);
-      setDraftContent(updated.content);
-      setDraftStatus(updated.status);
-      setSaveState("saved");
-      setPreviewVersion(null);
-      const versionList = await chaptersApi.listVersions(bookId, updated.id);
-      setVersions(versionList);
-      await refreshTree();
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "回滚失败");
+    const chapterId = activeChapter.id;
+    const chapterVersion = activeChapter.version;
+    const result = await confirm({
+      title: `回滚到 v${ver.versionNo}`,
+      description: `确认将当前章节回滚到 v${ver.versionNo}（${ver.changeSummary ?? "历史快照"}）？系统会自动保留一条回滚快照记录。`,
+      confirmLabel: "确认回滚",
+      variant: "default",
+      onConfirm: async () => {
+        const updated = await chaptersApi.rollback(
+          bookId,
+          chapterId,
+          ver.id,
+          chapterVersion,
+        );
+        setActiveChapter(updated);
+        setActiveSection(null);
+        setDraftTitle(updated.title);
+        setDraftContent(updated.content);
+        setDraftStatus(updated.status);
+        setSaveState("saved");
+        setPreviewVersion(null);
+        const versionList = await chaptersApi.listVersions(bookId, updated.id);
+        setVersions(versionList);
+        await refreshTree();
+      },
+    });
+    if (result === "succeeded") {
+      toast.success(`已回滚至历史版本 v${ver.versionNo}`);
     }
   }
 
@@ -612,20 +654,19 @@ function BookWorkbenchContent() {
                         : "就绪"}
               </span>
               {!isMultiSectionEditing && (
-                <select
+                <Select
+                  id="workbench-chapter-status"
+                  label="章节状态"
+                  hideLabel
                   value={draftStatus}
-                  onChange={(e) => {
-                    setDraftStatus(e.target.value);
+                  options={CHAPTER_STATUS_OPTIONS}
+                  onValueChange={(next) => {
+                    if (!next) return;
+                    setDraftStatus(next);
                     setSaveState("dirty");
                   }}
-                  className="rounded-md border border-input bg-background px-2 py-1 text-xs"
-                >
-                  {Object.entries(CHAPTER_STATUS_LABELS).map(([k, label]) => (
-                    <option key={k} value={k}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
+                  className="w-24"
+                />
               )}
               {isMultiSectionEditing && activeTreeChapter && (
                 <Button
@@ -675,7 +716,7 @@ function BookWorkbenchContent() {
                 {exportingFormat ? `导出 ${exportingFormat.toUpperCase()}...` : "导出成品"}
               </Button>
               {exportMenuOpen && (
-                <div className="absolute right-0 top-9 z-40 w-44 rounded-lg border border-border bg-card p-1 shadow-lg">
+                <div className="absolute right-0 top-9 z-40 w-48 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
                   {(
                     [
                       ["epub", "EPUB 3.0 电子书 (.epub)"],
@@ -692,14 +733,18 @@ function BookWorkbenchContent() {
                         setErrorMsg(null);
                         void booksApi
                           .exportBook(book.id, fmt, book.title)
+                          .then(() => {
+                            toast.success(`已导出 ${fmt.toUpperCase()} 成品`);
+                          })
                           .catch((err) => {
-                            setErrorMsg(
-                              err instanceof Error ? err.message : `导出 ${fmt.toUpperCase()} 失败`,
-                            );
+                            const msg =
+                              err instanceof Error ? err.message : `导出 ${fmt.toUpperCase()} 失败`;
+                            setErrorMsg(msg);
+                            toast.error(msg);
                           })
                           .finally(() => setExportingFormat(null));
                       }}
-                      className="block w-full rounded px-2.5 py-1.5 text-left text-xs hover:bg-muted"
+                      className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
                     >
                       {label}
                     </button>
@@ -708,6 +753,7 @@ function BookWorkbenchContent() {
               )}
             </div>
           )}
+          <ThemeToggle />
           <Button
             size="sm"
             variant="ghost"
@@ -742,55 +788,67 @@ function BookWorkbenchContent() {
         {/* Center Pane: Manuscript Editor */}
         <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {vipLimitError && (
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
-              <span>{vipLimitError}</span>
-              <Link
-                href="/vip"
-                className="rounded bg-amber-600 px-2.5 py-1 font-medium text-white hover:bg-amber-700"
-              >
-                升级解锁更大单节字数 →
-              </Link>
-            </div>
+            <Alert
+              status="vip"
+              announce="assertive"
+              className="rounded-none border-x-0 border-t-0"
+              action={
+                <Link href="/vip" className={buttonVariants({ size: "xs" })}>
+                  升级解锁更大单节字数 →
+                </Link>
+              }
+            >
+              {vipLimitError}
+            </Alert>
           )}
 
           {errorMsg && (
-            <div className="flex items-center justify-between gap-3 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">
-              <span>{errorMsg}</span>
-              {saveState === "conflict" && activeChapter && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => void loadChapterDetail(activeChapter.id, activeSection?.id)}
-                >
-                  拉取最新版本
-                </Button>
-              )}
-            </div>
+            <Alert
+              status="danger"
+              announce="assertive"
+              className="rounded-none border-x-0 border-t-0"
+              action={
+                saveState === "conflict" && activeChapter ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void loadChapterDetail(activeChapter.id, activeSection?.id)}
+                  >
+                    拉取最新版本
+                  </Button>
+                ) : undefined
+              }
+            >
+              {errorMsg}
+            </Alert>
           )}
 
           {activeChapter && liveWordCount > 8000 && activeTreeChapter && (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/5 px-4 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
-              <span>
-                当前正文已超过 8,000 字（支持最高 10 万字），按场景拆分小节可让 AI 记忆与连贯校对更精准。
-              </span>
-              <button
-                type="button"
-                onClick={() => void handleCreateSection(activeTreeChapter)}
-                className="font-medium underline hover:opacity-80"
-              >
-                + 新增下一小节
-              </button>
-            </div>
+            <Alert
+              status="warning"
+              className="rounded-none border-x-0 border-t-0 py-1.5 text-[11px]"
+              action={
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => void handleCreateSection(activeTreeChapter)}
+                >
+                  + 新增下一小节
+                </Button>
+              }
+            >
+              当前正文已超过 8,000 字（支持最高 10 万字），按场景拆分小节可让 AI 记忆与连贯校对更精准。
+            </Alert>
           )}
 
           {activeChapter ? (
-            <div className="flex min-h-0 flex-1 flex-col p-6">
-              <div className="mb-3 flex items-center gap-3 border-b border-border pb-3">
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+            <div className="flex min-h-0 flex-1 flex-col px-6 py-6 sm:px-10">
+              <div className="mx-auto mb-4 flex w-full max-w-editor items-center gap-3 border-b border-border pb-3">
+                <Badge status="neutral" className="shrink-0 font-mono text-[11px]">
                   {isMultiSectionEditing && activeSection
                     ? `第 ${activeChapter.chapterNo} 章 · 第 ${activeSection.sectionNo} 节`
                     : `第 ${activeChapter.chapterNo} 章`}
-                </span>
+                </Badge>
                 <input
                   value={draftTitle}
                   onChange={(e) => {
@@ -798,31 +856,17 @@ function BookWorkbenchContent() {
                     if (saveState !== "conflict") setSaveState("dirty");
                   }}
                   placeholder={isMultiSectionEditing ? "请输入小节标题" : "请输入章节标题"}
-                  className="min-w-0 flex-1 bg-transparent text-xl font-bold outline-none"
+                  className="min-w-0 flex-1 bg-transparent font-editor text-xl font-bold text-foreground placeholder:text-muted-foreground outline-none"
                 />
               </div>
 
-              {anchorNotice && (
-                <div className="mb-2 flex items-center justify-between rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-400">
-                  <span>{anchorNotice}</span>
-                  <button
-                    type="button"
-                    onClick={() => setAnchorNotice(null)}
-                    className="text-[11px] underline"
-                  >
-                    知道了
-                  </button>
-                </div>
-              )}
-
               {selectedExcerpt.length >= 10 && selectedRange && (
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs">
-                  <span className="truncate text-muted-foreground">
+                <div className="mx-auto mb-3 flex w-full max-w-editor flex-wrap items-center justify-between gap-2 rounded-lg border border-status-ai-border bg-status-ai-bg px-3 py-1.5 text-xs text-status-ai">
+                  <span className="truncate font-medium">
                     已划选 {selectedExcerpt.length} 字片段
                   </span>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Button
-                      type="button"
                       size="xs"
                       onClick={() => {
                         setSelectionTask({
@@ -838,7 +882,6 @@ function BookWorkbenchContent() {
                       AI 划词改写
                     </Button>
                     <Button
-                      type="button"
                       size="xs"
                       variant="outline"
                       onClick={() => {
@@ -856,7 +899,6 @@ function BookWorkbenchContent() {
                     </Button>
                     {selectedExcerpt.length >= 20 && selectedExcerpt.length <= 900 && (
                       <Button
-                        type="button"
                         size="xs"
                         variant="outline"
                         onClick={() => {
@@ -873,34 +915,36 @@ function BookWorkbenchContent() {
                               setSelectedExcerpt("");
                               setSelectedRange(null);
                               setAnchorRefreshKey((k) => k + 1);
-                              setAnchorNotice("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
+                              toast.success("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
                             })
                             .catch((err) => {
-                              setErrorMsg(
-                                err instanceof Error ? err.message : "设为文风锚点失败",
-                              );
+                              const msg =
+                                err instanceof Error ? err.message : "设为文风锚点失败";
+                              setErrorMsg(msg);
+                              toast.error(msg);
                             });
                         }}
                       >
                         设为文风锚点
                       </Button>
                     )}
-                    <button
-                      type="button"
+                    <Button
+                      size="xs"
+                      variant="ghost"
                       onClick={() => {
                         setSelectedExcerpt("");
                         setSelectedRange(null);
                       }}
-                      className="px-1 text-muted-foreground hover:text-foreground"
                       title="清除选中条"
                     >
                       ×
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
 
-              <textarea
+              <Textarea
+                variant="manuscript"
                 value={draftContent}
                 onSelect={(e) => {
                   const el = e.currentTarget;
@@ -920,7 +964,6 @@ function BookWorkbenchContent() {
                   if (saveState !== "conflict") setSaveState("dirty");
                 }}
                 placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存；划选段落可触发 AI 划词改写/扩写或设为本书文风锚点）"
-                className="min-h-0 flex-1 resize-none bg-transparent text-base leading-8 outline-none"
               />
             </div>
           ) : (
@@ -1033,11 +1076,11 @@ function BookWorkbenchContent() {
       {/* Full Chapter Preview Modal (for Multi-Section Big Chapters) */}
       {fullPreview && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-[1px]"
           onClick={() => setFullPreview(null)}
         >
           <div
-            className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-card shadow-xl"
+            className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-surface-elevated shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
@@ -1053,7 +1096,7 @@ function BookWorkbenchContent() {
                 关闭
               </Button>
             </div>
-            <div className="flex-1 overflow-y-auto whitespace-pre-wrap p-6 text-sm leading-8">
+            <div className="flex-1 overflow-y-auto whitespace-pre-wrap p-6 font-editor text-editor text-foreground">
               {fullPreview.combinedContent || "（本章暂无正文）"}
             </div>
           </div>
@@ -1083,11 +1126,11 @@ function BookWorkbenchContent() {
       {/* On-Demand Version History Slide-Over Drawer */}
       {versionsOpen && activeChapter && (
         <div
-          className="fixed inset-0 z-50 flex justify-end bg-black/30"
+          className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-[1px]"
           onClick={() => setVersionsOpen(false)}
         >
           <div
-            className="flex h-full w-96 max-w-full flex-col border-l border-border bg-card shadow-xl"
+            className="flex h-full w-96 max-w-full flex-col border-l border-border bg-surface-elevated shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -1110,11 +1153,10 @@ function BookWorkbenchContent() {
               onSubmit={handleManualSnapshot}
               className="space-y-2 border-b border-border p-3"
             >
-              <input
+              <Input
                 value={snapshotSummary}
                 onChange={(e) => setSnapshotSummary(e.target.value)}
                 placeholder="快照备注，例如：完成初稿 / 改写打斗戏"
-                className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
               />
               <Button
                 type="submit"

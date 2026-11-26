@@ -4,7 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { useToast } from "@/components/ui/toast";
 import {
   ApiClientError,
   vipApi,
@@ -40,11 +45,11 @@ function makeOrderIdempotencyKey(planCode: string): string {
 export default function VipCenterPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
+  const toast = useToast();
   const [plans, setPlans] = useState<VipPlanItem[]>([]);
   const [status, setStatus] = useState<MyVipStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [submittingCode, setSubmittingCode] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -79,7 +84,6 @@ export default function VipCenterPage() {
     if (plan.planCode === "FREE") return;
     setSubmittingCode(plan.planCode);
     setError(null);
-    setNotice(null);
     try {
       const idemKey = makeOrderIdempotencyKey(plan.planCode);
       const res = await vipApi.subscribe({
@@ -88,13 +92,13 @@ export default function VipCenterPage() {
         paymentChannel: "CREDITS",
         idempotencyKey: idemKey,
       });
-      setNotice(
+      toast.success(
         `已成功开通「${res.displayName}」（${res.durationDays} 天），额外获赠 ${res.grantedBonusCredits.toFixed(0)} 创作积分。`,
       );
       const latest = await vipApi.me();
       setStatus(latest);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "开通会员失败");
+      toast.error(err instanceof ApiClientError ? err.message : "开通会员失败");
     } finally {
       setSubmittingCode(null);
     }
@@ -120,6 +124,7 @@ export default function VipCenterPage() {
             <h1 className="text-sm font-semibold">创作会员与权益</h1>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <Link href="/library" className={buttonVariants({ variant: "outline", size: "sm" })}>
               我的资料库
             </Link>
@@ -132,14 +137,14 @@ export default function VipCenterPage() {
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-8">
         {status && (
-          <section className="grid gap-4 rounded-xl border border-border bg-card p-5 shadow-xs sm:grid-cols-4">
+          <Card className="grid gap-4 p-5 sm:grid-cols-4">
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground">当前方案</div>
               <div className="flex items-center gap-2">
                 <span className="text-lg font-bold">{status.displayName}</span>
-                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-mono text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                <Badge status="vip" className="font-mono">
                   {status.planCode}
-                </span>
+                </Badge>
               </div>
               <div className="text-[11px] text-muted-foreground">
                 {status.expiresAt
@@ -150,45 +155,40 @@ export default function VipCenterPage() {
 
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground">个人资料库用量</div>
-              <div className="text-base font-semibold">
+              <div className="text-base font-semibold tabular-nums">
                 {status.libraryUsage.usedDocs} / {status.libraryUsage.maxDocs} 份
               </div>
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-[11px] text-muted-foreground tabular-nums">
                 空间 {formatBytes(status.libraryUsage.usedBytes)} / {formatBytes(status.libraryUsage.maxTotalBytes)}
               </div>
             </div>
 
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground">长篇记忆与改稿跨度</div>
-              <div className="text-base font-semibold">
+              <div className="text-base font-semibold tabular-nums">
                 最高 {status.entitlements.maxMemoryChapters.toLocaleString()} 章
               </div>
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-[11px] text-muted-foreground tabular-nums">
                 单次连环改稿 ≤ {status.entitlements.rippleMaxRangeChapters.toLocaleString()} 章
               </div>
             </div>
 
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground">可用创作积分</div>
-              <div className="text-base font-semibold">
+              <div className="font-mono text-base font-semibold tabular-nums">
                 {status.balanceCredits.toFixed(1)}
               </div>
               <div className="text-[11px] text-muted-foreground">
                 {formatDiscount(status.creditDiscountBps)}
               </div>
             </div>
-          </section>
+          </Card>
         )}
 
-        {notice && (
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-700 dark:text-emerald-400">
-            {notice}
-          </div>
-        )}
         {error && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-xs text-destructive">
+          <Alert status="danger" announce="assertive">
             {error}
-          </div>
+          </Alert>
         )}
 
         <section className="space-y-3">
@@ -207,24 +207,19 @@ export default function VipCenterPage() {
                 const isCurrent = status?.planCode === plan.planCode;
                 const e = plan.entitlements;
                 return (
-                  <article
+                  <Card
                     key={plan.planCode}
-                    className={`flex flex-col justify-between rounded-xl border p-5 shadow-xs ${
-                      isCurrent
-                        ? "border-amber-500/60 bg-amber-500/5"
-                        : "border-border bg-card"
+                    surface={isCurrent ? "elevated" : "card"}
+                    className={`flex flex-col justify-between p-5 ${
+                      isCurrent ? "border-status-vip-border" : ""
                     }`}
                   >
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <h3 className="text-base font-bold">{plan.displayName}</h3>
-                        {isCurrent && (
-                          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
-                            当前方案
-                          </span>
-                        )}
+                        {isCurrent && <Badge status="vip">当前方案</Badge>}
                       </div>
-                      <div className="text-2xl font-bold tracking-tight">
+                      <div className="text-2xl font-bold tracking-tight tabular-nums">
                         {formatPrice(plan.monthlyPriceCents)}
                       </div>
                       <p className="text-[11px] text-muted-foreground">
@@ -259,6 +254,7 @@ export default function VipCenterPage() {
                           variant={isCurrent ? "outline" : "default"}
                           className="w-full"
                           disabled={submittingCode !== null}
+                          loading={submittingCode === plan.planCode}
                           onClick={() => void handleSubscribe(plan)}
                         >
                           {submittingCode === plan.planCode
@@ -269,7 +265,7 @@ export default function VipCenterPage() {
                         </Button>
                       )}
                     </div>
-                  </article>
+                  </Card>
                 );
               })}
             </div>

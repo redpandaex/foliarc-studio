@@ -104,14 +104,14 @@ export function ForeshadowingDirectorSlot({
             </span>
           )}
           {povCharacter && (
-            <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-700 dark:text-sky-400">
+            <span className="rounded border border-status-info-border bg-status-info-bg px-1.5 py-0.5 text-[10px] text-status-info">
               视角:{povCharacter}
             </span>
           )}
         </span>
         <span className="flex items-center gap-1.5">
           {dueCount > 0 && (
-            <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+            <span className="rounded-full border border-status-warning-border bg-status-warning-bg px-1.5 py-0.5 text-[10px] text-status-warning">
               {dueCount} 条到期
             </span>
           )}
@@ -195,7 +195,7 @@ export function ForeshadowingDirectorSlot({
                     <li key={item.id} className="flex items-center justify-between gap-1.5">
                       <span className="min-w-0 flex-1 truncate">
                         {isDue && (
-                          <span className="mr-1 rounded bg-amber-500/20 px-1 text-[9px] text-amber-700 dark:text-amber-400">
+                          <span className="mr-1 rounded border border-status-warning-border bg-status-warning-bg px-1 text-[9px] text-status-warning">
                             到期
                           </span>
                         )}
@@ -209,7 +209,7 @@ export function ForeshadowingDirectorSlot({
                           onClick={() => toggleDirective(item, "HINT")}
                           className={`rounded px-1.5 py-0.5 text-[10px] ${
                             cur?.mode === "HINT"
-                              ? "bg-sky-600 text-white"
+                              ? "border border-status-info-border bg-status-info-bg font-semibold text-status-info"
                               : "border border-border hover:bg-muted"
                           }`}
                         >
@@ -221,7 +221,7 @@ export function ForeshadowingDirectorSlot({
                           onClick={() => toggleDirective(item, "PAYOFF", "FULL_RESOLVE")}
                           className={`rounded px-1.5 py-0.5 text-[10px] ${
                             cur?.mode === "PAYOFF"
-                              ? "bg-amber-600 text-white"
+                              ? "border border-status-warning-border bg-status-warning-bg font-semibold text-status-warning"
                               : "border border-border hover:bg-muted"
                           }`}
                         >

@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { ServiceStatus } from "@/components/service-status";
+import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 const PHASES = [
   { id: "Phase 0", title: "工程基座、JWT 轮换认证与小说/章节/版本 CRUD 闭环", status: "已完成" },
@@ -22,15 +25,16 @@ export default function HomePage() {
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
-          <div className="inline-flex items-center rounded-full border border-border px-3 py-1 font-mono text-xs text-muted-foreground">
+          <Badge status="info" className="font-mono">
             FoliarcStudio · Phase 6 Complete
-          </div>
+          </Badge>
           <h1 className="text-3xl font-bold tracking-tight">卷弧工坊 · FoliarcStudio</h1>
           <p className="text-sm text-muted-foreground">
             Next.js + Java 21 Spring Boot 4 (MyBatis-Plus) + Python FastAPI + PostgreSQL 16 + Milvus
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ThemeToggle />
           <Link
             href="/login"
             className={buttonVariants({ variant: "outline", size: "sm" })}
@@ -45,13 +49,13 @@ export default function HomePage() {
 
       <ServiceStatus />
 
-      <section className="rounded-xl border border-border bg-card p-6 shadow-xs">
+      <Card className="p-6">
         <h2 className="text-base font-semibold">垂直切片实战路线</h2>
         <ol className="mt-4 space-y-2.5 text-sm">
           {PHASES.map((phase) => (
             <li
               key={phase.id}
-              className="flex items-center justify-between gap-4 rounded-lg border border-border/60 px-3.5 py-2.5"
+              className="flex items-center justify-between gap-4 rounded-lg border border-border px-3.5 py-2.5"
             >
               <div className="flex items-center gap-3">
                 <span className="font-mono text-xs font-semibold text-muted-foreground">
@@ -59,13 +63,13 @@ export default function HomePage() {
                 </span>
                 <span>{phase.title}</span>
               </div>
-              <span className="font-mono text-xs text-muted-foreground">
+              <Badge status="success" className="shrink-0 font-mono">
                 {phase.status}
-              </span>
+              </Badge>
             </li>
           ))}
         </ol>
-      </section>
+      </Card>
     </main>
   );
 }
