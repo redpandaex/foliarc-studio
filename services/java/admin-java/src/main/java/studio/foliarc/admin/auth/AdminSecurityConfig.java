@@ -23,12 +23,13 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import studio.foliarc.biz.auth.JwtTokenService;
+import studio.foliarc.biz.auth.mapper.UserMapper;
 
 @Configuration
 public class AdminSecurityConfig {
 
     @Bean
-    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http, JwtTokenService jwtTokenService)
+    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http, JwtTokenService jwtTokenService, UserMapper userMapper)
             throws Exception {
         return http
                 .csrf(AbstractHttpConfigurer::disable)
@@ -46,7 +47,7 @@ public class AdminSecurityConfig {
                         .requestMatchers("/actuator/health/**").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().denyAll())
-                .addFilterBefore(new AdminJwtAuthenticationFilter(jwtTokenService), UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(new AdminJwtAuthenticationFilter(jwtTokenService, userMapper), UsernamePasswordAuthenticationFilter.class)
                 .build();
     }
 

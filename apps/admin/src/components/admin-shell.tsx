@@ -13,6 +13,7 @@ import {
   ListChecks,
   LogOut,
   ShieldCheck,
+  Users,
 } from "lucide-react";
 import {
   ADMIN_API_BASE,
@@ -25,6 +26,7 @@ import {
 
 const NAV_ITEMS = [
   { href: "/", label: "总览大盘", icon: LayoutDashboard },
+  { href: "/users", label: "用户与权限", icon: Users },
   { href: "/knowledge", label: "公共资料库", icon: BookOpen },
   { href: "/jobs", label: "异步任务中心", icon: ListChecks },
   { href: "/traces", label: "会话链路追踪", icon: Activity },

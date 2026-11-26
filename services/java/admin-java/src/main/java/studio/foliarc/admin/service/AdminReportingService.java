@@ -45,26 +45,46 @@ public class AdminReportingService {
                 """).query(Overview.class).single();
     }
 
-    public List<AdminUser> latestUsers() {
+    public List<AdminUser> listUsers(String q, String role, int limit) {
         return jdbc.sql("""
                 SELECT u.id, u.email, u.username, u.role, u.created_at,
                        COALESCE(s.plan_code, 'FREE') AS plan_code,
-                       COALESCE(b.balance_micros, 0) AS balance_micros
+                       COALESCE(b.balance_micros, 0) AS balance_micros,
+                       (SELECT COUNT(*) FROM books WHERE owner_id = u.id) AS book_count
                 FROM users u
                 LEFT JOIN user_subscriptions s ON s.user_id = u.id AND UPPER(s.status) = 'ACTIVE'
                      AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
                 LEFT JOIN billing_accounts b ON b.user_id = u.id
+                WHERE (:q = '' OR STRPOS(LOWER(u.email), LOWER(:q)) > 0
+                               OR STRPOS(LOWER(u.username), LOWER(:q)) > 0)
+                  AND (:role = '' OR u.role = :role)
                 ORDER BY u.created_at DESC, u.id DESC
-                LIMIT 50
-                """).query((rs, rowNum) -> new AdminUser(
+                LIMIT :limit
+                """).param("q", q == null ? "" : q.strip())
+                .param("role", role == null || role.isBlank() ? "" : role)
+                .param("limit", Math.max(0, limit))
+                .query((rs, rowNum) -> new AdminUser(
                 rs.getObject("id", UUID.class),
                 rs.getString("email"),
                 rs.getString("username"),
                 rs.getString("role"),
                 rs.getString("plan_code"),
                 ModelPricing.toCredits(rs.getLong("balance_micros")),
+                rs.getLong("book_count"),
                 rs.getObject("created_at", OffsetDateTime.class)
         )).list();
+    }
+
+    public List<DocumentGrantRow> listDocumentGrants(UUID docId) {
+        return jdbc.sql("""
+                SELECT g.id AS grant_id, g.document_id, g.grantee_user_id AS user_id,
+                       u.email, u.username, g.permission, g.created_at
+                FROM knowledge_grants g
+                JOIN users u ON u.id = g.grantee_user_id
+                JOIN knowledge_documents d ON d.id = g.document_id
+                WHERE g.document_id = :docId AND d.scope = 'GLOBAL' AND d.deleted_at IS NULL
+                ORDER BY g.created_at DESC, g.id DESC
+                """).param("docId", docId).query(DocumentGrantRow.class).list();
     }
 
     public List<RippleJobRow> recentRippleJobs(int limit) {
@@ -122,7 +142,10 @@ public class AdminReportingService {
                            long guardrailBlocksCount) {}
 
     public record AdminUser(UUID id, String email, String username, String role, String planCode,
-                            double balanceCredits, OffsetDateTime createdAt) {}
+                            double balanceCredits, long bookCount, OffsetDateTime createdAt) {}
+
+    public record DocumentGrantRow(UUID grantId, UUID documentId, UUID userId, String email, String username,
+                                   String permission, OffsetDateTime createdAt) {}
 
     public record RippleJobRow(UUID id, UUID bookId, UUID userId, int sourceChapterNo, int rangeStartChapterNo,
                                int rangeEndChapterNo, String status, int totalCandidates, long patchedCount,

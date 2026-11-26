@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -15,11 +17,13 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import studio.foliarc.biz.billing.ModelPricing;
@@ -44,6 +48,40 @@ class BillingAndGatewayTests {
         assertThat(cost.totalMicros()).isEqualTo(23_600L);
         // cache saved: 8K * (2000 - 200) = 14400
         assertThat(cost.cacheSavedMicros()).isEqualTo(14_400L);
+    }
+
+    @Test
+    void topUpInsideAnAuditTransactionLocksTheAccountThroughCommit() {
+        var accountMapper = mock(BillingAccountMapper.class);
+        var ledgerMapper = mock(BillingLedgerEntryMapper.class);
+        var redis = mock(StringRedisTemplate.class);
+        var tx = mock(TransactionTemplate.class);
+        when(tx.execute(any())).thenAnswer(call -> call.<TransactionCallback<?>>getArgument(0).doInTransaction(null));
+        UUID userId = UUID.randomUUID();
+        var account = new BillingAccountEntity();
+        account.setUserId(userId);
+        account.setBalanceMicros(1_000_000L);
+        account.setFrozenMicros(0L);
+        when(accountMapper.selectById(userId)).thenReturn(account);
+        when(accountMapper.selectForUpdate(userId)).thenReturn(account);
+        when(accountMapper.updateById(account)).thenReturn(1);
+        var billing = new BillingService(accountMapper, ledgerMapper, mock(GuardrailAuditLogMapper.class), redis, tx,
+                50_000_000L, 100_000_000L);
+
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            var summary = billing.topUp(userId, 0.01, "admin-grant-test");
+            assertThat(summary.balanceMicros()).isEqualTo(1_010_000L);
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+
+        verify(accountMapper).selectForUpdate(userId);
+        var entry = ArgumentCaptor.forClass(BillingLedgerEntryEntity.class);
+        verify(ledgerMapper).insert(entry.capture());
+        assertThat(entry.getValue().getRequestId()).isEqualTo("TOPUP:admin-grant-test");
+        assertThat(entry.getValue().getAmountMicros()).isEqualTo(10_000L);
+        verifyNoInteractions(redis);
     }
 
     @Test

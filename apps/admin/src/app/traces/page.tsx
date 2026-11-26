@@ -16,14 +16,15 @@ export default function AdminTracesPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AgentRunTraceDetail | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
+  const [traceIdFilter, setTraceIdFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  const loadRuns = useCallback(async (filter?: string) => {
+  const loadRuns = useCallback(async (filter?: string, traceId?: string) => {
     setError(null);
     try {
       const [r, g] = await Promise.all([
-        adminTracesApi.listRuns(filter || undefined, 40),
+        adminTracesApi.listRuns(filter || undefined, 40, traceId || undefined),
         adminTracesApi.listGuardrails(40),
       ]);
       setRuns(r);
@@ -36,7 +37,7 @@ export default function AdminTracesPage() {
   useEffect(() => {
     let active = true;
     Promise.all([
-      adminTracesApi.listRuns(statusFilter || undefined, 40),
+      adminTracesApi.listRuns(statusFilter || undefined, 40, traceIdFilter || undefined),
       adminTracesApi.listGuardrails(40),
     ])
       .then(([r, g]) => {
@@ -52,7 +53,7 @@ export default function AdminTracesPage() {
     return () => {
       active = false;
     };
-  }, [statusFilter]);
+  }, [statusFilter, traceIdFilter]);
 
   async function selectRun(runId: string) {
     setSelectedRunId(runId);
@@ -74,6 +75,12 @@ export default function AdminTracesPage() {
       subtitle="按 run_id 检索结构化瀑布流（路由 → 工具调用 → 审校评分 → 护栏拦截 → Token 结算，已过滤 token 流与密钥脱敏）"
       actions={
         <div className="flex items-center gap-2">
+          <input
+            value={traceIdFilter}
+            onChange={(e) => setTraceIdFilter(e.target.value)}
+            placeholder="按 X-Trace-Id 检索..."
+            className="w-44 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-xs outline-none focus:border-blue-500"
+          />
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -87,7 +94,7 @@ export default function AdminTracesPage() {
           </select>
           <button
             type="button"
-            onClick={() => void loadRuns(statusFilter)}
+            onClick={() => void loadRuns(statusFilter, traceIdFilter)}
             className="rounded-md border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted"
           >
             刷新

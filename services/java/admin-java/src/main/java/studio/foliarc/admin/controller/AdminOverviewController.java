@@ -1,13 +1,10 @@
 package studio.foliarc.admin.controller;
 
-import java.util.List;
-
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import studio.foliarc.admin.service.AdminReportingService;
-import studio.foliarc.admin.service.AdminReportingService.AdminUser;
 import studio.foliarc.admin.service.AdminReportingService.Overview;
 
 @RestController
@@ -23,10 +20,5 @@ public class AdminOverviewController {
     @GetMapping("/overview")
     public Overview overview() {
         return reportingService.overview();
-    }
-
-    @GetMapping("/users")
-    public List<AdminUser> users() {
-        return reportingService.latestUsers();
     }
 }

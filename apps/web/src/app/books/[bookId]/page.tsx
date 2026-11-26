@@ -102,6 +102,8 @@ function BookWorkbenchContent() {
 
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [rippleOpen, setRippleOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null);
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(null);
   const [snapshotSummary, setSnapshotSummary] = useState("");
@@ -661,6 +663,50 @@ function BookWorkbenchContent() {
                 保存
               </Button>
             </>
+          )}
+          {book && (
+            <div className="relative">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={exportingFormat !== null}
+                onClick={() => setExportMenuOpen((v) => !v)}
+              >
+                {exportingFormat ? `导出 ${exportingFormat.toUpperCase()}...` : "导出成品"}
+              </Button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-9 z-40 w-44 rounded-lg border border-border bg-card p-1 shadow-lg">
+                  {(
+                    [
+                      ["epub", "EPUB 3.0 电子书 (.epub)"],
+                      ["md", "Markdown 文稿 (.md)"],
+                      ["txt", "纯文本全本 (.txt)"],
+                    ] as const
+                  ).map(([fmt, label]) => (
+                    <button
+                      key={fmt}
+                      type="button"
+                      onClick={() => {
+                        setExportMenuOpen(false);
+                        setExportingFormat(fmt);
+                        setErrorMsg(null);
+                        void booksApi
+                          .exportBook(book.id, fmt, book.title)
+                          .catch((err) => {
+                            setErrorMsg(
+                              err instanceof Error ? err.message : `导出 ${fmt.toUpperCase()} 失败`,
+                            );
+                          })
+                          .finally(() => setExportingFormat(null));
+                      }}
+                      className="block w-full rounded px-2.5 py-1.5 text-left text-xs hover:bg-muted"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           <Button
             size="sm"

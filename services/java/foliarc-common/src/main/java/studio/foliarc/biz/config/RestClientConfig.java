@@ -5,6 +5,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
+import studio.foliarc.biz.common.TraceContext;
+
 @Configuration
 public class RestClientConfig {
 
@@ -16,6 +18,13 @@ public class RestClientConfig {
         return RestClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader("X-Internal-Token", internalToken)
+                .requestInterceptor((request, body, execution) -> {
+                    String traceId = TraceContext.currentTraceId();
+                    if (traceId != null) {
+                        request.getHeaders().set(TraceContext.HEADER_NAME, traceId);
+                    }
+                    return execution.execute(request, body);
+                })
                 .build();
     }
 }

@@ -97,6 +97,26 @@ export interface AdminUserRow {
   role: string;
   planCode: string;
   balanceCredits: number;
+  bookCount?: number;
+  createdAt: string | null;
+}
+
+export interface AdminUserBook {
+  id: string;
+  title: string;
+  genreCode?: string;
+  chapterCount: number;
+  totalWordCount: number;
+  updatedAt: string | null;
+}
+
+export interface DocumentGrantRow {
+  grantId: string;
+  documentId: string;
+  userId: string;
+  email: string;
+  username: string;
+  permission: string;
   createdAt: string | null;
 }
 
@@ -321,7 +341,34 @@ export const adminAuthApi = {
 
 export const adminOverviewApi = {
   overview: () => adminFetch<AdminOverviewStats>("/api/v1/admin/overview"),
-  listUsers: () => adminFetch<AdminUserRow[]>("/api/v1/admin/users"),
+  listUsers: (q?: string, role?: string, limit = 50) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (q?.trim()) qs.set("q", q.trim());
+    if (role?.trim()) qs.set("role", role.trim());
+    return adminFetch<AdminUserRow[]>(`/api/v1/admin/users?${qs.toString()}`);
+  },
+};
+
+export const adminUsersApi = {
+  list: adminOverviewApi.listUsers,
+  updateRole: (userId: string, role: "ADMIN" | "AUTHOR") =>
+    adminFetch<{ id: string; email: string; username: string; role: string }>(
+      `/api/v1/admin/users/${userId}/role`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ role }),
+      },
+    ),
+  grantCredits: (userId: string, amountCredits: number, reason?: string) =>
+    adminFetch<{ userId: string; balanceCredits: number }>(
+      `/api/v1/admin/users/${userId}/credits`,
+      {
+        method: "POST",
+        body: JSON.stringify({ amountCredits, reason: reason ?? "" }),
+      },
+    ),
+  listBooks: (userId: string) =>
+    adminFetch<AdminUserBook[]>(`/api/v1/admin/users/${userId}/books`),
 };
 
 export const adminKnowledgeApi = {
@@ -350,6 +397,8 @@ export const adminKnowledgeApi = {
     adminFetch<void>(`/api/v1/admin/knowledge/documents/${docId}`, {
       method: "DELETE",
     }),
+  listGrants: (docId: string) =>
+    adminFetch<DocumentGrantRow[]>(`/api/v1/admin/knowledge/documents/${docId}/grants`),
   grant: (docId: string, granteeUserId: string, note?: string) =>
     adminFetch<void>(`/api/v1/admin/knowledge/documents/${docId}/grants`, {
       method: "POST",
@@ -396,9 +445,10 @@ export const adminJobsApi = {
 };
 
 export const adminTracesApi = {
-  listRuns: (status?: string, limit = 30) => {
+  listRuns: (status?: string, limit = 30, traceId?: string) => {
     const qs = new URLSearchParams({ limit: String(limit) });
     if (status) qs.set("status", status);
+    if (traceId?.trim()) qs.set("traceId", traceId.trim());
     return adminFetch<AgentRunRow[]>(`/api/v1/admin/traces/runs?${qs.toString()}`);
   },
   getRunTrace: (runId: string) =>

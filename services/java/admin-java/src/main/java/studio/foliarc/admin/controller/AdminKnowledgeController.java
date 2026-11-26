@@ -26,6 +26,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import studio.foliarc.admin.service.AdminAuditService;
+import studio.foliarc.admin.service.AdminReportingService;
+import studio.foliarc.admin.service.AdminReportingService.DocumentGrantRow;
 import studio.foliarc.biz.auth.AuthenticatedUser;
 import studio.foliarc.biz.auth.service.UserAccountService;
 import studio.foliarc.biz.common.BizException;
@@ -40,12 +42,14 @@ public class AdminKnowledgeController {
     private final KnowledgeDocumentService documentService;
     private final UserAccountService userAccountService;
     private final AdminAuditService auditService;
+    private final AdminReportingService reportingService;
 
     public AdminKnowledgeController(KnowledgeDocumentService documentService, UserAccountService userAccountService,
-                                    AdminAuditService auditService) {
+                                    AdminAuditService auditService, AdminReportingService reportingService) {
         this.documentService = documentService;
         this.userAccountService = userAccountService;
         this.auditService = auditService;
+        this.reportingService = reportingService;
     }
 
     @GetMapping("/documents")
@@ -80,6 +84,11 @@ public class AdminKnowledgeController {
         documentService.deletePlatformDocument(document);
         auditService.record(principal, "KNOWLEDGE_DELETE", "DOCUMENT", docId,
                 before, KnowledgeDocumentService.toResponse(document));
+    }
+
+    @GetMapping("/documents/{docId}/grants")
+    public List<DocumentGrantRow> listGrants(@PathVariable UUID docId) {
+        return reportingService.listDocumentGrants(docId);
     }
 
     @PostMapping("/documents/{docId}/grants")

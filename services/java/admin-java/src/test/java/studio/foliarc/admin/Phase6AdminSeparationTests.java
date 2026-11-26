@@ -2,18 +2,27 @@ package studio.foliarc.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.RETURNS_SELF;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.sql.ResultSet;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +34,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -35,6 +45,8 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -53,19 +65,25 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.nimbusds.jwt.SignedJWT;
 import com.zaxxer.hikari.HikariDataSource;
 
+import studio.foliarc.admin.service.AdminReportingService.AdminUser;
+import studio.foliarc.admin.service.AdminReportingService.DocumentGrantRow;
 import studio.foliarc.biz.audit.entity.AdminAuditLogEntity;
 import studio.foliarc.biz.audit.mapper.AdminAuditLogMapper;
 import studio.foliarc.biz.auth.AuthenticatedUser;
 import studio.foliarc.biz.auth.JwtTokenService;
 import studio.foliarc.biz.auth.entity.UserEntity;
 import studio.foliarc.biz.auth.mapper.UserMapper;
+import studio.foliarc.biz.billing.dto.BillingDtos;
 import studio.foliarc.biz.billing.entity.GuardrailAuditLogEntity;
 import studio.foliarc.biz.billing.mapper.GuardrailAuditLogMapper;
+import studio.foliarc.biz.billing.service.BillingService;
+import studio.foliarc.biz.common.TraceContext;
 import studio.foliarc.biz.config.mybatis.PostgresUuidTypeHandler;
 import studio.foliarc.biz.lore.entity.PromptTemplateEntity;
 import studio.foliarc.biz.lore.mapper.PromptTemplateMapper;
 import studio.foliarc.biz.novel.entity.BookEntity;
 import studio.foliarc.biz.novel.mapper.BookMapper;
+import studio.foliarc.biz.novel.mapper.ChapterMapper;
 import studio.foliarc.biz.outbox.entity.OutboxEventEntity;
 import studio.foliarc.biz.outbox.mapper.OutboxEventMapper;
 import studio.foliarc.biz.rag.entity.KnowledgeDocumentEntity;
@@ -82,7 +100,8 @@ import studio.foliarc.biz.run.mapper.AgentRunMapper;
 import studio.foliarc.biz.storage.MinioStorageService;
 import tools.jackson.databind.ObjectMapper;
 
-@SpringBootTest(properties = {"management.health.db.enabled=false", "management.health.redis.enabled=false"})
+@SpringBootTest(properties = {"management.health.db.enabled=false", "management.health.redis.enabled=false",
+        "foliarc.admin.bootstrap-email="})
 @AutoConfigureMockMvc
 class Phase6AdminSeparationTests {
 
@@ -112,6 +131,9 @@ class Phase6AdminSeparationTests {
     @MockitoBean private KnowledgeGrantMapper grantMapper;
     @MockitoBean private BookKnowledgeBindingMapper bindingMapper;
     @MockitoBean private BookMapper bookMapper;
+    @MockitoBean private ChapterMapper chapterMapper;
+    @MockitoBean private JdbcClient jdbc;
+    @MockitoBean private BillingService billingService;
     @MockitoBean private AdminAuditLogMapper auditMapper;
     @MockitoBean private MinioStorageService minioStorage;
     @MockitoBean private PlatformTransactionManager transactionManager;
@@ -121,8 +143,9 @@ class Phase6AdminSeparationTests {
         var configuration = new MybatisConfiguration();
         configuration.getTypeHandlerRegistry().register(PostgresUuidTypeHandler.class);
         var assistant = new MapperBuilderAssistant(configuration, "phase6-admin");
-        for (Class<?> type : List.of(OutboxEventEntity.class, AgentRunEventEntity.class, AgentCheckpointEntity.class,
-                GuardrailAuditLogEntity.class, PromptTemplateEntity.class, KnowledgeDocumentEntity.class)) {
+        for (Class<?> type : List.of(OutboxEventEntity.class, AgentRunEntity.class, AgentRunEventEntity.class,
+                AgentCheckpointEntity.class, GuardrailAuditLogEntity.class, PromptTemplateEntity.class,
+                KnowledgeDocumentEntity.class, UserEntity.class, BookEntity.class)) {
             TableInfoHelper.initTableInfo(assistant, type);
         }
     }
@@ -131,6 +154,7 @@ class Phase6AdminSeparationTests {
     void mockTransaction() {
         agent.server().reset();
         when(transactionManager.getTransaction(any())).thenAnswer(call -> new SimpleTransactionStatus());
+        when(userMapper.selectById(ADMIN.userId())).thenReturn(user(ADMIN));
     }
 
     @Test
@@ -156,7 +180,6 @@ class Phase6AdminSeparationTests {
 
     @Test
     void protectedRoutesRejectWebTokensEvenWhenTheUserIsAnAdmin() throws Exception {
-        when(userMapper.selectById(ADMIN.userId())).thenReturn(user(ADMIN));
         for (var principal : List.of(AUTHOR, ADMIN)) {
             String webToken = jwtTokenService.issueAccessToken(principal);
             mvc.perform(get("/api/v1/admin/auth/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + webToken))
@@ -436,6 +459,259 @@ class Phase6AdminSeparationTests {
         assertThat(audit.getValue().getAction()).isEqualTo("EVAL_RUN");
         assertThat(audit.getValue().getTargetType()).isEqualTo("GOLDEN_EVAL");
         assertThat(json.readTree(audit.getValue().getAfterJson()).get("passedCases").asInt()).isEqualTo(30);
+    }
+
+    @Test
+    void listsUsersWithLiteralSearchRoleLimitAndBookCount() throws Exception {
+        var statement = mock(JdbcClient.StatementSpec.class, RETURNS_SELF);
+        when(jdbc.sql(anyString())).thenReturn(statement);
+        when(statement.query(ArgumentMatchers.<RowMapper<AdminUser>>any())).thenAnswer(call -> {
+            ResultSet row = mock(ResultSet.class);
+            when(row.getObject("id", UUID.class)).thenReturn(AUTHOR.userId());
+            when(row.getString("email")).thenReturn(AUTHOR.email());
+            when(row.getString("username")).thenReturn(AUTHOR.username());
+            when(row.getString("role")).thenReturn("AUTHOR");
+            when(row.getString("plan_code")).thenReturn("FREE");
+            when(row.getLong("book_count")).thenReturn(4L);
+            when(row.getLong("balance_micros")).thenReturn(12_500_000L);
+            return mappedRows(List.of(call.<RowMapper<AdminUser>>getArgument(0).mapRow(row, 0)));
+        });
+
+        mvc.perform(get("/api/v1/admin/users").header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .param("q", " AuThOr% ").param("role", "AUTHOR").param("limit", "12"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(AUTHOR.userId().toString()))
+                .andExpect(jsonPath("$[0].email").value(AUTHOR.email()))
+                .andExpect(jsonPath("$[0].bookCount").value(4))
+                .andExpect(jsonPath("$[0].balanceCredits").value(12.5));
+
+        verify(jdbc).sql(argThat(sql -> sql.contains("STRPOS(LOWER(u.email), LOWER(:q))")
+                && sql.contains("STRPOS(LOWER(u.username), LOWER(:q))") && sql.contains("u.role = :role")
+                && sql.contains("WHERE owner_id = u.id") && sql.contains("LIMIT :limit")));
+        verify(statement).param("q", "AuThOr%");
+        verify(statement).param("role", "AUTHOR");
+        verify(statement).param("limit", 12);
+    }
+
+    @Test
+    void roleChangeRecordsBeforeAfterAndMakesDemotionEffectiveForAnIssuedAdminToken() throws Exception {
+        var targetAdmin = new AuthenticatedUser(AUTHOR.userId(), AUTHOR.email(), AUTHOR.username(), "ADMIN");
+        var target = user(targetAdmin);
+        String targetToken = "Bearer " + jwtTokenService.issueAccessToken(targetAdmin, JwtTokenService.AUD_ADMIN, 7200);
+        when(userMapper.selectOne(any())).thenAnswer(call -> {
+            LambdaQueryWrapper<?> query = call.getArgument(0);
+            assertThat(query.getSqlSegment()).contains("FOR NO KEY UPDATE");
+            assertThat(query.getParamNameValuePairs().values()).contains(target.getId());
+            return target;
+        });
+        when(userMapper.selectById(target.getId())).thenReturn(target);
+        when(userMapper.updateById(any(UserEntity.class))).thenAnswer(call -> {
+            UserEntity update = call.getArgument(0);
+            target.setRole(update.getRole());
+            return 1;
+        });
+
+        var response = mvc.perform(put("/api/v1/admin/users/{userId}/role", target.getId())
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"AUTHOR\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(target.getId().toString()))
+                .andExpect(jsonPath("$.email").value(target.getEmail()))
+                .andExpect(jsonPath("$.username").value(target.getUsername()))
+                .andExpect(jsonPath("$.role").value("AUTHOR"))
+                .andExpect(jsonPath("$.passwordHash").doesNotExist())
+                .andReturn().getResponse();
+
+        var update = ArgumentCaptor.forClass(UserEntity.class);
+        verify(userMapper).updateById(update.capture());
+        assertThat(update.getValue().getId()).isEqualTo(target.getId());
+        assertThat(update.getValue().getRole()).isEqualTo("AUTHOR");
+        var audit = ArgumentCaptor.forClass(AdminAuditLogEntity.class);
+        verify(auditMapper).insert(audit.capture());
+        assertThat(audit.getValue().getAction()).isEqualTo("USER_ROLE_CHANGE");
+        assertThat(audit.getValue().getTargetId()).isEqualTo(target.getId().toString());
+        assertThat(json.readTree(audit.getValue().getBeforeJson()).get("role").asString()).isEqualTo("ADMIN");
+        assertThat(json.readTree(audit.getValue().getAfterJson()).get("role").asString()).isEqualTo("AUTHOR");
+        assertThat(audit.getValue().getTraceId()).matches("[0-9a-f]{32}")
+                .isEqualTo(response.getHeader(TraceContext.HEADER_NAME));
+
+        mvc.perform(get("/api/v1/admin/auth/me").header(HttpHeaders.AUTHORIZATION, targetToken))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void rejectsInvalidRoleAndSelfDemotionBeforeAnyMutation() throws Exception {
+        mvc.perform(put("/api/v1/admin/users/{userId}/role", AUTHOR.userId())
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"OWNER\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_ROLE"));
+        mvc.perform(put("/api/v1/admin/users/{userId}/role", ADMIN.userId())
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"AUTHOR\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CANNOT_DEMOTE_SELF"));
+
+        verify(userMapper, never()).updateById(any(UserEntity.class));
+        verifyNoInteractions(auditMapper);
+    }
+
+    @Test
+    void grantsCreditsWithinAdminRangeAndAuditsReasonAndNewBalance() throws Exception {
+        when(userMapper.selectById(AUTHOR.userId())).thenReturn(user(AUTHOR));
+        var summary = new BillingDtos.AccountSummary(AUTHOR.userId(), 5_010_000L, 5.01,
+                0L, 0.0, 100_000_000L, 100.0, 0L, 0.0, "2026-11", 0.0);
+        when(billingService.topUp(eq(AUTHOR.userId()), eq(0.01), anyString())).thenReturn(summary);
+
+        mvc.perform(post("/api/v1/admin/users/{userId}/credits", AUTHOR.userId())
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .header(TraceContext.HEADER_NAME, "admin-credit-grant")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"amountCredits\":0.01,\"reason\":\"活动奖励\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.userId").value(AUTHOR.userId().toString()))
+                .andExpect(jsonPath("$.balanceCredits").value(5.01));
+
+        var requestId = ArgumentCaptor.forClass(String.class);
+        verify(billingService).topUp(eq(AUTHOR.userId()), eq(0.01), requestId.capture());
+        assertThat(requestId.getValue()).matches("admin-grant-[0-9a-f-]{36}");
+        var audit = ArgumentCaptor.forClass(AdminAuditLogEntity.class);
+        verify(auditMapper).insert(audit.capture());
+        assertThat(audit.getValue().getAction()).isEqualTo("USER_CREDIT_GRANT");
+        assertThat(audit.getValue().getTargetId()).isEqualTo(AUTHOR.userId().toString());
+        assertThat(audit.getValue().getTraceId()).isEqualTo("admin-credit-grant");
+        var after = json.readTree(audit.getValue().getAfterJson());
+        assertThat(after.get("reason").asString()).isEqualTo("活动奖励");
+        assertThat(after.get("balanceCredits").asDouble()).isEqualTo(5.01);
+    }
+
+    @Test
+    void rejectsCreditAmountsOutsideTheAdminRangeAndUnknownUsers() throws Exception {
+        for (String amount : List.of("0", "100000.01")) {
+            mvc.perform(post("/api/v1/admin/users/{userId}/credits", AUTHOR.userId())
+                            .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"amountCredits\":" + amount + ",\"reason\":\"活动奖励\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.details.amountCredits").exists());
+        }
+        mvc.perform(post("/api/v1/admin/users/{userId}/credits", AUTHOR.userId())
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"amountCredits\":1,\"reason\":\"活动奖励\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+        verifyNoInteractions(billingService, auditMapper);
+    }
+
+    @Test
+    void listsUserBooksInUpdateOrderWithChapterStats() throws Exception {
+        var latest = new BookEntity();
+        latest.setId(UUID.randomUUID());
+        latest.setTitle("新卷");
+        latest.setGenreCode("XIANXIA_FANTASY");
+        latest.setUpdatedAt(OffsetDateTime.parse("2026-11-26T00:00:00Z"));
+        var older = new BookEntity();
+        older.setId(UUID.randomUUID());
+        older.setTitle("旧卷");
+        older.setUpdatedAt(latest.getUpdatedAt().minusDays(1));
+        when(bookMapper.selectList(any())).thenAnswer(call -> {
+            LambdaQueryWrapper<?> query = call.getArgument(0);
+            assertThat(query.getSqlSegment()).contains("owner_id =", "ORDER BY updated_at DESC");
+            assertThat(query.getParamNameValuePairs().values()).contains(AUTHOR.userId());
+            return List.of(latest, older);
+        });
+        var stats = new ChapterMapper.BookChapterStats();
+        stats.setBookId(latest.getId());
+        stats.setChapterCount(5);
+        stats.setTotalWordCount(12_345);
+        when(chapterMapper.findStatsByOwnerId(AUTHOR.userId())).thenReturn(List.of(stats));
+
+        mvc.perform(get("/api/v1/admin/users/{userId}/books", AUTHOR.userId())
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(latest.getId().toString()))
+                .andExpect(jsonPath("$[0].title").value(latest.getTitle()))
+                .andExpect(jsonPath("$[0].genreCode").value("XIANXIA_FANTASY"))
+                .andExpect(jsonPath("$[0].chapterCount").value(5))
+                .andExpect(jsonPath("$[0].totalWordCount").value(12_345))
+                .andExpect(jsonPath("$[0].updatedAt").exists())
+                .andExpect(jsonPath("$[1].id").value(older.getId().toString()))
+                .andExpect(jsonPath("$[1].chapterCount").value(0));
+    }
+
+    @Test
+    void listsActiveDocumentGrantsWithGranteeIdentityInCreationOrder() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        var now = OffsetDateTime.parse("2026-11-26T00:00:00Z");
+        var grant = new DocumentGrantRow(UUID.randomUUID(), documentId, AUTHOR.userId(), AUTHOR.email(),
+                AUTHOR.username(), "READ", now);
+        var older = new DocumentGrantRow(UUID.randomUUID(), documentId, ADMIN.userId(), ADMIN.email(),
+                ADMIN.username(), "READ", now.minusDays(1));
+        var statement = mock(JdbcClient.StatementSpec.class, RETURNS_SELF);
+        when(jdbc.sql(anyString())).thenReturn(statement);
+        var rows = mappedRows(List.of(grant, older));
+        when(statement.query(DocumentGrantRow.class)).thenReturn(rows);
+
+        mvc.perform(get("/api/v1/admin/knowledge/documents/{docId}/grants", documentId)
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].grantId").value(grant.grantId().toString()))
+                .andExpect(jsonPath("$[0].documentId").value(documentId.toString()))
+                .andExpect(jsonPath("$[0].userId").value(AUTHOR.userId().toString()))
+                .andExpect(jsonPath("$[0].email").value(AUTHOR.email()))
+                .andExpect(jsonPath("$[0].username").value(AUTHOR.username()))
+                .andExpect(jsonPath("$[0].permission").value("READ"))
+                .andExpect(jsonPath("$[0].createdAt").exists())
+                .andExpect(jsonPath("$[1].grantId").value(older.grantId().toString()));
+        verify(jdbc).sql(argThat(sql -> sql.contains("g.document_id = :docId") && sql.contains("JOIN users")
+                && sql.contains("d.deleted_at IS NULL") && sql.contains("ORDER BY g.created_at DESC")));
+        verify(statement).param("docId", documentId);
+    }
+
+    @Test
+    void traceIdFiltersRunsByDistinctEventRunIdsAlongsideStatusAndLimit() throws Exception {
+        UUID runId = UUID.randomUUID();
+        var event = new AgentRunEventEntity();
+        event.setRunId(runId);
+        var run = new AgentRunEntity();
+        run.setId(runId);
+        run.setStatus("PAUSED");
+        when(eventMapper.selectList(any())).thenAnswer(call -> {
+            LambdaQueryWrapper<?> query = call.getArgument(0);
+            assertThat(query.getSqlSelect()).isEqualTo("run_id");
+            assertThat(query.getSqlSegment()).contains("trace_id =", "GROUP BY run_id");
+            assertThat(query.getParamNameValuePairs().values()).containsExactly("trace-6.5");
+            return List.of(event);
+        });
+        when(runMapper.selectList(any())).thenAnswer(call -> {
+            LambdaQueryWrapper<?> query = call.getArgument(0);
+            assertThat(query.getSqlSegment()).contains("status =", "id IN", "LIMIT 5");
+            assertThat(query.getParamNameValuePairs().values()).containsExactlyInAnyOrder("PAUSED", runId);
+            return List.of(run);
+        });
+
+        mvc.perform(get("/api/v1/admin/traces/runs").header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .param("traceId", "trace-6.5").param("status", " paused ").param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(runId.toString()))
+                .andExpect(jsonPath("$[0].status").value("PAUSED"));
+    }
+
+    @Test
+    void unknownTraceIdReturnsAnEmptyListWithoutQueryingRuns() throws Exception {
+        mvc.perform(get("/api/v1/admin/traces/runs").header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .param("traceId", "missing-trace"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        verify(eventMapper).selectList(any());
+        verifyNoInteractions(runMapper);
+    }
+
+    private static <T> JdbcClient.MappedQuerySpec<T> mappedRows(List<T> rows) {
+        @SuppressWarnings("unchecked")
+        JdbcClient.MappedQuerySpec<T> spec = mock(JdbcClient.MappedQuerySpec.class);
+        when(spec.list()).thenReturn(rows);
+        return spec;
     }
 
     private static void assertRunQuery(LambdaQueryWrapper<?> query, UUID runId, String orderBy) {

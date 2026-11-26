@@ -328,6 +328,46 @@ export default function AdminBillingPage() {
       </section>
 
       {/* Model Breakdown + Recent Ledger */}
+      {overview && overview.modelBreakdown.length > 0 && (
+        <section className="rounded-xl border border-border bg-card p-4">
+          <h2 className="mb-3 text-sm font-semibold">分模型消耗与 KV Cache 命中统计</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left font-mono text-xs">
+              <thead className="border-b border-border text-[11px] text-muted-foreground">
+                <tr>
+                  <th className="py-2">模型别名</th>
+                  <th className="py-2">结算次数</th>
+                  <th className="py-2">Input / Cached Tokens</th>
+                  <th className="py-2">缓存命中率</th>
+                  <th className="py-2">Output Tokens</th>
+                  <th className="py-2 text-right">实际消耗 (Credits)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {overview.modelBreakdown.map((m) => {
+                  const hitPct =
+                    m.totalInputTokens > 0
+                      ? ((m.totalCachedTokens / m.totalInputTokens) * 100).toFixed(1)
+                      : "0.0";
+                  return (
+                    <tr key={m.modelAlias}>
+                      <td className="py-2 font-semibold text-blue-300">{m.modelAlias}</td>
+                      <td className="py-2">{m.runsCount}</td>
+                      <td className="py-2">
+                        {m.totalInputTokens.toLocaleString()} / {m.totalCachedTokens.toLocaleString()}
+                      </td>
+                      <td className="py-2 text-emerald-400">{hitPct}%</td>
+                      <td className="py-2">{m.totalOutputTokens.toLocaleString()}</td>
+                      <td className="py-2 text-right">{Number(m.totalSpentCredits).toFixed(4)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {overview && (
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="mb-3 text-sm font-semibold">最近全站记账流水 ({overview.recentLedger.length})</h2>

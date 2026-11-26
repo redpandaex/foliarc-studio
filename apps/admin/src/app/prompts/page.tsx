@@ -13,7 +13,7 @@ import {
 export default function AdminPromptsAndAuditPage() {
   const [prompts, setPrompts] = useState<PromptTemplateRow[]>([]);
   const [audits, setAudits] = useState<AdminAuditLogRow[]>([]);
-  const [name, setName] = useState("writer_system_core");
+  const [name, setName] = useState("novel_writer_system");
   const [stage, setStage] = useState("DRAFT");
   const [description, setDescription] = useState("");
   const [templateBody, setTemplateBody] = useState("");

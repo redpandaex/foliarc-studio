@@ -1,9 +1,11 @@
 import hmac
 import platform
+import re
 from contextlib import asynccontextmanager
 from typing import Any
+from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -27,7 +29,21 @@ from foliarc_agent.streaming.protocol import (
 )
 from foliarc_agent.streaming.runner import RunManager
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
+_SAFE_TRACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
+
+
+def extract_or_generate_trace_id(request: Request) -> str:
+    raw = (request.headers.get("X-Trace-Id") or "").strip()
+    if raw and _SAFE_TRACE_RE.match(raw):
+        return raw
+    tp = (request.headers.get("traceparent") or "").strip()
+    if tp:
+        m = _TRACEPARENT_RE.match(tp)
+        if m and m.group(1) != "0" * 32:
+            return m.group(1).lower()
+    return uuid4().hex
 
 
 class InternalRagSearchRequest(BaseModel):
@@ -117,6 +133,15 @@ app = FastAPI(
     description="Python Agent Loop, Tool/Skill/MCP, Multi-Agent, Milvus Hybrid RAG, Guardrails & Hardened Docker Sandbox",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = extract_or_generate_trace_id(request)
+    request.state.trace_id = trace_id
+    response = await call_next(request)
+    response.headers["X-Trace-Id"] = trace_id
+    return response
 
 
 def verify_internal_token(x_internal_token: str | None = Header(default=None)) -> None:
@@ -267,9 +292,11 @@ async def internal_run_evals() -> dict[str, Any]:
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(verify_internal_token)],
 )
-async def start_run(req: RunStartRequest) -> dict[str, Any]:
+async def start_run(request: Request, req: RunStartRequest) -> dict[str, Any]:
+    if not (req.trace_id or "").strip():
+        req = req.model_copy(update={"trace_id": getattr(request.state, "trace_id", "")})
     await app.state.run_manager.start_run(req)
-    return {"accepted": True, "run_id": req.run_id}
+    return {"accepted": True, "run_id": req.run_id, "trace_id": req.trace_id}
 
 
 @app.post(
@@ -277,11 +304,13 @@ async def start_run(req: RunStartRequest) -> dict[str, Any]:
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(verify_internal_token)],
 )
-async def resume_run(run_id: str, req: RunResumeRequest) -> dict[str, Any]:
+async def resume_run(request: Request, run_id: str, req: RunResumeRequest) -> dict[str, Any]:
     if req.run_id != run_id:
         raise HTTPException(status_code=400, detail="run_id mismatch")
+    if not (req.trace_id or "").strip():
+        req = req.model_copy(update={"trace_id": getattr(request.state, "trace_id", "")})
     await app.state.run_manager.resume_run(req)
-    return {"accepted": True, "run_id": run_id}
+    return {"accepted": True, "run_id": run_id, "trace_id": req.trace_id}
 
 
 @app.post(

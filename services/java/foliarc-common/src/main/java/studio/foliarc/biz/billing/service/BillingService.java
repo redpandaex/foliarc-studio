@@ -19,6 +19,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -356,14 +357,13 @@ public class BillingService {
     }
 
     public BillingDtos.AccountSummary topUp(UUID userId, double amountCredits, String clientRequestId) {
-        ensureAccount(userId);
         long addMicros = Math.round(amountCredits * ModelPricing.MICROS_PER_CREDIT);
         String reqId = (clientRequestId != null && !clientRequestId.isBlank())
                 ? "TOPUP:" + clientRequestId.trim()
                 : "TOPUP:" + UUID.randomUUID();
 
-        return executeWithAccountLock(userId, () -> runWithOptimisticRetry(() -> txTemplate.execute(status -> {
-            BillingAccountEntity acct = accountMapper.selectById(userId);
+        boolean inTransaction = TransactionSynchronizationManager.isActualTransactionActive();
+        return updateAccount(userId, inTransaction, acct -> {
             if (findByRequestId(reqId) != null) {
                 return toAccountSummary(acct);
             }
@@ -388,7 +388,7 @@ public class BillingService {
                     "自助充值 +" + ModelPricing.toCredits(addMicros) + " Credits"
             );
             return toAccountSummary(acct);
-        })));
+        });
     }
 
     public BillingDtos.AccountSummary updateMonthlyBudget(UUID userId, double monthlyBudgetCredits) {

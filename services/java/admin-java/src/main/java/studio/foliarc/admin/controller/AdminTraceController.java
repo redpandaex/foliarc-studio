@@ -43,9 +43,10 @@ public class AdminTraceController {
 
     @GetMapping("/runs")
     public List<RunSummary> listRuns(@RequestParam(required = false) String status,
+                                     @RequestParam(required = false) String traceId,
                                      @RequestParam(defaultValue = "30") int limit) {
         String filter = AdminQuery.normalizeStatus(status);
-        return runMapper.selectList(Wrappers.<AgentRunEntity>lambdaQuery()
+        var query = Wrappers.<AgentRunEntity>lambdaQuery()
                 .select(AgentRunEntity::getId, AgentRunEntity::getBookId, AgentRunEntity::getChapterId,
                         AgentRunEntity::getOwnerId, AgentRunEntity::getAction, AgentRunEntity::getStatus,
                         AgentRunEntity::getModelAlias, AgentRunEntity::getInputTokens, AgentRunEntity::getCachedTokens,
@@ -53,7 +54,19 @@ public class AdminTraceController {
                         AgentRunEntity::getUpdatedAt)
                 .eq(filter != null, AgentRunEntity::getStatus, filter)
                 .orderByDesc(AgentRunEntity::getCreatedAt, AgentRunEntity::getId)
-                .last(AdminQuery.limit(limit))).stream().map(RunSummary::from).toList();
+                .last(AdminQuery.limit(limit));
+        if (traceId != null && !traceId.isBlank()) {
+            List<UUID> runIds = eventMapper.selectList(Wrappers.<AgentRunEventEntity>lambdaQuery()
+                            .select(AgentRunEventEntity::getRunId)
+                            .eq(AgentRunEventEntity::getTraceId, traceId)
+                            .groupBy(AgentRunEventEntity::getRunId))
+                    .stream().map(AgentRunEventEntity::getRunId).toList();
+            if (runIds.isEmpty()) {
+                return List.of();
+            }
+            query.in(AgentRunEntity::getId, runIds);
+        }
+        return runMapper.selectList(query).stream().map(RunSummary::from).toList();
     }
 
     @GetMapping("/runs/{runId}")

@@ -1,16 +1,21 @@
 package studio.foliarc.biz.novel.controller;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.util.UriUtils;
 
 import jakarta.validation.Valid;
 import studio.foliarc.biz.auth.AuthenticatedUser;
 import studio.foliarc.biz.memory.service.StoryMemoryContextService;
 import studio.foliarc.biz.novel.dto.NovelDtos;
+import studio.foliarc.biz.novel.service.BookExportService;
 import studio.foliarc.biz.novel.service.BookService;
 
 @RestController
@@ -19,10 +24,12 @@ public class BookController {
 
     private final BookService books;
     private final StoryMemoryContextService memoryContextService;
+    private final BookExportService bookExports;
 
-    public BookController(BookService books, StoryMemoryContextService memoryContextService) {
+    public BookController(BookService books, StoryMemoryContextService memoryContextService, BookExportService bookExports) {
         this.books = books;
         this.memoryContextService = memoryContextService;
+        this.bookExports = bookExports;
     }
 
     @GetMapping
@@ -45,6 +52,18 @@ public class BookController {
             @PathVariable UUID bookId
     ) {
         return books.getBook(actor.userId(), bookId);
+    }
+
+    @GetMapping("/{bookId}/export")
+    public ResponseEntity<byte[]> exportBook(@AuthenticationPrincipal AuthenticatedUser actor, @PathVariable UUID bookId,
+                                             @RequestParam(defaultValue = "epub") String format) {
+        var file = bookExports.exportBook(actor.userId(), bookId, format);
+        String extension = file.extension();
+        String filename = UriUtils.encode(file.title(), StandardCharsets.UTF_8) + "." + extension;
+        return ResponseEntity.ok().contentType(file.contentType())
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"book." + extension
+                        + "\"; filename*=UTF-8''" + filename)
+                .body(file.content());
     }
 
     @PatchMapping("/{bookId}")

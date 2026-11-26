@@ -28,6 +28,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import studio.foliarc.biz.billing.ModelPricing;
 import studio.foliarc.biz.billing.service.BillingService;
 import studio.foliarc.biz.common.BizException;
+import studio.foliarc.biz.common.TraceContext;
 import studio.foliarc.biz.gateway.RedisRateLimiterService;
 import studio.foliarc.biz.genre.GenreProfileRegistry;
 import studio.foliarc.biz.memory.service.StoryMemoryContextService;
@@ -673,8 +674,12 @@ public class AgentRunService {
     }
 
     private void dispatchToAgent(String path, Map<String, Object> body, AgentRunEntity run, boolean releaseOnFailure) {
+        String traceId = TraceContext.currentTraceId();
+        if (traceId != null) {
+            body.put("trace_id", traceId);
+        }
         try {
-            Runnable call = () -> agentWebClient.post()
+            Runnable call = () -> agentPost(traceId)
                     .uri(path)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body)
@@ -710,7 +715,7 @@ public class AgentRunService {
 
     private void signalAgentControl(UUID runId, String signal) {
         try {
-            agentWebClient.post()
+            agentPost(TraceContext.currentTraceId())
                     .uri("/internal/v1/runs/{runId}/control", runId)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(Map.of("signal", signal))
@@ -722,6 +727,14 @@ public class AgentRunService {
         }
     }
 
+    private WebClient.RequestBodyUriSpec agentPost(String traceId) {
+        var request = agentWebClient.post();
+        if (traceId != null) {
+            request.header(TraceContext.HEADER_NAME, traceId);
+        }
+        return request;
+    }
+
     private RecordId appendCancelledEventToStream(UUID runId, int seq, String accumulatedText) {
         int chars = accumulatedText == null ? 0 : accumulatedText.length();
         String key = RedisStreamSseBridge.streamKey(runId);
@@ -729,7 +742,7 @@ public class AgentRunService {
                 "type", "done",
                 "seq", String.valueOf(seq),
                 "run_id", runId.toString(),
-                "trace_id", "",
+                "trace_id", Objects.requireNonNullElse(TraceContext.currentTraceId(), ""),
                 "agent", "writer",
                 "timestamp", Instant.now().toString(),
                 "payload", "{\"status\":\"cancelled\",\"accumulated_chars\":" + chars + "}"

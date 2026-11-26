@@ -7,7 +7,7 @@ COMPOSE_FILE := infra/docker-compose.yml
 ENV_FILE := .env
 
 .PHONY: help env infra-core-up infra-core-down infra-rag-up infra-rag-down infra-ps \
-        app-up app-down app-logs admin-up admin-down full-up \
+        app-up app-down app-logs admin-up admin-down full-up smoke \
         dev-py dev-java dev-admin-java dev-web dev-admin-web \
         test-py test-java test-web test-admin test-all
 
@@ -110,5 +110,8 @@ test-web:
 
 test-admin:
 	cd apps/admin && pnpm lint && pnpm exec tsc --noEmit
+
+smoke:
+	python3 scripts/e2e_smoke.py
 
 test-all: test-py test-java test-web test-admin

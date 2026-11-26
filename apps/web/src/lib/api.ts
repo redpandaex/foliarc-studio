@@ -708,6 +708,41 @@ export const booksApi = {
   remove(bookId: string): Promise<void> {
     return request<void>(`/api/v1/books/${bookId}`, { method: "DELETE" });
   },
+  async exportBook(
+    bookId: string,
+    format: "epub" | "md" | "txt",
+    fallbackTitle = "book",
+  ): Promise<void> {
+    async function fetchBlob(retry: boolean): Promise<Response> {
+      const headers = new Headers();
+      if (memoryAccessToken) {
+        headers.set("Authorization", `Bearer ${memoryAccessToken}`);
+      }
+      const res = await fetch(
+        `${API_BASE}/api/v1/books/${bookId}/export?format=${format}`,
+        { headers, credentials: "include" },
+      );
+      if (res.status === 401 && retry) {
+        const refreshed = await refreshSession();
+        if (refreshed) return fetchBlob(false);
+      }
+      return res;
+    }
+    const res = await fetchBlob(true);
+    if (!res.ok) {
+      throw await parseError(res);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeTitle = fallbackTitle.replace(/[\\/:*?"<>|]+/g, "_").trim() || "book";
+    a.href = url;
+    a.download = `${safeTitle}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
   getCharter(bookId: string): Promise<BookCharterItem> {
     return request<BookCharterItem>(`/api/v1/books/${bookId}/charter`);
   },

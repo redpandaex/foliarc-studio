@@ -2,7 +2,6 @@ package studio.foliarc.admin.service;
 
 import java.util.UUID;
 
-import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import studio.foliarc.biz.audit.entity.AdminAuditLogEntity;
 import studio.foliarc.biz.audit.mapper.AdminAuditLogMapper;
 import studio.foliarc.biz.auth.AuthenticatedUser;
+import studio.foliarc.biz.common.TraceContext;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -39,8 +39,8 @@ public class AdminAuditService {
         log.setBeforeJson(before == null ? null : objectMapper.writeValueAsString(before));
         log.setAfterJson(after == null ? null : objectMapper.writeValueAsString(after));
         log.setClientIp(boundedContext(request.getRemoteAddr()));
-        String traceId = MDC.get("traceId");
-        log.setTraceId(boundedContext(traceId == null ? request.getHeader("X-Trace-Id") : traceId));
+        String traceId = TraceContext.currentTraceId();
+        log.setTraceId(boundedContext(traceId == null ? request.getHeader(TraceContext.HEADER_NAME) : traceId));
         auditMapper.insert(log);
     }
 

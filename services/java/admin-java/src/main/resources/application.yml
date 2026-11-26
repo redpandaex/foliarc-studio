@@ -42,6 +42,8 @@ management:
       enabled: false
 
 foliarc:
+  admin:
+    bootstrap-email: ${ADMIN_BOOTSTRAP_EMAIL:}
   agent:
     base-url: ${AGENT_PY_BASE_URL:http://localhost:8000}
     internal-token: ${INTERNAL_SERVICE_TOKEN:foliarc-internal-dev-token-change-me}

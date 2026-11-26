@@ -5,8 +5,12 @@ import { AdminShell } from "@/components/admin-shell";
 import {
   AdminApiError,
   adminKnowledgeApi,
+  adminUsersApi,
   type AdminLibraryDocument,
+  type AdminUserBook,
+  type AdminUserRow,
   type DebugRagSearchResponse,
+  type DocumentGrantRow,
 } from "@/lib/admin-api";
 
 const GENRE_OPTIONS = [
@@ -35,6 +39,10 @@ export default function AdminKnowledgePage() {
   const [grantDocId, setGrantDocId] = useState("");
   const [grantUserId, setGrantUserId] = useState("");
   const [grantNote, setGrantNote] = useState("");
+  const [activeGrantsDoc, setActiveGrantsDoc] = useState<AdminLibraryDocument | null>(null);
+  const [activeGrants, setActiveGrants] = useState<DocumentGrantRow[]>([]);
+  const [users, setUsers] = useState<AdminUserRow[]>([]);
+  const [ownerBooks, setOwnerBooks] = useState<AdminUserBook[]>([]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOwnerId, setSearchOwnerId] = useState("");
@@ -57,11 +65,14 @@ export default function AdminKnowledgePage() {
 
   useEffect(() => {
     let active = true;
-    adminKnowledgeApi
-      .list()
-      .then((list) => {
+    Promise.all([
+      adminKnowledgeApi.list(),
+      adminUsersApi.list(undefined, undefined, 100).catch(() => [] as AdminUserRow[]),
+    ])
+      .then(([list, userList]) => {
         if (!active) return;
         setDocs(list);
+        setUsers(userList);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -123,6 +134,46 @@ export default function AdminKnowledgePage() {
     }
   }
 
+  async function openGrants(doc: AdminLibraryDocument) {
+    setActiveGrantsDoc(doc);
+    setGrantDocId(doc.id);
+    setError(null);
+    try {
+      const list = await adminKnowledgeApi.listGrants(doc.id);
+      setActiveGrants(list);
+    } catch (err) {
+      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载授权记录失败");
+    }
+  }
+
+  async function handleRevokeGrant(docId: string, userId: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      await adminKnowledgeApi.revoke(docId, userId);
+      setActiveGrants((prev) => prev.filter((g) => g.userId !== userId));
+      setNotice("已撤销该作者对该资料的定向访问授权，并写入审计日志。");
+    } catch (err) {
+      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "撤销授权失败");
+    }
+  }
+
+  async function handleSelectSearchOwner(ownerId: string) {
+    setSearchOwnerId(ownerId);
+    setSearchBookId("");
+    setOwnerBooks([]);
+    if (!ownerId.trim()) return;
+    try {
+      const list = await adminUsersApi.listBooks(ownerId.trim());
+      setOwnerBooks(list);
+      if (list.length > 0) {
+        setSearchBookId(list[0].id);
+      }
+    } catch {
+      setOwnerBooks([]);
+    }
+  }
+
   async function handleGrant(e: FormEvent) {
     e.preventDefault();
     if (!grantDocId || !grantUserId.trim()) return;
@@ -133,6 +184,10 @@ export default function AdminKnowledgePage() {
       setNotice("已完成定向资料授权，并写入审计日志。");
       setGrantUserId("");
       setGrantNote("");
+      if (activeGrantsDoc && activeGrantsDoc.id === grantDocId) {
+        const list = await adminKnowledgeApi.listGrants(grantDocId);
+        setActiveGrants(list);
+      }
     } catch (err) {
       setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "授权失败");
     }
@@ -318,10 +373,10 @@ export default function AdminKnowledgePage() {
                         <div className="flex justify-end gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setGrantDocId(d.id)}
+                            onClick={() => void openGrants(d)}
                             className="rounded border border-border px-2 py-0.5 text-[11px] hover:bg-muted"
                           >
-                            授权
+                            授权/明细
                           </button>
                           <button
                             type="button"
@@ -353,12 +408,26 @@ export default function AdminKnowledgePage() {
             />
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">作者 User ID (UUID)</label>
+            <label className="text-xs text-muted-foreground">目标作者</label>
+            {users.length > 0 && (
+              <select
+                value={grantUserId}
+                onChange={(e) => setGrantUserId(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+              >
+                <option value="">-- 从作者列表选择 --</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.username} ({u.email})
+                  </option>
+                ))}
+              </select>
+            )}
             <input
               required
               value={grantUserId}
               onChange={(e) => setGrantUserId(e.target.value)}
-              placeholder="UUID"
+              placeholder="或直接输入作者 User UUID"
               className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs"
             />
           </div>
@@ -380,6 +449,50 @@ export default function AdminKnowledgePage() {
         </form>
       </section>
 
+      {/* Active Grants Drawer/Section */}
+      {activeGrantsDoc && (
+        <section className="rounded-xl border border-blue-500/40 bg-card p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">
+              「{activeGrantsDoc.title}」定向授权明细 ({activeGrants.length})
+            </h2>
+            <button
+              type="button"
+              onClick={() => setActiveGrantsDoc(null)}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              关闭
+            </button>
+          </div>
+          {activeGrants.length === 0 ? (
+            <p className="py-3 text-xs text-muted-foreground">当前暂无定向授权记录</p>
+          ) : (
+            <div className="space-y-1.5">
+              {activeGrants.map((g) => (
+                <div
+                  key={g.grantId}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background/50 px-3 py-2 text-xs"
+                >
+                  <div>
+                    <span className="font-medium">{g.username}</span>
+                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                      {g.email} · {g.permission}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleRevokeGrant(g.documentId, g.userId)}
+                    className="rounded border border-rose-500/40 px-2.5 py-0.5 text-[11px] text-rose-300 hover:bg-rose-500/10"
+                  >
+                    撤销授权
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* RAG Debug Search */}
       <section className="space-y-3 rounded-xl border border-border bg-card p-5">
         <h2 className="text-sm font-semibold">三层作用域 Hybrid RAG 调试检索</h2>
@@ -391,21 +504,41 @@ export default function AdminKnowledgePage() {
             placeholder="输入测试查询词（如：明清盐引勘合）"
             className="rounded-md border border-border bg-background px-3 py-1.5 text-xs sm:col-span-2"
           />
-          <input
-            required
+          <select
             value={searchOwnerId}
-            onChange={(e) => setSearchOwnerId(e.target.value)}
-            placeholder="ownerId (UUID 必填)"
-            className="rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs"
-          />
+            onChange={(e) => void handleSelectSearchOwner(e.target.value)}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs"
+          >
+            <option value="">-- 选择作者 (ownerId) --</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.username} ({u.email})
+              </option>
+            ))}
+          </select>
           <div className="flex gap-2">
-            <input
-              required
-              value={searchBookId}
-              onChange={(e) => setSearchBookId(e.target.value)}
-              placeholder="bookId (UUID 必填)"
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs"
-            />
+            {ownerBooks.length > 0 ? (
+              <select
+                required
+                value={searchBookId}
+                onChange={(e) => setSearchBookId(e.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+              >
+                {ownerBooks.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    《{b.title}》({b.chapterCount}章)
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                required
+                value={searchBookId}
+                onChange={(e) => setSearchBookId(e.target.value)}
+                placeholder="bookId (UUID)"
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs"
+              />
+            )}
             <input
               type="number"
               value={searchMaxCh}
