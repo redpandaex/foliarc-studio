@@ -129,6 +129,7 @@ class Phase6AdminSeparationTests {
 
     @BeforeEach
     void mockTransaction() {
+        agent.server().reset();
         when(transactionManager.getTransaction(any())).thenAnswer(call -> new SimpleTransactionStatus());
     }
 
@@ -415,6 +416,26 @@ class Phase6AdminSeparationTests {
         verify(auditMapper).insert(audit.capture());
         assertThat(audit.getValue().getAction()).isEqualTo("DOC_REPROCESS");
         assertThat(json.readTree(audit.getValue().getBeforeJson()).get("docVersion").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void goldenEvalRunnerProxiesToAgentAndRecordsAuditSummary() throws Exception {
+        agent.server().expect(requestTo("http://agent.example.test/internal/v1/evals/run"))
+                .andRespond(withSuccess("""
+                        {"total_cases":30,"passed_cases":30,"overall_pass_rate":1.0,"duration_ms":420,"category_scores":{"GENRE_ROUTING":1.0},"cases":[]}
+                        """, MediaType.APPLICATION_JSON));
+        mvc.perform(post("/api/v1/admin/evals/run").header(HttpHeaders.AUTHORIZATION, adminBearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total_cases").value(30))
+                .andExpect(jsonPath("$.passed_cases").value(30))
+                .andExpect(jsonPath("$.overall_pass_rate").value(1.0));
+        agent.server().verify();
+
+        var audit = ArgumentCaptor.forClass(AdminAuditLogEntity.class);
+        verify(auditMapper).insert(audit.capture());
+        assertThat(audit.getValue().getAction()).isEqualTo("EVAL_RUN");
+        assertThat(audit.getValue().getTargetType()).isEqualTo("GOLDEN_EVAL");
+        assertThat(json.readTree(audit.getValue().getAfterJson()).get("passedCases").asInt()).isEqualTo(30);
     }
 
     private static void assertRunQuery(LambdaQueryWrapper<?> query, UUID runId, String orderBy) {

@@ -18,12 +18,27 @@ import {
   type StreamConnectionState,
 } from "@/lib/sse-client";
 
+export interface SelectionEditTask {
+  mode: "REWRITE" | "EXPAND";
+  text: string;
+  start: number;
+  end: number;
+}
+
 interface AiCopilotPanelProps {
   bookId: string;
   chapterId: string | null;
   sectionId?: string | null;
   chapterNo?: number | null;
   chapterContent: string;
+  selectionTask?: SelectionEditTask | null;
+  onClearSelectionTask?: () => void;
+  onReviewDiff?: (payload: {
+    originalText: string;
+    proposedText: string;
+    mode: "FULL" | "SELECTION";
+    selectionRange?: { start: number; end: number };
+  }) => void;
   onAppendText: (text: string) => void;
   onReplaceText: (text: string) => void;
   onRunStateChange?: (chapterId: string | null, state: StreamConnectionState) => void;
@@ -137,6 +152,9 @@ export function AiCopilotPanel({
   sectionId,
   chapterNo,
   chapterContent,
+  selectionTask,
+  onClearSelectionTask,
+  onReviewDiff,
   onAppendText,
   onReplaceText,
   onRunStateChange,
@@ -785,12 +803,29 @@ export function AiCopilotPanel({
     setDiffReviewOpen(false);
     setAcceptedParagraphs({});
 
-    const effectiveMode: RunMode =
-      action === "OUTLINE" && mode === "MULTI_AGENT" ? "AGENT" : mode;
+    const effectiveAction: RunAction = selectionTask ? "REWRITE" : action;
+    const effectiveMode: RunMode = selectionTask
+      ? mode === "MULTI_AGENT"
+        ? "AGENT"
+        : mode
+      : effectiveAction === "OUTLINE" && mode === "MULTI_AGENT"
+        ? "AGENT"
+        : mode;
     const effectiveApproval =
-      effectiveMode === "MULTI_AGENT" && action !== "OUTLINE"
+      !selectionTask && effectiveMode === "MULTI_AGENT" && effectiveAction !== "OUTLINE"
         ? requireOutlineApproval
         : false;
+    const effectiveInstruction = selectionTask
+      ? [
+          selectionTask.mode === "EXPAND"
+            ? "请仅针对以下【划选片段】进行细节扩写（丰富动作、感官氛围与情绪张力，保持与上下文无缝衔接），只输出改写扩写后的该段正文，不要复述其他未选中段落："
+            : "请仅针对以下【划选片段】进行精细改写润色（提升文笔节奏与人物神态，严格保持既有事实设定与上下句衔接），只输出改写后的该段正文，不要复述其他未选中段落：",
+          instruction.trim() ? `作者补充要求：${instruction.trim()}` : "",
+          `【划选片段】\n${selectionTask.text}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : instruction;
     const initialAgent = effectiveMode === "MULTI_AGENT" ? "director" : "writer";
     setActiveAgent(initialAgent);
 
@@ -800,9 +835,9 @@ export function AiCopilotPanel({
         chapterId: chapterId ?? undefined,
         sectionId: sectionId ?? undefined,
         mode: effectiveMode,
-        action,
+        action: effectiveAction,
         modelAlias,
-        instruction,
+        instruction: effectiveInstruction,
         chapterContext: chapterContent,
         requireOutlineApproval: effectiveApproval,
         povCharacter: povCharacter.trim() || undefined,
@@ -813,9 +848,9 @@ export function AiCopilotPanel({
       flushSnapshotNow({
         runId: created.id,
         mode: effectiveMode,
-        action,
+        action: effectiveAction,
         modelAlias,
-        instruction,
+        instruction: effectiveInstruction,
         lastEventId: null,
         lastSeq: 0,
         text: "",
@@ -828,9 +863,9 @@ export function AiCopilotPanel({
       });
       attachStream(created.id, null, {
         mode: effectiveMode,
-        action,
+        action: effectiveAction,
         modelAlias,
-        instruction,
+        instruction: effectiveInstruction,
         text: "",
         thought: "",
         seq: 0,
@@ -1033,6 +1068,31 @@ export function AiCopilotPanel({
             </span>
           )}
         </div>
+
+        {/* Inline Selection Task Banner */}
+        {selectionTask && (
+          <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-primary">
+                {selectionTask.mode === "EXPAND"
+                  ? `划词扩写模式（已选 ${selectionTask.text.length} 字）`
+                  : `划词改写模式（已选 ${selectionTask.text.length} 字）`}
+              </span>
+              {onClearSelectionTask && (
+                <button
+                  type="button"
+                  onClick={onClearSelectionTask}
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  取消划词
+                </button>
+              )}
+            </div>
+            <p className="line-clamp-2 whitespace-pre-wrap rounded bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">
+              {selectionTask.text}
+            </p>
+          </div>
+        )}
 
         {/* Action Pills */}
         <div className="grid grid-cols-3 gap-1">
@@ -1412,30 +1472,75 @@ export function AiCopilotPanel({
 
       {/* Adopt Output Actions */}
       {generatedText && !isRunning && (
-        <div className="border-t border-border bg-card p-3">
-          <div className="flex gap-1.5">
-            <Button
-              size="xs"
-              className="flex-1"
-              onClick={() => onAppendText(generatedText)}
-            >
-              追加到正文
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={handleOpenDiffReview}
-            >
-              {diffReviewOpen ? "全文" : "逐段挑选"}
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => onReplaceText(generatedText)}
-            >
-              替换正文
-            </Button>
-          </div>
+        <div className="space-y-1.5 border-t border-border bg-card p-3">
+          {selectionTask && onReviewDiff ? (
+            <div className="flex gap-1.5">
+              <Button
+                size="xs"
+                className="flex-1"
+                onClick={() =>
+                  onReviewDiff({
+                    originalText: selectionTask.text,
+                    proposedText: generatedText,
+                    mode: "SELECTION",
+                    selectionRange: {
+                      start: selectionTask.start,
+                      end: selectionTask.end,
+                    },
+                  })
+                }
+              >
+                Git Diff 审阅并替换选段
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => onAppendText(generatedText)}
+              >
+                追加末尾
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              <Button
+                size="xs"
+                className="flex-1"
+                onClick={() => onAppendText(generatedText)}
+              >
+                追加到正文
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleOpenDiffReview}
+              >
+                {diffReviewOpen ? "全文" : "逐段挑选"}
+              </Button>
+              {onReviewDiff ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() =>
+                    onReviewDiff({
+                      originalText: chapterContent,
+                      proposedText: generatedText,
+                      mode: "FULL",
+                    })
+                  }
+                >
+                  Git Diff 替换
+                </Button>
+              ) : (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => onReplaceText(generatedText)}
+                >
+                  替换正文
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

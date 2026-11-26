@@ -110,8 +110,8 @@ flowchart LR
 - [x] **1.5 暂停、继续与取消（Pause / Resume / Cancel）**
   - **前端取消**：`AbortController` 断开连接并发送 `POST /runs/{run_id}/cancel`。
   - **后端协作式暂停与恢复**：前端发送 `pause`，Agent 在安全检查点挂起并保存状态；用户修改指令或直接点 `resume` 后从检查点继续流式输出。
-- [ ] **1.6 小说编辑器与 AI 协作体验** `★`
-  - 集成富文本编辑器（Tiptap / Lexical），支持划词改写/扩写、AI 生成内容 **Git 式 Diff 审阅（逐段 Accept / Reject）**、防抖自动保存 + 乐观锁版本冲突提示。
+- [x] **1.6 小说编辑器与 AI 协作体验** `★`
+  - 写作台集成划词协作工具条（支持 **AI 划词改写 / 划词扩写** 及文风锚点一键收藏）、AI 生成内容 **Git 式逐段 Diff 审阅弹窗（LCS 段落比对、逐 Hunk Accept/Reject、合并预览与局部选段精确回填）**、防抖自动保存与乐观锁版本冲突提示。
 - [x] **1.7 前后台解耦与创作工作台体验** `★`
   - **前台（`apps/web :3000`，作者端）**：极简三栏写作台（章节目录 + 正文编辑 + 「AI 写作 / 故事设定」双栏 + 按需抽屉「历史版本」），完全隐藏计费、RAG/Milvus、Checkpoint 等工程概念；支持极简「我的资料库」上传个人参考文档与按书启用开关。
   - **独立运营后台（`apps/admin :3001` + `admin-java :8081`，详见 [`06-ADMIN-SYSTEM-SEPARATION.md`](./architecture/06-ADMIN-SYSTEM-SEPARATION.md)）**：前后端物理独立拆分，仅内网部署与独立 `aud=foliarc-admin` 管理员鉴权，统一承载公共/定向 RAG 资料库、异步任务中心、Agent 会话执行日志时间轴、计费/VIP 权益配置与 Prompt 模板管理。

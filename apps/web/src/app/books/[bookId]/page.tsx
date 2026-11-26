@@ -12,7 +12,8 @@ import {
   type FormEvent,
 } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { AiCopilotPanel } from "@/components/ai-copilot-panel";
+import { AiCopilotPanel, type SelectionEditTask } from "@/components/ai-copilot-panel";
+import { AiDiffReviewModal } from "@/components/ai-diff-review-modal";
 import { BookStructureTree } from "@/components/book-structure-tree";
 import { LorePanel } from "@/components/lore-panel";
 import { RippleEditDrawer } from "@/components/ripple-edit-drawer";
@@ -107,6 +108,14 @@ function BookWorkbenchContent() {
   const [fullPreview, setFullPreview] = useState<FullChapterPreview | null>(null);
   const [loadingPage, setLoadingPage] = useState(true);
   const [selectedExcerpt, setSelectedExcerpt] = useState("");
+  const [selectedRange, setSelectedRange] = useState<{ start: number; end: number } | null>(null);
+  const [selectionTask, setSelectionTask] = useState<SelectionEditTask | null>(null);
+  const [diffModalState, setDiffModalState] = useState<{
+    originalText: string;
+    proposedText: string;
+    mode: "FULL" | "SELECTION";
+    selectionRange?: { start: number; end: number };
+  } | null>(null);
   const [anchorNotice, setAnchorNotice] = useState<string | null>(null);
   const [anchorRefreshKey, setAnchorRefreshKey] = useState(0);
 
@@ -760,38 +769,88 @@ function BookWorkbenchContent() {
                 </div>
               )}
 
-              {selectedExcerpt.length >= 20 && selectedExcerpt.length <= 900 && (
-                <div className="mb-2 flex items-center justify-between gap-2 rounded border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs">
+              {selectedExcerpt.length >= 10 && selectedRange && (
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs">
                   <span className="truncate text-muted-foreground">
-                    已选中 {selectedExcerpt.length} 字片段，可收藏为本书文风参考
+                    已划选 {selectedExcerpt.length} 字片段
                   </span>
-                  <Button
-                    type="button"
-                    size="xs"
-                    onClick={() => {
-                      const titleLabel = activeChapter
-                        ? `第${activeChapter.chapterNo}章片段`
-                        : "正文选段";
-                      void styleAnchorsApi
-                        .upsert(bookId, {
-                          title: titleLabel,
-                          excerptText: selectedExcerpt,
-                          enabled: true,
-                        })
-                        .then(() => {
-                          setSelectedExcerpt("");
-                          setAnchorRefreshKey((k) => k + 1);
-                          setAnchorNotice("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
-                        })
-                        .catch((err) => {
-                          setErrorMsg(
-                            err instanceof Error ? err.message : "设为文风锚点失败",
-                          );
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      type="button"
+                      size="xs"
+                      onClick={() => {
+                        setSelectionTask({
+                          mode: "REWRITE",
+                          text: selectedExcerpt,
+                          start: selectedRange.start,
+                          end: selectedRange.end,
                         });
-                    }}
-                  >
-                    设为本书文风锚点
-                  </Button>
+                        setRightTab("ai");
+                        setRightPanelOpen(true);
+                      }}
+                    >
+                      AI 划词改写
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => {
+                        setSelectionTask({
+                          mode: "EXPAND",
+                          text: selectedExcerpt,
+                          start: selectedRange.start,
+                          end: selectedRange.end,
+                        });
+                        setRightTab("ai");
+                        setRightPanelOpen(true);
+                      }}
+                    >
+                      AI 划词扩写
+                    </Button>
+                    {selectedExcerpt.length >= 20 && selectedExcerpt.length <= 900 && (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        onClick={() => {
+                          const titleLabel = activeChapter
+                            ? `第${activeChapter.chapterNo}章片段`
+                            : "正文选段";
+                          void styleAnchorsApi
+                            .upsert(bookId, {
+                              title: titleLabel,
+                              excerptText: selectedExcerpt,
+                              enabled: true,
+                            })
+                            .then(() => {
+                              setSelectedExcerpt("");
+                              setSelectedRange(null);
+                              setAnchorRefreshKey((k) => k + 1);
+                              setAnchorNotice("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
+                            })
+                            .catch((err) => {
+                              setErrorMsg(
+                                err instanceof Error ? err.message : "设为文风锚点失败",
+                              );
+                            });
+                        }}
+                      >
+                        设为文风锚点
+                      </Button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedExcerpt("");
+                        setSelectedRange(null);
+                      }}
+                      className="px-1 text-muted-foreground hover:text-foreground"
+                      title="清除选中条"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -799,14 +858,22 @@ function BookWorkbenchContent() {
                 value={draftContent}
                 onSelect={(e) => {
                   const el = e.currentTarget;
-                  const chunk = el.value.slice(el.selectionStart, el.selectionEnd).trim();
-                  setSelectedExcerpt(chunk);
+                  const start = el.selectionStart;
+                  const end = el.selectionEnd;
+                  const chunk = el.value.slice(start, end).trim();
+                  if (chunk.length >= 10) {
+                    setSelectedExcerpt(chunk);
+                    setSelectedRange({ start, end });
+                  } else {
+                    setSelectedExcerpt("");
+                    setSelectedRange(null);
+                  }
                 }}
                 onChange={(e) => {
                   setDraftContent(e.target.value);
                   if (saveState !== "conflict") setSaveState("dirty");
                 }}
-                placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存；划选满意段落可一键设为本书文风锚点）"
+                placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存；划选段落可触发 AI 划词改写/扩写或设为本书文风锚点）"
                 className="min-h-0 flex-1 resize-none bg-transparent text-base leading-8 outline-none"
               />
             </div>
@@ -857,6 +924,9 @@ function BookWorkbenchContent() {
               sectionId={effectiveSectionId}
               chapterNo={activeChapter?.chapterNo ?? null}
               chapterContent={draftContent}
+              selectionTask={selectionTask}
+              onClearSelectionTask={() => setSelectionTask(null)}
+              onReviewDiff={(payload) => setDiffModalState(payload)}
               onRunStateChange={handleRunStateChange}
               onAppendText={(text) => {
                 setDraftContent((prev) =>
@@ -880,6 +950,39 @@ function BookWorkbenchContent() {
           )}
         </aside>
       </div>
+
+      {diffModalState && (
+        <AiDiffReviewModal
+          open={Boolean(diffModalState)}
+          title={
+            diffModalState.mode === "SELECTION"
+              ? "划词改写 / 扩写 · Git 式逐段 Diff 审阅"
+              : "AI 正文替换 · Git 式逐段 Diff 审阅"
+          }
+          subtitle={
+            diffModalState.mode === "SELECTION"
+              ? "仅替换你在编辑器中划选的局部片段，未选中正文保持原封不动"
+              : "按段对比当前正文与 AI 建议稿，可逐段 Accept 采纳或 Reject 保留原文"
+          }
+          originalText={diffModalState.originalText}
+          proposedText={diffModalState.proposedText}
+          onClose={() => setDiffModalState(null)}
+          onApply={(mergedText) => {
+            if (diffModalState.mode === "SELECTION" && diffModalState.selectionRange) {
+              const { start, end } = diffModalState.selectionRange;
+              setDraftContent(
+                (prev) => prev.slice(0, start) + mergedText + prev.slice(end),
+              );
+              setSelectionTask(null);
+              setSelectedExcerpt("");
+              setSelectedRange(null);
+            } else {
+              setDraftContent(mergedText);
+            }
+            if (saveState !== "conflict") setSaveState("dirty");
+          }}
+        />
+      )}
 
       {/* Full Chapter Preview Modal (for Multi-Section Big Chapters) */}
       {fullPreview && (

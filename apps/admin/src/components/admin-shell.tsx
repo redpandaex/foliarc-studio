@@ -8,6 +8,7 @@ import {
   BookOpen,
   CreditCard,
   FileCode2,
+  FlaskConical,
   LayoutDashboard,
   ListChecks,
   LogOut,
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { href: "/traces", label: "会话链路追踪", icon: Activity },
   { href: "/billing", label: "计费与 VIP", icon: CreditCard },
   { href: "/prompts", label: "Prompt 与审计", icon: FileCode2 },
+  { href: "/evals", label: "Golden Eval 评测", icon: FlaskConical },
 ];
 
 export function AdminShell({

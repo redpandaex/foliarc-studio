@@ -461,3 +461,28 @@ export const adminAuditApi = {
   list: (limit = 100) =>
     adminFetch<AdminAuditLogRow[]>(`/api/v1/admin/audit?limit=${limit}`),
 };
+
+export interface EvalCaseRow {
+  case_id: string;
+  category: string;
+  passed: boolean;
+  score: number;
+  detail: string;
+  latency_ms: number;
+}
+
+export interface EvalReportResponse {
+  total_cases: number;
+  passed_cases: number;
+  overall_pass_rate: number;
+  category_scores: Record<string, number>;
+  duration_ms: number;
+  cases: EvalCaseRow[];
+}
+
+export const adminEvalApi = {
+  run: () =>
+    adminFetch<EvalReportResponse>("/api/v1/admin/evals/run", {
+      method: "POST",
+    }),
+};
