@@ -23,6 +23,7 @@ import {
   type SseEnvelope,
   type StreamConnectionState,
 } from "@/lib/sse-client";
+import { formatStreamError, formatWebError } from "@/lib/error-messages";
 
 export interface SelectionEditTask {
   mode: "REWRITE" | "EXPAND";
@@ -661,7 +662,13 @@ export function AiCopilotPanel({
             flushSnapshotNow(buildSnap("paused"));
           } else if (envelope.type === "error") {
             accState = "error";
-            setStatusDetail(String(envelope.payload.message ?? "生成过程中断，请稍后重试"));
+            setStatusDetail(
+              formatStreamError(
+                typeof envelope.payload.message === "string"
+                  ? envelope.payload.message
+                  : null,
+              ),
+            );
             flushSnapshotNow(buildSnap("error"));
           } else if (envelope.type === "done") {
             accOutline = null;
@@ -943,7 +950,7 @@ export function AiCopilotPanel({
           }
           if (matchedRun.status === "FAILED") {
             updateConnState("error");
-            setStatusDetail(matchedRun.errorMessage || "生成过程出现异常，请稍后重试");
+            setStatusDetail(formatStreamError(matchedRun.errorMessage));
             flushSnapshotNow({
               ...saved,
               text: finalText,
@@ -1109,7 +1116,7 @@ export function AiCopilotPanel({
       });
     } catch (err) {
       updateConnState("error");
-      setStatusDetail(err instanceof Error ? err.message : "启动创作失败，请稍后重试");
+      setStatusDetail(formatWebError(err, "启动创作失败，请稍后重试", { action: "generate" }));
     } finally {
       setBusyControl(false);
     }
@@ -1120,9 +1127,9 @@ export function AiCopilotPanel({
     setBusyControl(true);
     try {
       await runsApi.pause(runId);
-      setStatusDetail("正在保存当前进度并暂停...");
+      setStatusDetail("正在保存进度并暂停…");
     } catch (err) {
-      setStatusDetail(err instanceof Error ? err.message : "暂停失败");
+      setStatusDetail(formatWebError(err, "暂停失败，请稍后重试", { action: "generate" }));
     } finally {
       setBusyControl(false);
     }
@@ -1171,7 +1178,7 @@ export function AiCopilotPanel({
       });
     } catch (err) {
       updateConnState("error");
-      setStatusDetail(err instanceof Error ? err.message : "继续创作失败");
+      setStatusDetail(formatWebError(err, "继续创作失败，请稍后重试", { action: "generate" }));
     } finally {
       setBusyControl(false);
     }
@@ -1234,7 +1241,7 @@ export function AiCopilotPanel({
       });
     } catch (err) {
       updateConnState("error");
-      setStatusDetail(err instanceof Error ? err.message : "提交确认失败");
+      setStatusDetail(formatWebError(err, "提交确认失败，请稍后重试", { action: "generate" }));
     } finally {
       setBusyControl(false);
     }
@@ -1253,7 +1260,7 @@ export function AiCopilotPanel({
         flushSnapshotNow(null);
       }
     } catch (err) {
-      setStatusDetail(err instanceof Error ? err.message : "取消失败");
+      setStatusDetail(formatWebError(err, "取消失败，请稍后重试", { action: "generate" }));
     } finally {
       setBusyControl(false);
     }
@@ -1509,7 +1516,7 @@ export function AiCopilotPanel({
                       setActiveTray("none");
                     }
                   }}
-                  placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写；Ctrl+Enter 开始）..."
+                  placeholder="本章剧情方向（选填）"
                   className="block w-full resize-none bg-transparent px-3 pt-2.5 pb-1.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/70 outline-none"
                 />
 
@@ -1635,16 +1642,21 @@ export function AiCopilotPanel({
                     )}
                     <Button
                       size="xs"
+                      title="开始 (Ctrl+Enter)"
                       disabled={busyControl}
                       onClick={() => void handleStart()}
                       className="h-7 px-2.5"
                     >
                       <Sparkles className="size-3" />
-                      {action === "OUTLINE"
-                        ? "生成大纲"
-                        : action === "REWRITE"
-                          ? "润色扩写"
-                          : "开始创作"}
+                      {selectionTask
+                        ? selectionTask.mode === "EXPAND"
+                          ? "扩写选段"
+                          : "改写选段"
+                        : action === "OUTLINE"
+                          ? "生成大纲"
+                          : action === "REWRITE"
+                            ? "润色扩写"
+                            : "开始创作"}
                     </Button>
                   </div>
                 </div>
@@ -1726,14 +1738,9 @@ export function AiCopilotPanel({
 
                     {mode === "MULTI_AGENT" && action !== "OUTLINE" && (
                       <div className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-card px-2.5 py-2">
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-medium text-foreground">
-                            先确认大纲再动笔
-                          </div>
-                          <div className="text-[10px] text-muted-foreground">
-                            执笔前可先审阅或微调本章剧情节拍
-                          </div>
-                        </div>
+                        <span className="text-[11px] font-medium text-foreground">
+                          先确认大纲再动笔
+                        </span>
                         <button
                           type="button"
                           role="switch"
@@ -1826,16 +1833,11 @@ export function AiCopilotPanel({
         >
           <div className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-2xl border border-border bg-card p-3.5 shadow-[0_1px_2px_oklch(0.2_0.02_200/0.04),0_8px_24px_oklch(0.2_0.02_200/0.05)]">
             <div className="flex shrink-0 items-center justify-between gap-2">
-              <div className="text-[13px] font-semibold text-foreground">
-                确认本章大纲
-              </div>
+              <div className="text-[13px] font-semibold text-foreground">确认本章大纲</div>
               <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-medium text-primary-soft-foreground">
-                大纲确认
+                待确认
               </span>
             </div>
-            <p className="shrink-0 text-[11.5px] leading-relaxed text-muted-foreground">
-              可直接微调下方剧情大纲，确认后将紧接前文展开正文写作：
-            </p>
             <textarea
               value={editedOutline}
               onChange={(e) => setEditedOutline(e.target.value)}
@@ -1844,7 +1846,7 @@ export function AiCopilotPanel({
             <input
               value={approvalFeedback}
               onChange={(e) => setApprovalFeedback(e.target.value)}
-              placeholder="如不满意，可写下调整方向后点击「重新构思」..."
+              placeholder="调整意见（选填）"
               className="h-8 w-full shrink-0 rounded-lg border border-border bg-background px-2.5 text-[11.5px] text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring"
             />
             <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
@@ -2027,20 +2029,14 @@ export function AiCopilotPanel({
                 </div>
               )
             ) : connState === "completed" && !outlineApproval ? (
-              <div className="rounded-xl border border-status-warning-border bg-status-warning-bg p-4 text-[11.5px] leading-relaxed text-status-warning">
-                <p className="font-semibold">本次未返回正文内容</p>
-                <p className="mt-1 text-foreground/85">
-                  可能因推理模型思考过程耗时或耗尽输出配额导致正文为空。建议在「写作设置」中切换为「默认主力模型」后重试。
-                </p>
+              <div className="rounded-xl border border-status-warning-border bg-status-warning-bg p-3.5 text-xs text-status-warning">
+                本次未返回正文内容，请切换模型或重试。
               </div>
             ) : (
               !thoughtText &&
               !liveOutlineText && (
-                <div className="rounded-xl border border-dashed border-border bg-card/60 p-5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
-                  <p className="font-medium text-foreground">AI 写作助手</p>
-                  <p className="mt-1.5">
-                    输入本章剧情方向即可开始生成。系统会自动承接上一章剧情与「故事设定」中的人物和伏笔，刷新页面也不会中断生成进度。
-                  </p>
+                <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+                  准备就绪
                 </div>
               )
             )}
@@ -2078,7 +2074,7 @@ export function AiCopilotPanel({
                   })
                 }
               >
-                Git Diff 审阅并替换选段
+                审阅后替换选段
               </Button>
               <Button
                 size="sm"
@@ -2095,7 +2091,7 @@ export function AiCopilotPanel({
                 className="flex-1"
                 onClick={() => onAppendText(generatedText)}
               >
-                追加到正文
+                追加末尾
               </Button>
               <Button
                 size="sm"
@@ -2116,7 +2112,7 @@ export function AiCopilotPanel({
                     })
                   }
                 >
-                  Git Diff 替换
+                  审阅后替换
                 </Button>
               ) : (
                 <Button

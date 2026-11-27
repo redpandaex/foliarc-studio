@@ -59,7 +59,10 @@ async function adminFetch<T>(
   }
   if (!resp.ok) {
     const code = String(parsed?.code ?? `HTTP_${resp.status}`);
-    const message = String(parsed?.message ?? (text || resp.statusText));
+    const message =
+      typeof parsed?.message === "string" && parsed.message.trim()
+        ? parsed.message.trim()
+        : "";
     throw new AdminApiError(resp.status, code, message);
   }
   return parsed as T;

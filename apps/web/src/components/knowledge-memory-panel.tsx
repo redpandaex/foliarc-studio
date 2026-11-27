@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import {
-  ApiClientError,
   knowledgeApi,
   memoryApi,
   type KnowledgeDocType,
@@ -18,6 +17,7 @@ import {
   type RagSearchResult,
   type StructuredMemorySnapshot,
 } from "@/lib/api";
+import { formatDocFailureReason, formatWebError } from "@/lib/error-messages";
 
 interface KnowledgeMemoryPanelProps {
   bookId: string;
@@ -27,12 +27,12 @@ interface KnowledgeMemoryPanelProps {
 }
 
 const DOC_STATUS_META: Record<string, { text: string; status: UiStatus }> = {
-  QUEUED: { text: "排队中", status: "warning" },
-  PARSING: { text: "解析中", status: "info" },
-  CHUNKING: { text: "父子切片", status: "info" },
-  EMBEDDING: { text: "向量入库", status: "ai" },
-  READY: { text: "已就绪", status: "success" },
-  FAILED: { text: "解析失败", status: "danger" },
+  QUEUED: { text: "处理中", status: "warning" },
+  PARSING: { text: "处理中", status: "info" },
+  CHUNKING: { text: "处理中", status: "info" },
+  EMBEDDING: { text: "处理中", status: "ai" },
+  READY: { text: "可引用", status: "success" },
+  FAILED: { text: "失败", status: "danger" },
 };
 
 const DOC_TYPE_LABEL: Record<string, string> = {
@@ -97,7 +97,7 @@ export function KnowledgeMemoryPanel({
       setMemory(memSnap);
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "加载知识库数据失败");
+      setError(formatWebError(err, "加载资料失败，请稍后重试"));
     }
   }, [bookId]);
 
@@ -111,7 +111,7 @@ export function KnowledgeMemoryPanel({
       })
       .catch((err: unknown) => {
         if (!active) return;
-        setError(err instanceof ApiClientError ? err.message : "加载知识库数据失败");
+        setError(formatWebError(err, "加载资料失败，请稍后重试"));
       });
     return () => {
       active = false;
@@ -145,12 +145,10 @@ export function KnowledgeMemoryPanel({
       });
       setSelectedFile(null);
       setUploadTitle("");
-      toast.success("文档已入队解析", {
-        description: "已上传至 MinIO 并进入 RabbitMQ 异步解析切片队列",
-      });
+      toast.success("已上传，正在处理");
       await refreshData();
     } catch (err) {
-      const msg = err instanceof ApiClientError ? err.message : "上传失败";
+      const msg = formatWebError(err, "上传失败，请稍后重试", { action: "upload" });
       setError(msg);
       toast.error(msg);
     } finally {
@@ -164,12 +162,10 @@ export function KnowledgeMemoryPanel({
     setError(null);
     try {
       await knowledgeApi.syncChapter(bookId, activeChapterId, true);
-      toast.success("已触发章节同步与记忆抽取", {
-        description: "通过 PG Outbox → RabbitMQ 异步更新向量库与长记忆",
-      });
+      toast.success("已开始同步本章并更新记忆");
       await refreshData();
     } catch (err) {
-      const msg = err instanceof ApiClientError ? err.message : "同步章节失败";
+      const msg = formatWebError(err, "同步章节失败，请稍后重试");
       setError(msg);
       toast.error(msg);
     } finally {
@@ -180,13 +176,13 @@ export function KnowledgeMemoryPanel({
   async function handleDeleteDoc(doc: KnowledgeDocumentItem) {
     setError(null);
     await confirm({
-      title: `删除知识库文档「${doc.title}」？`,
-      description: "将执行软删除并派发 Milvus 双写清理事件，对应切片不再参与 RAG 检索。",
-      confirmLabel: "确认删除",
+      title: `移除「${doc.title}」？`,
+      description: "移除后，本书后续写作将不再引用该资料。",
+      confirmLabel: "移除",
       variant: "destructive",
       onConfirm: async () => {
         await knowledgeApi.deleteDocument(bookId, doc.id);
-        toast.success("已软删除文档并派发 Milvus 双写清理事件");
+        toast.success(`已移除「${doc.title}」`);
         await refreshData();
       },
     });
@@ -196,10 +192,10 @@ export function KnowledgeMemoryPanel({
     setError(null);
     try {
       await knowledgeApi.reprocess(bookId, docId);
-      toast.info("已递增 doc_version 并重新入队解析");
+      toast.info("已重新排队处理");
       await refreshData();
     } catch (err) {
-      const msg = err instanceof ApiClientError ? err.message : "重建索引失败";
+      const msg = formatWebError(err, "重新处理失败，请稍后重试");
       setError(msg);
       toast.error(msg);
     }
@@ -223,7 +219,7 @@ export function KnowledgeMemoryPanel({
       });
       setSearchResult(res);
     } catch (err) {
-      const msg = err instanceof ApiClientError ? err.message : "混合检索失败";
+      const msg = formatWebError(err, "检索失败，请稍后重试");
       setError(msg);
       toast.error(msg);
     } finally {
@@ -249,7 +245,7 @@ export function KnowledgeMemoryPanel({
       toast.success("人物关系已保存");
       await refreshData();
     } catch (err) {
-      const msg = err instanceof ApiClientError ? err.message : "保存人物关系失败";
+      const msg = formatWebError(err, "保存人物关系失败，请稍后重试");
       setError(msg);
       toast.error(msg);
     }
@@ -472,9 +468,9 @@ export function KnowledgeMemoryPanel({
                         </div>
                       )}
 
-                      {doc.errorMessage && (
+                      {doc.status === "FAILED" && (
                         <Alert status="danger" className="mt-2 px-2 py-1.5 text-[10px]">
-                          {doc.errorMessage}
+                          {formatDocFailureReason(doc.errorMessage)}
                         </Alert>
                       )}
 
@@ -485,7 +481,7 @@ export function KnowledgeMemoryPanel({
                           onClick={() => void handleReprocessDoc(doc.id)}
                           className="h-6 px-2 text-[10px]"
                         >
-                          重建索引
+                          重新处理
                         </Button>
                         <Button
                           variant="ghost"
@@ -493,7 +489,7 @@ export function KnowledgeMemoryPanel({
                           onClick={() => void handleDeleteDoc(doc)}
                           className="h-6 px-2 text-[10px] text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
                         >
-                          删除(双写清理)
+                          移除
                         </Button>
                       </div>
                     </li>
@@ -544,24 +540,18 @@ export function KnowledgeMemoryPanel({
               disabled={!searchQuery.trim()}
               className="w-full"
             >
-              {searching ? "Milvus Dense + BM25 + RRF 检索中..." : "执行混合检索"}
+              {searching ? "检索中…" : "检索"}
             </Button>
           </form>
 
           <div className="flex-1 overflow-y-auto p-3">
             {searchResult ? (
               <div className="space-y-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-1 rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 font-mono text-[10px] text-muted-foreground">
+                <div className="flex flex-wrap items-center justify-between gap-1 rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 text-[10px] text-muted-foreground">
                   <span className="tabular-nums">命中 {searchResult.hits.length} 条</span>
-                  <span>
-                    embed={searchResult.embedding_mode} · rerank={searchResult.rerank_mode}
-                  </span>
                 </div>
                 {searchResult.hits.length === 0 ? (
-                  <EmptyState
-                    title="未命中片段"
-                    description="未检索到符合当前防剧透条件的设定或正文片段。"
-                  />
+                  <EmptyState title="未找到匹配内容" />
                 ) : (
                   searchResult.hits.map((hit) => {
                     const expanded = expandedHitId === hit.parent_chunk_id;
@@ -575,7 +565,7 @@ export function KnowledgeMemoryPanel({
                             {hit.document_title}
                           </span>
                           <Badge status="success" className="shrink-0 font-mono text-[10px] tabular-nums">
-                            {hit.score.toFixed(3)}
+                            {hit.score.toFixed(2)}
                           </Badge>
                         </div>
                         <div className="mt-0.5 text-[10px] text-muted-foreground">
@@ -594,7 +584,7 @@ export function KnowledgeMemoryPanel({
                             }
                             className="mt-1 h-auto p-0 text-[10px]"
                           >
-                            {expanded ? "收起父块上下文" : "展开完整父块上下文 (Small-to-Big)"}
+                            {expanded ? "收起上下文" : "展开上下文"}
                           </Button>
                         )}
                       </div>
@@ -603,10 +593,7 @@ export function KnowledgeMemoryPanel({
                 )}
               </div>
             ) : (
-              <EmptyState
-                title="混合检索调试器"
-                description="输入关键词测试 Milvus Dense + BM25 混合召回、RRF 融合与防剧透章节过滤。"
-              />
+              <EmptyState title="输入关键词检索资料" />
             )}
           </div>
         </div>

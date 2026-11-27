@@ -31,6 +31,14 @@ import {
   PanelRightOpen,
   RefreshCw,
 } from "lucide-react";
+import {
+  DEFAULT_EDITOR_FONT,
+  EDITOR_FONT_META,
+  EDITOR_FONT_ORDER,
+  ensureEditorFontLoaded,
+  normalizeEditorFontId,
+  type EditorFontId,
+} from "@/lib/editor-font-config";
 import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel, type SelectionEditTask } from "@/components/ai-copilot-panel";
 import { AiDiffReviewModal } from "@/components/ai-diff-review-modal";
@@ -65,6 +73,7 @@ import {
   type VisualVisibility,
 } from "@/lib/api";
 import type { StreamConnectionState } from "@/lib/sse-client";
+import { formatWebError } from "@/lib/error-messages";
 
 type WorkbenchView = "editor" | "graph" | "lanes";
 
@@ -177,10 +186,8 @@ function subscribeDensity(onStoreChange: () => void): () => void {
   };
 }
 
-type EditorFontPreset = "serif" | "kai" | "sans";
-
 interface EditorTypographyPrefs {
-  font: EditorFontPreset;
+  font: EditorFontId;
   fontSizePx: number | null;
   lineHeight: number | null;
 }
@@ -188,30 +195,12 @@ interface EditorTypographyPrefs {
 const TYPO_STORAGE_KEY = "foliarc:editor_typography:v1";
 const TYPO_CHANGE_EVENT = "foliarc-typography-change";
 const DEFAULT_TYPO_PREFS: EditorTypographyPrefs = {
-  font: "serif",
+  font: DEFAULT_EDITOR_FONT,
   fontSizePx: null,
   lineHeight: null,
 };
 let cachedTypoRaw: string | null = null;
 let cachedTypoVal: EditorTypographyPrefs = DEFAULT_TYPO_PREFS;
-
-const FONT_PRESETS: Record<EditorFontPreset, { label: string; sample: string; stack: string }> = {
-  serif: {
-    label: "思源宋体",
-    sample: "典雅书卷",
-    stack: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", SimSun, serif',
-  },
-  kai: {
-    label: "霞鹜文楷",
-    sample: "温润纸感",
-    stack: '"LXGW WenKai", "LXGW WenKai Screen", "Kaiti SC", "STKaiti", KaiTi, serif',
-  },
-  sans: {
-    label: "清爽无衬线",
-    sample: "现代利落",
-    stack: 'system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif',
-  },
-};
 
 function readStoredTypography(): EditorTypographyPrefs {
   if (typeof window === "undefined") return DEFAULT_TYPO_PREFS;
@@ -224,10 +213,7 @@ function readStoredTypography(): EditorTypographyPrefs {
       return cachedTypoVal;
     }
     const parsed = JSON.parse(raw) as Partial<EditorTypographyPrefs>;
-    const font: EditorFontPreset =
-      parsed.font === "kai" || parsed.font === "sans" || parsed.font === "serif"
-        ? parsed.font
-        : "serif";
+    const font = normalizeEditorFontId(parsed.font);
     const fontSizePx =
       typeof parsed.fontSizePx === "number" && parsed.fontSizePx >= 14 && parsed.fontSizePx <= 22
         ? Math.round(parsed.fontSizePx)
@@ -438,8 +424,8 @@ function BookWorkbenchContent() {
   const [creatingChapter, setCreatingChapter] = useState(false);
 
   const [rightTab, setRightTab] = useState<"ai" | "lore">("ai");
-  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
-  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [leftPanelOverride, setLeftPanelOverride] = useState<boolean | null>(null);
+  const [rightPanelOverride, setRightPanelOverride] = useState<boolean | null>(null);
   const [densityMenuOpen, setDensityMenuOpen] = useState(false);
 
   const density = useSyncExternalStore<WorkbenchDensity>(
@@ -452,6 +438,9 @@ function BookWorkbenchContent() {
     readStoredTypography,
     () => DEFAULT_TYPO_PREFS,
   );
+  useEffect(() => {
+    ensureEditorFontLoaded(typoPrefs.font);
+  }, [typoPrefs.font]);
   const isCompact = density === "compact";
   const densityMeta = DENSITY_META[density];
   const densityMenuRef = useRef<HTMLDivElement | null>(null);
@@ -466,6 +455,27 @@ function BookWorkbenchContent() {
     subscribeViewportWidth,
     readViewportWidth,
     () => null,
+  );
+  const isNarrowViewport = viewportWidth !== null && viewportWidth < 1024;
+  const leftPanelOpen = leftPanelOverride ?? !isNarrowViewport;
+  const rightPanelOpen = rightPanelOverride ?? !isNarrowViewport;
+  const setLeftPanelOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      setLeftPanelOverride((prev) => {
+        const current = prev ?? !(typeof window !== "undefined" && window.innerWidth < 1024);
+        return typeof next === "function" ? next(current) : next;
+      });
+    },
+    [],
+  );
+  const setRightPanelOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      setRightPanelOverride((prev) => {
+        const current = prev ?? !(typeof window !== "undefined" && window.innerWidth < 1024);
+        return typeof next === "function" ? next(current) : next;
+      });
+    },
+    [],
   );
   const [dragRightWidth, setDragRightWidth] = useState<number | null>(null);
   const [isDraggingRight, setIsDraggingRight] = useState(false);
@@ -536,7 +546,7 @@ function BookWorkbenchContent() {
       setLeftPanelOpen(false);
     }
     saveRightWidth(RIGHT_PANEL_WIDE_WIDTH);
-  }, [isRightWide, leftPanelOpen]);
+  }, [isRightWide, leftPanelOpen, setLeftPanelOpen]);
 
   useEffect(() => {
     if (!densityMenuOpen) return;
@@ -597,8 +607,8 @@ function BookWorkbenchContent() {
           typoPrefs.fontSizePx != null ? `${typoPrefs.fontSizePx}px` : densityMeta.fontSize,
         "--editor-line-height":
           typoPrefs.lineHeight != null ? String(typoPrefs.lineHeight) : densityMeta.lineHeight,
-        "--type-literary": FONT_PRESETS[typoPrefs.font].stack,
-        "--font-editor": FONT_PRESETS[typoPrefs.font].stack,
+        "--type-literary": EDITOR_FONT_META[typoPrefs.font].stack,
+        "--font-editor": EDITOR_FONT_META[typoPrefs.font].stack,
       }) as CSSProperties,
     [densityMeta.fontSize, densityMeta.lineHeight, typoPrefs],
   );
@@ -814,18 +824,20 @@ function BookWorkbenchContent() {
       } catch (err) {
         if (err instanceof ApiClientError && err.code === "VIP_QUOTA_EXCEEDED") {
           setSaveState("error");
-          setVipLimitError(err.message);
+          setVipLimitError(
+            formatWebError(err, "本节已达字数上限，升级会员或拆分小节后可继续保存"),
+          );
           return "failed";
         } else if (
           err instanceof ApiClientError &&
           (err.status === 409 || err.code === "VERSION_CONFLICT")
         ) {
           setSaveState("conflict");
-          setErrorMsg(err.message);
+          setErrorMsg("当前章节已在别处更新，载入最新版将替换当前未保存草稿。");
           return "conflict";
         } else {
           setSaveState("error");
-          setErrorMsg(err instanceof Error ? err.message : "保存失败");
+          setErrorMsg(formatWebError(err, "保存失败，请稍后重试", { action: "save" }));
           return "failed";
         }
       }
@@ -865,7 +877,7 @@ function BookWorkbenchContent() {
       setRightTab("ai");
       setRightPanelOpen(true);
     },
-    [],
+    [setRightPanelOpen],
   );
 
   const handleSendPromptFromVisual = useCallback(
@@ -886,7 +898,7 @@ function BookWorkbenchContent() {
       setRightPanelOpen(true);
       switchWorkbenchView("editor");
     },
-    [activeId, activeChapter, saveState, saveCurrentUnit, loadChapterDetail, switchWorkbenchView, toast],
+    [activeId, activeChapter, saveState, saveCurrentUnit, loadChapterDetail, switchWorkbenchView, toast, setRightPanelOpen],
   );
 
   // Debounced auto-save after 2.5s idle when dirty
@@ -954,6 +966,8 @@ function BookWorkbenchContent() {
     saveState,
     saveCurrentUnit,
     switchWorkbenchView,
+    setLeftPanelOpen,
+    setRightPanelOpen,
     exportMenuOpen,
     versionsOpen,
     fullPreview,
@@ -1218,11 +1232,11 @@ function BookWorkbenchContent() {
           >
             {(
               [
-                ["editor", "正文", FileText],
-                ["graph", "关系图谱", Network],
-                ["lanes", "剧情泳道", GitCommitHorizontal],
+                ["editor", "正文", FileText, "Alt+1"],
+                ["graph", "关系图谱", Network, "Alt+2"],
+                ["lanes", "剧情泳道", GitCommitHorizontal, "Alt+3"],
               ] as const
-            ).map(([viewId, label, Icon]) => {
+            ).map(([viewId, label, Icon, shortcut]) => {
               const active = activeView === viewId;
               return (
                 <button
@@ -1230,6 +1244,7 @@ function BookWorkbenchContent() {
                   type="button"
                   role="tab"
                   aria-selected={active}
+                  title={`${label} (${shortcut})`}
                   onClick={() => switchWorkbenchView(viewId)}
                   className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-all ${
                     active
@@ -1364,7 +1379,7 @@ function BookWorkbenchContent() {
               <div
                 role="menu"
                 aria-label="切换版心密度与正文排版"
-                className="absolute right-0 top-9 z-50 w-64 space-y-2 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+                className="absolute right-0 top-9 z-50 w-72 max-h-[80vh] overflow-y-auto space-y-2 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
               >
                 <div className="space-y-0.5">
                   <div className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -1397,24 +1412,31 @@ function BookWorkbenchContent() {
                 </div>
 
                 <div className="space-y-1.5 border-t border-border pt-2">
-                  <div className="px-2 text-[10px] font-medium text-muted-foreground">
-                    正文字体（免费商用字体栈）
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 px-1">
-                    {(["serif", "kai", "sans"] as const).map((preset) => {
-                      const active = typoPrefs.font === preset;
+                  <div className="px-2 text-[10px] font-medium text-muted-foreground">正文字体</div>
+                  <div className="space-y-1 px-1">
+                    {EDITOR_FONT_ORDER.map((fontId) => {
+                      const meta = EDITOR_FONT_META[fontId];
+                      const active = typoPrefs.font === fontId;
                       return (
                         <button
-                          key={preset}
+                          key={fontId}
                           type="button"
-                          onClick={() => saveTypography({ ...typoPrefs, font: preset })}
-                          className={`rounded-lg border px-1.5 py-1 text-center text-[11px] font-medium transition-colors ${
+                          onClick={() => saveTypography({ ...typoPrefs, font: fontId })}
+                          className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
                             active
                               ? "border-primary bg-primary-soft text-primary-soft-foreground"
                               : "border-border bg-background text-foreground hover:bg-muted"
                           }`}
                         >
-                          {FONT_PRESETS[preset].label}
+                          <div className="min-w-0">
+                            <div
+                              className="truncate text-xs font-medium"
+                              style={{ fontFamily: meta.stack }}
+                            >
+                              {meta.label}
+                            </div>
+                          </div>
+                          {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
                         </button>
                       );
                     })}
@@ -1483,7 +1505,7 @@ function BookWorkbenchContent() {
                       })}
                     </div>
                   </div>
-                  {(typoPrefs.font !== "serif" ||
+                  {(typoPrefs.font !== DEFAULT_EDITOR_FONT ||
                     typoPrefs.fontSizePx != null ||
                     typoPrefs.lineHeight != null) && (
                     <button
@@ -1504,6 +1526,7 @@ function BookWorkbenchContent() {
             <Button
               size="sm"
               variant="default"
+              title="保存 (Ctrl+S)"
               disabled={saveState === "saving" || saveState === "conflict"}
               onClick={() => void saveCurrentUnit()}
               className="ml-0.5 px-3"
@@ -1626,30 +1649,20 @@ function BookWorkbenchContent() {
                     variant="outline"
                     onClick={() => void loadChapterDetail(activeChapter.id, activeSection?.id)}
                   >
-                    拉取最新版本
+                    载入最新版
+                  </Button>
+                ) : saveState === "error" && activeChapter ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void saveCurrentUnit()}
+                  >
+                    重试保存
                   </Button>
                 ) : undefined
               }
             >
               {errorMsg}
-            </Alert>
-          )}
-
-          {activeChapter && liveWordCount > 8000 && activeTreeChapter && (
-            <Alert
-              status="warning"
-              className="rounded-none border-x-0 border-t-0 py-1.5 text-[11px]"
-              action={
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => void handleCreateSection(activeTreeChapter)}
-                >
-                  + 新增下一小节
-                </Button>
-              }
-            >
-              当前正文已超过 8,000 字（支持最高 10 万字），按场景拆分小节可让 AI 记忆与连贯校对更精准。
             </Alert>
           )}
 
@@ -1827,14 +1840,14 @@ function BookWorkbenchContent() {
                     }}
                     placeholder={
                       isMultiSectionEditing
-                        ? "从这里写下本节的场景与对白……"
-                        : "从这里落笔本章正文，划选任意段落可唤起 AI 润色与扩写……"
+                        ? "开始写作本节正文……"
+                        : "开始写作本章正文……"
                     }
                   />
                 </div>
               </div>
 
-              {/* Docked Antigravity-Style Editor Status Bar */}
+              {/* Docked Editor Status Bar */}
               <div className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border/80 bg-surface-subtle/80 px-4 text-[11px] text-muted-foreground">
                 <div className="flex min-w-0 items-center gap-2.5 font-mono">
                   <span className="inline-flex items-center gap-1.5">
@@ -1851,24 +1864,33 @@ function BookWorkbenchContent() {
                     />
                     <span>
                       {saveState === "saving"
-                        ? "保存中..."
+                        ? "保存中…"
                         : saveState === "dirty"
                           ? "未保存"
                           : saveState === "conflict"
                             ? "版本冲突"
-                            : saveState === "saved"
-                              ? "已保存"
-                              : "就绪"}
+                            : saveState === "error"
+                              ? "保存失败"
+                              : "已保存"}
                     </span>
                   </span>
                   <span className="text-border">|</span>
-                  <span>{liveWordCount.toLocaleString()} 字</span>
+                  <span className="tabular-nums">{liveWordCount.toLocaleString()} 字</span>
+                  {liveWordCount > 8000 && activeTreeChapter && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCreateSection(activeTreeChapter)}
+                      className="rounded px-1.5 py-0.5 font-sans text-[10.5px] font-medium text-primary hover:bg-primary-soft"
+                    >
+                      + 新增小节
+                    </button>
+                  )}
                   <span className="hidden text-border sm:inline">·</span>
-                  <span className="hidden sm:inline">{liveParagraphCount} 段</span>
+                  <span className="hidden sm:inline tabular-nums">{liveParagraphCount} 段</span>
                   {estimatedReadMinutes > 0 && (
                     <>
                       <span className="hidden text-border md:inline">·</span>
-                      <span className="hidden md:inline">约 {estimatedReadMinutes} 分钟阅读</span>
+                      <span className="hidden md:inline">约 {estimatedReadMinutes} 分钟</span>
                     </>
                   )}
                   {selectedExcerpt.length > 0 && (
@@ -1879,28 +1901,24 @@ function BookWorkbenchContent() {
                   )}
                 </div>
 
-                <div className="flex shrink-0 items-center gap-2.5">
+                <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
                     onClick={() => {
                       const nextIdx = (DENSITY_ORDER.indexOf(density) + 1) % DENSITY_ORDER.length;
                       saveDensity(DENSITY_ORDER[nextIdx]);
                     }}
-                    title="点击切换布局密度（紧凑全宽 / 标准宽幅 / 舒展沉浸）"
+                    title="切换版心密度"
                     className="rounded px-1.5 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
                     {densityMeta.label}
                   </button>
-                  <span className="hidden text-border sm:inline">·</span>
-                  <span className="hidden font-mono text-[10.5px] sm:inline">
-                    Ctrl+S 保存 · Alt+1/2/3 切视图
-                  </span>
                 </div>
               </div>
             </>
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-sm text-muted-foreground">
-              <p>选择左侧章节开始创作，或新建第一章</p>
+            <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-xs text-muted-foreground">
+              <p>选择章节开始写作</p>
             </div>
           )}
             </>
@@ -2026,13 +2044,11 @@ function BookWorkbenchContent() {
           open={Boolean(diffModalState)}
           title={
             diffModalState.mode === "SELECTION"
-              ? "划词改写 / 扩写 · Git 式逐段 Diff 审阅"
-              : "AI 正文替换 · Git 式逐段 Diff 审阅"
+              ? "审阅选段修改"
+              : "审阅当前正文修改"
           }
-          subtitle={
-            diffModalState.mode === "SELECTION"
-              ? "仅替换你在编辑器中划选的局部片段，未选中正文保持原封不动"
-              : "按段对比当前正文与 AI 建议稿，可逐段 Accept 采纳或 Reject 保留原文"
+          applyTargetLabel={
+            diffModalState.mode === "SELECTION" ? "应用到选段" : "应用到正文"
           }
           originalText={diffModalState.originalText}
           proposedText={diffModalState.proposedText}
@@ -2153,7 +2169,7 @@ function BookWorkbenchContent() {
             <div className="flex-1 overflow-y-auto p-3">
               {versions.length === 0 ? (
                 <p className="py-8 text-center text-xs text-muted-foreground">
-                  暂无历史快照。点击上方按钮保存版本节点，随时支持一键回滚。
+                  暂无历史快照
                 </p>
               ) : (
                 <ul className="space-y-2">

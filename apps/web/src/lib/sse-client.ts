@@ -1,4 +1,5 @@
 import { getAccessToken, refreshSession } from "@/lib/api";
+import { formatStreamError } from "@/lib/error-messages";
 
 export type SseEventType =
   | "run_started"
@@ -202,7 +203,7 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
     while (!masterController.signal.aborted && !terminatedByServer) {
       if (attempt > 0) {
         if (attempt > maxRetries) {
-          options.onStateChange("error", { detail: `重连超过最大次数 (${maxRetries})` });
+          options.onStateChange("error", { detail: "连接中断，未能自动恢复，请点击重试" });
           return;
         }
         await waitUntilOnline(masterController.signal);
@@ -211,7 +212,7 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
         const delayMs = computeBackoffWithJitter(attempt, baseDelayMs, maxDelayMs);
         options.onStateChange("reconnecting", {
           attempt,
-          detail: `第 ${attempt} 次重连（${delayMs}ms 后携带 Last-Event-ID 续接）`,
+          detail: "连接中断，正在重连…",
         });
         await sleep(delayMs, masterController.signal);
         if (masterController.signal.aborted) return;
@@ -267,7 +268,7 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
         }
 
         if (!response.ok || !response.body) {
-          throw new Error(`SSE 连接返回 HTTP ${response.status}`);
+          throw new Error(`STREAM_HTTP_${response.status}`);
         }
 
         attempt = 0;
@@ -313,9 +314,9 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
         if (masterController.signal.aborted || terminatedByServer) {
           return;
         }
+        console.error("[FoliarcStream]", err);
         attempt += 1;
-        const msg = err instanceof Error ? err.message : "网络连接中断";
-        options.onStateChange("reconnecting", { attempt, detail: msg });
+        options.onStateChange("reconnecting", { attempt, detail: "连接中断，正在重连…" });
       } finally {
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         masterController.signal.removeEventListener("abort", onMasterAbort);
@@ -350,8 +351,13 @@ export function connectResumableSse(options: ResumableSseOptions): ResumableSseH
       options.onStateChange("paused");
     } else if (envelope.type === "error") {
       terminatedByServer = true;
+      const rawMessage =
+        typeof envelope.payload?.message === "string" ? envelope.payload.message : null;
+      if (rawMessage) {
+        console.error("[FoliarcStreamError]", rawMessage);
+      }
       options.onStateChange("error", {
-        detail: String(envelope.payload?.message ?? "生成发生错误"),
+        detail: formatStreamError(rawMessage),
       });
     }
   }

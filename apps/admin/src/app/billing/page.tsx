@@ -13,22 +13,32 @@ import { useToast } from "@/components/ui/toast";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AdminShell } from "@/components/admin-shell";
 import {
-  AdminApiError,
   adminBillingApi,
+  adminUsersApi,
   type AdminBillingOverview,
+  type AdminUserRow,
   type VipPlanItem,
 } from "@/lib/admin-api";
+import {
+  bpsToZheInput,
+  formatBpsAsDiscount,
+  labelLedgerType,
+  zheInputToBps,
+} from "@/lib/admin-labels";
+import { formatAdminError } from "@/lib/error-messages";
 
 export default function AdminBillingPage() {
   const [overview, setOverview] = useState<AdminBillingOverview | null>(null);
   const [plans, setPlans] = useState<VipPlanItem[]>([]);
+  const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [editingPlan, setEditingPlan] = useState<VipPlanItem | null>(null);
   const [editPriceCredits, setEditPriceCredits] = useState("");
   const [editGrantCredits, setEditGrantCredits] = useState("");
-  const [editDiscountBps, setEditDiscountBps] = useState("");
+  const [editDiscountZhe, setEditDiscountZhe] = useState("10");
   const [editRippleRange, setEditRippleRange] = useState("");
 
   const [grantUserId, setGrantUserId] = useState("");
+  const [manualUserId, setManualUserId] = useState(false);
   const [grantPlanCode, setGrantPlanCode] = useState("SVIP");
   const [grantDays, setGrantDays] = useState("30");
   const [grantBonus, setGrantBonus] = useState(true);
@@ -47,26 +57,27 @@ export default function AdminBillingPage() {
       setOverview(ov);
       setPlans(pl);
     } catch (err) {
-      setError(
-        err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载计费与 VIP 失败",
-      );
+      setError(formatAdminError(err, "加载计费与会员数据失败，请稍后重试"));
     }
   }, []);
 
   useEffect(() => {
     let active = true;
-    Promise.all([adminBillingApi.overview(), adminBillingApi.listVipPlans()])
-      .then(([ov, pl]) => {
+    Promise.all([
+      adminBillingApi.overview(),
+      adminBillingApi.listVipPlans(),
+      adminUsersApi.list(undefined, undefined, 100).catch(() => [] as AdminUserRow[]),
+    ])
+      .then(([ov, pl, us]) => {
         if (!active) return;
         setOverview(ov);
         setPlans(pl);
+        setUsers(us);
         setError(null);
       })
       .catch((err: unknown) => {
         if (!active) return;
-        setError(
-          err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载计费与 VIP 失败",
-        );
+        setError(formatAdminError(err, "加载计费与会员数据失败，请稍后重试"));
       });
     return () => {
       active = false;
@@ -77,7 +88,7 @@ export default function AdminBillingPage() {
     setEditingPlan(plan);
     setEditPriceCredits(String(plan.monthlyPriceCredits));
     setEditGrantCredits(String(plan.monthlyGrantCredits));
-    setEditDiscountBps(String(plan.creditDiscountBps));
+    setEditDiscountZhe(bpsToZheInput(plan.creditDiscountBps));
     setEditRippleRange(String(plan.entitlements.rippleMaxRangeChapters));
   }
 
@@ -90,17 +101,17 @@ export default function AdminBillingPage() {
       await adminBillingApi.updateVipPlan(editingPlan.planCode, {
         monthlyPriceCredits: Number.parseFloat(editPriceCredits),
         monthlyGrantCredits: Number.parseFloat(editGrantCredits),
-        creditDiscountBps: Number.parseInt(editDiscountBps, 10),
+        creditDiscountBps: zheInputToBps(editDiscountZhe),
         entitlements: {
           ...editingPlan.entitlements,
           rippleMaxRangeChapters: Number.parseInt(editRippleRange, 10),
         },
       });
-      toast.success(`套餐 ${editingPlan.planCode} 已热更新生效并记录审计日志。`);
+      toast.success(`已保存并生效「${editingPlan.displayName}」`);
       setEditingPlan(null);
       await loadData();
     } catch (err) {
-      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "更新套餐失败");
+      setError(formatAdminError(err, "保存会员方案失败，请稍后重试", { action: "save" }));
     } finally {
       setBusy(false);
     }
@@ -119,13 +130,15 @@ export default function AdminBillingPage() {
         grantBonusCredits: grantBonus,
         idempotencyKey: `admin-${grantPlanCode}-${Date.now()}`,
       });
+      const targetUser = users.find((u) => u.id === grantUserId.trim());
+      const planName = plans.find((p) => p.planCode === grantPlanCode)?.displayName ?? grantPlanCode;
       toast.success(
-        `已为用户 ${grantUserId.slice(0, 10)} 授予 ${grantPlanCode} (${grantDays} 天)。`,
+        `已为 ${targetUser ? targetUser.username : grantUserId.slice(0, 10)} 开通${planName}（${grantDays} 天）`,
       );
       setGrantUserId("");
       await loadData();
     } catch (err) {
-      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "人工授信 VIP 失败");
+      setError(formatAdminError(err, "发放会员失败，请稍后重试", { action: "save" }));
     } finally {
       setBusy(false);
     }
@@ -133,75 +146,102 @@ export default function AdminBillingPage() {
 
   return (
     <AdminShell
-      title="计费账本 & VIP 权益运营台"
-      subtitle="全平台积分核算、KV Cache 省费统计、四档 VIP 套餐热更新与人工授信"
+      title="计费与会员"
       actions={
         <Button type="button" onClick={() => void loadData()} variant="outline" size="sm">
-          刷新数据
+          刷新
         </Button>
       }
     >
       {error && (
-        <Alert status="danger" announce="assertive">
+        <Alert
+          status="danger"
+          announce="assertive"
+          action={
+            <Button type="button" variant="outline" size="sm" onClick={() => void loadData()}>
+              重新加载
+            </Button>
+          }
+        >
           {error}
         </Alert>
       )}
 
+      {/* Credits Overview */}
       {overview && (
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiCard label="计费账户总数" value={overview.totalAccounts} status="neutral" />
-          <KpiCard
-            label="平台积分总余额"
-            value={Number(overview.totalBalanceCredits ?? 0).toFixed(2)}
-            status="neutral"
-          />
-          <KpiCard
-            label="本月全站消耗"
-            value={Number(overview.totalMonthlySpentCredits ?? 0).toFixed(4)}
-            status="warning"
-          />
-          <KpiCard
-            label="KV Cache 累计节省"
-            value={Number(overview.totalCacheSavedCredits ?? 0).toFixed(4)}
-            status="success"
-          />
+        <section className="space-y-2">
+          <h2 className="text-xs font-medium text-muted-foreground">积分概况</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard label="计费账户" value={overview.totalAccounts} status="neutral" />
+            <KpiCard
+              label="积分总余额"
+              value={Number(overview.totalBalanceCredits ?? 0).toFixed(2)}
+              status="neutral"
+            />
+            <KpiCard
+              label="本月全站消耗"
+              value={Number(overview.totalMonthlySpentCredits ?? 0).toFixed(4)}
+              status="warning"
+            />
+            <KpiCard
+              label="缓存累计节省"
+              value={Number(overview.totalCacheSavedCredits ?? 0).toFixed(4)}
+              status="success"
+            />
+          </div>
         </section>
       )}
 
-      {/* VIP Plans + Manual Grant */}
+      {/* Plans + Manual Grant */}
       <section className="grid gap-6 lg:grid-cols-3">
         <Card className="p-4 lg:col-span-2">
-          <h2 className="mb-3 text-sm font-semibold">VIP 四档权益配置（热更新即时生效）</h2>
+          <h2 className="mb-3 text-sm font-semibold">会员方案</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {plans.map((p) => (
               <Card key={p.planCode} className="p-3 text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold">
-                    {p.displayName} ({p.planCode})
-                  </span>
+                  <span className="font-semibold">{p.displayName}</span>
                   <Button
                     type="button"
                     onClick={() => openPlanEditor(p)}
                     variant="outline"
                     size="sm"
                   >
-                    编辑配额
+                    编辑
                   </Button>
                 </div>
-                <div className="mt-2 space-y-1 font-mono text-[11px] text-muted-foreground">
-                  <div>
-                    月价: {p.monthlyPriceCredits} Cr · 月赠: {p.monthlyGrantCredits} Cr · 折扣:{" "}
-                    {p.creditDiscountBps} bps
+                <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">月费</dt>
+                    <dd className="font-mono tabular-nums">{p.monthlyPriceCredits} 积分</dd>
                   </div>
-                  <div>
-                    记忆: {p.entitlements.maxMemoryChapters} 章 · 资料库:{" "}
-                    {p.entitlements.userLibraryMaxDocs} 份
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">月赠</dt>
+                    <dd className="font-mono tabular-nums">{p.monthlyGrantCredits} 积分</dd>
                   </div>
-                  <div>
-                    Ripple 范围: {p.entitlements.rippleMaxRangeChapters} 章 · 速率:{" "}
-                    {p.entitlements.rpmLimit} RPM
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">创作折扣</dt>
+                    <dd className="font-mono">{formatBpsAsDiscount(p.creditDiscountBps)}</dd>
                   </div>
-                </div>
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">资料库</dt>
+                    <dd className="font-mono tabular-nums">
+                      {p.entitlements.userLibraryMaxDocs} 份
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">记忆章数</dt>
+                    <dd className="font-mono tabular-nums">
+                      {p.entitlements.maxMemoryChapters} 章
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">跨章上限</dt>
+                    <dd className="font-mono tabular-nums">
+                      {p.entitlements.rippleMaxRangeChapters} 章
+                    </dd>
+                  </div>
+                </dl>
               </Card>
             ))}
           </div>
@@ -210,16 +250,17 @@ export default function AdminBillingPage() {
             <Card className="mt-4 p-4">
               <form onSubmit={handleSavePlan} className="grid gap-3 sm:grid-cols-4">
                 <div className="sm:col-span-4 text-xs font-semibold">
-                  编辑套餐：{editingPlan.displayName} ({editingPlan.planCode})
+                  编辑方案 · {editingPlan.displayName}
                 </div>
                 <div className="space-y-1">
                   <label htmlFor="editPriceCredits" className="text-[11px] text-muted-foreground">
-                    月费积分
+                    月费（积分）
                   </label>
                   <Input
                     id="editPriceCredits"
                     type="number"
                     step="0.01"
+                    min={0}
                     value={editPriceCredits}
                     onChange={(e) => setEditPriceCredits(e.target.value)}
                     className="font-mono"
@@ -227,36 +268,41 @@ export default function AdminBillingPage() {
                 </div>
                 <div className="space-y-1">
                   <label htmlFor="editGrantCredits" className="text-[11px] text-muted-foreground">
-                    月赠积分
+                    月赠（积分）
                   </label>
                   <Input
                     id="editGrantCredits"
                     type="number"
                     step="0.01"
+                    min={0}
                     value={editGrantCredits}
                     onChange={(e) => setEditGrantCredits(e.target.value)}
                     className="font-mono"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label htmlFor="editDiscountBps" className="text-[11px] text-muted-foreground">
-                    折扣 (bps)
+                  <label htmlFor="editDiscountZhe" className="text-[11px] text-muted-foreground">
+                    创作折扣（折）
                   </label>
                   <Input
-                    id="editDiscountBps"
+                    id="editDiscountZhe"
                     type="number"
-                    value={editDiscountBps}
-                    onChange={(e) => setEditDiscountBps(e.target.value)}
+                    step="0.1"
+                    min={0.1}
+                    max={10}
+                    value={editDiscountZhe}
+                    onChange={(e) => setEditDiscountZhe(e.target.value)}
                     className="font-mono"
                   />
                 </div>
                 <div className="space-y-1">
                   <label htmlFor="editRippleRange" className="text-[11px] text-muted-foreground">
-                    Ripple 最大章数
+                    单次跨章修订上限（章）
                   </label>
                   <Input
                     id="editRippleRange"
                     type="number"
+                    min={1}
                     value={editRippleRange}
                     onChange={(e) => setEditRippleRange(e.target.value)}
                     className="font-mono"
@@ -271,8 +317,8 @@ export default function AdminBillingPage() {
                   >
                     取消
                   </Button>
-                  <Button type="submit" disabled={busy} variant="default" size="sm">
-                    保存热更新
+                  <Button type="submit" loading={busy} variant="default" size="sm">
+                    保存并生效
                   </Button>
                 </div>
               </form>
@@ -282,32 +328,56 @@ export default function AdminBillingPage() {
 
         <Card className="p-4">
           <form onSubmit={handleGrantVip} className="space-y-3">
-            <h2 className="text-sm font-semibold">人工授信 VIP 会员</h2>
+            <h2 className="text-sm font-semibold">人工发放会员</h2>
             <div className="space-y-1">
-              <label htmlFor="grantUserId" className="text-xs text-muted-foreground">
-                目标用户 UUID
-              </label>
-              <Input
-                id="grantUserId"
-                required
-                value={grantUserId}
-                onChange={(e) => setGrantUserId(e.target.value)}
-                placeholder="UUID"
-                className="font-mono"
-              />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <label htmlFor="grantUserId">目标用户</label>
+                {users.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setManualUserId((v) => !v)}
+                    className="text-[11px] text-primary hover:underline"
+                  >
+                    {manualUserId ? "从列表选择" : "按编号输入"}
+                  </button>
+                )}
+              </div>
+              {users.length > 0 && !manualUserId ? (
+                <Select
+                  id="grantUserSelect"
+                  label="目标用户"
+                  hideLabel
+                  value={grantUserId}
+                  onValueChange={(value) => value !== null && setGrantUserId(value)}
+                  options={[
+                    { value: "", label: "选择用户" },
+                    ...users.map((u) => ({ value: u.id, label: `${u.username}（${u.email}）` })),
+                  ]}
+                />
+              ) : (
+                <Input
+                  id="grantUserId"
+                  required
+                  value={grantUserId}
+                  onChange={(e) => setGrantUserId(e.target.value)}
+                  placeholder="输入用户编号"
+                  className="font-mono"
+                />
+              )}
             </div>
+
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Select
                   id="grantPlanCode"
-                  label="档位"
+                  label="会员档位"
                   value={grantPlanCode}
                   onValueChange={(value) => value !== null && setGrantPlanCode(value)}
                   options={[
-                    { value: "VIP", label: "VIP（签约会员）" },
-                    { value: "SVIP", label: "SVIP（白金会员）" },
-                    { value: "STUDIO", label: "STUDIO（工作室版）" },
-                    { value: "FREE", label: "FREE（免费版）" },
+                    { value: "VIP", label: "签约会员" },
+                    { value: "SVIP", label: "白金会员" },
+                    { value: "STUDIO", label: "工作室版" },
+                    { value: "FREE", label: "免费版" },
                   ]}
                 />
               </div>
@@ -325,41 +395,75 @@ export default function AdminBillingPage() {
                 />
               </div>
             </div>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Input
-                type="checkbox"
-                checked={grantBonus}
-                onChange={(e) => setGrantBonus(e.target.checked)}
-              />
-              <span>同步发放该档位当月赠送积分</span>
-            </label>
-            <Button type="submit" loading={busy} variant="default" size="sm" className="w-full">
-              确认发放 VIP
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">赠送当月积分</div>
+              <div
+                role="group"
+                aria-label="是否同时赠送当月积分"
+                className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5"
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={grantBonus ? "default" : "ghost"}
+                  aria-pressed={grantBonus}
+                  onClick={() => setGrantBonus(true)}
+                >
+                  同时赠送
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={!grantBonus ? "default" : "ghost"}
+                  aria-pressed={!grantBonus}
+                  onClick={() => setGrantBonus(false)}
+                >
+                  不赠送
+                </Button>
+              </div>
+            </div>
+
+            <Button
+              type="submit"
+              disabled={!grantUserId.trim()}
+              loading={busy}
+              variant="default"
+              size="sm"
+              className="w-full"
+            >
+              确认发放
             </Button>
           </form>
         </Card>
       </section>
 
-      {/* Model Breakdown + Recent Ledger */}
+      {/* Model Breakdown */}
       {overview && (
         <Card className="p-4">
-          <h2 className="mb-3 text-sm font-semibold">分模型消耗与 KV Cache 命中统计</h2>
+          <h2 className="mb-3 text-sm font-semibold">分模型消耗</h2>
           <DataTable
-            caption="分模型消耗与 KV Cache 命中统计"
+            caption="分模型消耗"
             rows={overview.modelBreakdown}
             rowKey={(m) => m.modelAlias}
             empty={<EmptyState title="暂无模型消耗记录" />}
             columns={[
               {
                 id: "model",
-                header: "模型别名",
+                header: "模型",
                 className: "font-semibold text-primary",
                 cell: (m) => m.modelAlias,
               },
-              { id: "runs", header: "结算次数", cell: (m) => m.runsCount },
+              {
+                id: "runs",
+                header: "调用次数",
+                className: "font-mono tabular-nums",
+                cell: (m) => m.runsCount,
+              },
               {
                 id: "input",
-                header: "Input / Cached Tokens",
+                header: "输入 / 缓存 Token",
+                className: "font-mono tabular-nums",
                 cell: (m) => (
                   <>
                     {m.totalInputTokens.toLocaleString()} / {m.totalCachedTokens.toLocaleString()}
@@ -369,7 +473,7 @@ export default function AdminBillingPage() {
               {
                 id: "hitRate",
                 header: "缓存命中率",
-                className: "text-status-success",
+                className: "font-mono text-status-success tabular-nums",
                 cell: (m) => (
                   <>
                     {(m.totalInputTokens > 0
@@ -382,13 +486,15 @@ export default function AdminBillingPage() {
               },
               {
                 id: "output",
-                header: "Output Tokens",
+                header: "输出 Token",
+                className: "font-mono tabular-nums",
                 cell: (m) => m.totalOutputTokens.toLocaleString(),
               },
               {
                 id: "spent",
-                header: "实际消耗 (Credits)",
+                header: "消耗（积分）",
                 align: "end",
+                className: "font-mono tabular-nums",
                 cell: (m) => Number(m.totalSpentCredits).toFixed(4),
               },
             ]}
@@ -396,35 +502,36 @@ export default function AdminBillingPage() {
         </Card>
       )}
 
+      {/* Recent Ledger */}
       {overview && (
         <Card className="p-4">
-          <h2 className="mb-3 text-sm font-semibold">
-            最近全站记账流水 ({overview.recentLedger.length})
-          </h2>
+          <h2 className="mb-3 text-sm font-semibold">积分流水 ({overview.recentLedger.length})</h2>
           <DataTable
-            caption="最近全站记账流水"
+            caption="积分流水"
             rows={overview.recentLedger.slice(0, 25)}
             rowKey={(row) => row.id}
-            empty={<EmptyState title="暂无记账流水" />}
+            empty={<EmptyState title="暂无积分流水" />}
             columns={[
-              { id: "type", header: "类型", cell: (row) => row.entryType },
+              { id: "type", header: "类型", cell: (row) => labelLedgerType(row.entryType) },
               { id: "model", header: "模型", cell: (row) => row.modelAlias ?? "-" },
               {
                 id: "description",
-                header: "说明",
-                className: "font-sans text-muted-foreground",
-                cell: (row) => row.description,
+                header: "摘要",
+                className: "text-muted-foreground",
+                cell: (row) => row.description || "-",
               },
               {
                 id: "amount",
-                header: "变动",
+                header: "变动（积分）",
                 align: "end",
+                className: "font-mono tabular-nums",
                 cell: (row) => Number(row.amountCredits).toFixed(4),
               },
               {
                 id: "balance",
-                header: "结余",
+                header: "结余（积分）",
                 align: "end",
+                className: "font-mono tabular-nums",
                 cell: (row) => Number(row.balanceAfterCredits).toFixed(4),
               },
             ]}

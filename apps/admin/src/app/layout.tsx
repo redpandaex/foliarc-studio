@@ -13,9 +13,8 @@ const themeInit = `(() => {
 })();`;
 
 export const metadata: Metadata = {
-  title: "FoliarcAdmin | 卷弧工坊独立运营后台",
-  description:
-    "FoliarcStudio 独立运营与工程治理后台（admin-java :8081 · 公共资料库 · 异步任务中心 · 会话链路追踪 · 计费与 VIP · Prompt 审计 · Golden Eval）",
+  title: "卷弧工坊 · 管理后台",
+  description: "卷弧工坊运营与内容管理后台",
 };
 
 export default function AdminRootLayout({ children }: { children: ReactNode }) {

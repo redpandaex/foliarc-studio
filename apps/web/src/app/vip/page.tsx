@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,12 +10,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useToast } from "@/components/ui/toast";
-import {
-  ApiClientError,
-  vipApi,
-  type MyVipStatus,
-  type VipPlanItem,
-} from "@/lib/api";
+import { vipApi, type MyVipStatus, type VipPlanItem } from "@/lib/api";
+import { formatWebError } from "@/lib/error-messages";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) {
@@ -30,8 +26,8 @@ function formatPrice(cents: number): string {
 }
 
 function formatDiscount(bps: number): string {
-  if (bps >= 10000) return "标准费率";
-  return `${(bps / 1000).toFixed(1)} 折创作消耗`;
+  if (bps >= 10000) return "原价";
+  return `${(bps / 1000).toFixed(1)} 折`;
 }
 
 function makeOrderIdempotencyKey(planCode: string): string {
@@ -52,31 +48,42 @@ export default function VipCenterPage() {
   const [submittingCode, setSubmittingCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const loadVip = useCallback(async () => {
+    try {
+      const [planList, myVip] = await Promise.all([vipApi.listPlans(), vipApi.me()]);
+      setPlans(planList);
+      setStatus(myVip);
+      setError(null);
+    } catch (err) {
+      setError(formatWebError(err, "加载会员方案失败，请稍后重试"));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (authLoading) return;
     if (!user) {
       router.replace("/login");
       return;
     }
-    let cancelled = false;
-    Promise.all([vipApi.listPlans(), vipApi.me()])
+    let active = true;
+    void Promise.all([vipApi.listPlans(), vipApi.me()])
       .then(([planList, myVip]) => {
-        if (!cancelled) {
-          setPlans(planList);
-          setStatus(myVip);
-          setError(null);
-        }
+        if (!active) return;
+        setPlans(planList);
+        setStatus(myVip);
+        setError(null);
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof ApiClientError ? err.message : "加载会员权益失败");
-        }
+      .catch((err: unknown) => {
+        if (!active) return;
+        setError(formatWebError(err, "加载会员方案失败，请稍后重试"));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (active) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      active = false;
     };
   }, [authLoading, user, router]);
 
@@ -93,12 +100,12 @@ export default function VipCenterPage() {
         idempotencyKey: idemKey,
       });
       toast.success(
-        `已成功开通「${res.displayName}」（${res.durationDays} 天），额外获赠 ${res.grantedBonusCredits.toFixed(0)} 创作积分。`,
+        `已开通「${res.displayName}」（${res.durationDays} 天），赠送 ${res.grantedBonusCredits.toFixed(0)} 积分`,
       );
       const latest = await vipApi.me();
       setStatus(latest);
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "开通会员失败");
+      toast.error(formatWebError(err, "开通会员失败，请稍后重试", { action: "billing" }));
     } finally {
       setSubmittingCode(null);
     }
@@ -106,30 +113,63 @@ export default function VipCenterPage() {
 
   if (authLoading || (!user && loading)) {
     return (
-      <main className="mx-auto flex max-w-5xl flex-1 items-center justify-center px-6 py-16 text-sm text-muted-foreground">
-        正在加载会员权益...
+      <main className="mx-auto flex max-w-5xl flex-1 items-center justify-center px-6 py-16 text-xs text-muted-foreground">
+        加载中…
       </main>
     );
   }
+
+  const featureRows: { label: string; render: (p: VipPlanItem) => string }[] = [
+    { label: "月赠积分", render: (p) => `${p.monthlyGrantCredits.toFixed(0)} 积分` },
+    { label: "创作折扣", render: (p) => formatDiscount(p.creditDiscountBps) },
+    {
+      label: "长篇记忆",
+      render: (p) => `${p.entitlements.maxMemoryChapters.toLocaleString()} 章`,
+    },
+    {
+      label: "单节字数上限",
+      render: (p) => `${(p.entitlements.maxSectionChars / 10000).toFixed(0)} 万字`,
+    },
+    {
+      label: "资料库容量",
+      render: (p) =>
+        `${p.entitlements.userLibraryMaxDocs} 份 / ${formatBytes(p.entitlements.userLibraryMaxTotalBytes)}`,
+    },
+    {
+      label: "跨章修订范围",
+      render: (p) =>
+        p.entitlements.rippleAllowFullBook
+          ? "全书"
+          : `≤ ${p.entitlements.rippleMaxRangeChapters} 章`,
+    },
+    {
+      label: "单次修订上限",
+      render: (p) => `${p.entitlements.rippleMaxPatchChapters} 章`,
+    },
+    { label: "创作速率", render: (p) => `${p.entitlements.rpmLimit} 次/分` },
+  ];
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <header className="border-b border-border bg-card">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            <Link href="/books" className="text-xs font-medium text-muted-foreground hover:text-foreground">
-              ← 返回书架
+            <Link
+              href="/books"
+              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              书架
             </Link>
             <span className="text-muted-foreground">/</span>
-            <h1 className="text-sm font-semibold">创作会员与权益</h1>
+            <h1 className="text-sm font-semibold">会员权益</h1>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <Link href="/library" className={buttonVariants({ variant: "outline", size: "sm" })}>
-              我的资料库
+              资料库
             </Link>
-            <Link href="/books" className={buttonVariants({ variant: "outline", size: "sm" })}>
-              作品列表
+            <Link href="/billing" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              积分明细
             </Link>
           </div>
         </div>
@@ -142,70 +182,76 @@ export default function VipCenterPage() {
               <div className="text-xs text-muted-foreground">当前方案</div>
               <div className="flex items-center gap-2">
                 <span className="text-lg font-bold">{status.displayName}</span>
-                <Badge status="vip" className="font-mono">
-                  {status.planCode}
-                </Badge>
+                <Badge status="vip">{formatDiscount(status.creditDiscountBps)}</Badge>
               </div>
               <div className="text-[11px] text-muted-foreground">
                 {status.expiresAt
                   ? `有效期至 ${new Date(status.expiresAt).toLocaleDateString("zh-CN")}`
-                  : "永久有效 · 随时可升级"}
+                  : "长期有效"}
               </div>
             </div>
 
             <div className="space-y-1">
-              <div className="text-xs text-muted-foreground">个人资料库用量</div>
+              <div className="text-xs text-muted-foreground">资料库用量</div>
               <div className="text-base font-semibold tabular-nums">
                 {status.libraryUsage.usedDocs} / {status.libraryUsage.maxDocs} 份
               </div>
               <div className="text-[11px] text-muted-foreground tabular-nums">
-                空间 {formatBytes(status.libraryUsage.usedBytes)} / {formatBytes(status.libraryUsage.maxTotalBytes)}
+                {formatBytes(status.libraryUsage.usedBytes)} /{" "}
+                {formatBytes(status.libraryUsage.maxTotalBytes)}
               </div>
             </div>
 
             <div className="space-y-1">
-              <div className="text-xs text-muted-foreground">长篇记忆与改稿跨度</div>
+              <div className="text-xs text-muted-foreground">记忆与修订</div>
               <div className="text-base font-semibold tabular-nums">
-                最高 {status.entitlements.maxMemoryChapters.toLocaleString()} 章
+                {status.entitlements.maxMemoryChapters.toLocaleString()} 章记忆
               </div>
               <div className="text-[11px] text-muted-foreground tabular-nums">
-                单次连环改稿 ≤ {status.entitlements.rippleMaxRangeChapters.toLocaleString()} 章
+                跨章修订 ≤ {status.entitlements.rippleMaxRangeChapters.toLocaleString()} 章
               </div>
             </div>
 
             <div className="space-y-1">
-              <div className="text-xs text-muted-foreground">可用创作积分</div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>可用积分</span>
+                <Link href="/billing" className="text-primary hover:underline">
+                  积分明细 →
+                </Link>
+              </div>
               <div className="font-mono text-base font-semibold tabular-nums">
                 {status.balanceCredits.toFixed(1)}
               </div>
               <div className="text-[11px] text-muted-foreground">
-                {formatDiscount(status.creditDiscountBps)}
+                月费与创作按折扣扣减
               </div>
             </div>
           </Card>
         )}
 
         {error && (
-          <Alert status="danger" announce="assertive">
+          <Alert
+            status="danger"
+            announce="assertive"
+            action={
+              <Button type="button" variant="outline" size="sm" onClick={() => void loadVip()}>
+                重新加载
+              </Button>
+            }
+          >
             {error}
           </Alert>
         )}
 
-        <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-bold tracking-tight">选择适合你创作规模的方案</h2>
-            <p className="text-xs text-muted-foreground">
-              不同档位动态解锁更大的个人资料库容量、更长的长篇记忆规模、连环改稿范围与更高并发速率。开通即赠送当月创作积分。
-            </p>
-          </div>
+        <section className="space-y-4">
+          <h2 className="text-base font-semibold">方案对比</h2>
 
           {loading ? (
-            <p className="py-10 text-center text-xs text-muted-foreground">正在加载套餐...</p>
+            <p className="py-10 text-center text-xs text-muted-foreground">加载中…</p>
           ) : (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               {plans.map((plan) => {
                 const isCurrent = status?.planCode === plan.planCode;
-                const e = plan.entitlements;
                 return (
                   <Card
                     key={plan.planCode}
@@ -214,39 +260,43 @@ export default function VipCenterPage() {
                       isCurrent ? "border-status-vip-border" : ""
                     }`}
                   >
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-base font-bold">{plan.displayName}</h3>
-                        {isCurrent && <Badge status="vip">当前方案</Badge>}
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-base font-bold">{plan.displayName}</h3>
+                          {isCurrent && <Badge status="vip">当前方案</Badge>}
+                        </div>
+                        <div className="mt-2 flex items-baseline justify-between gap-2">
+                          <span className="text-2xl font-bold tracking-tight tabular-nums">
+                            {formatPrice(plan.monthlyPriceCents)}
+                          </span>
+                          {plan.monthlyPriceCredits > 0 && (
+                            <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                              {plan.monthlyPriceCredits.toFixed(0)} 积分/月
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-2xl font-bold tracking-tight tabular-nums">
-                        {formatPrice(plan.monthlyPriceCents)}
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        月赠 {plan.monthlyGrantCredits.toFixed(0)} 积分 · {formatDiscount(plan.creditDiscountBps)}
-                      </p>
 
-                      <ul className="space-y-1.5 border-t border-border pt-3 text-xs text-muted-foreground">
-                        <li>• 长篇记忆规模：最高 {e.maxMemoryChapters.toLocaleString()} 章</li>
-                        <li>• 单节正文上限：{(e.maxSectionChars / 10000).toFixed(0)} 万字</li>
-                        <li>
-                          • 个人资料库：{e.userLibraryMaxDocs} 份 / {formatBytes(e.userLibraryMaxTotalBytes)}
-                        </li>
-                        <li>
-                          • 连环改稿跨度：
-                          {e.rippleAllowFullBook
-                            ? "最高 2,000 章 / 全书扫描"
-                            : `单次 ≤ ${e.rippleMaxRangeChapters} 章`}
-                        </li>
-                        <li>• 单批补丁上限：{e.rippleMaxPatchChapters} 章</li>
-                        <li>• 创作速率：{e.rpmLimit} 次/分</li>
-                      </ul>
+                      <dl className="divide-y divide-border/60 border-t border-border text-xs">
+                        {featureRows.map((row) => (
+                          <div
+                            key={row.label}
+                            className="flex items-center justify-between gap-2 py-2"
+                          >
+                            <dt className="text-muted-foreground">{row.label}</dt>
+                            <dd className="font-mono font-medium text-foreground tabular-nums">
+                              {row.render(plan)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
                     </div>
 
-                    <div className="mt-5 pt-2">
+                    <div className="mt-5">
                       {plan.planCode === "FREE" ? (
                         <Button variant="outline" size="sm" className="w-full" disabled>
-                          {isCurrent ? "正在使用" : "默认基础方案"}
+                          {isCurrent ? "当前方案" : "免费版"}
                         </Button>
                       ) : (
                         <Button
@@ -258,10 +308,10 @@ export default function VipCenterPage() {
                           onClick={() => void handleSubscribe(plan)}
                         >
                           {submittingCode === plan.planCode
-                            ? "开通中..."
+                            ? "开通中…"
                             : isCurrent
-                              ? `续费 1 个月 (${plan.monthlyPriceCredits.toFixed(0)} 积分)`
-                              : `积分开通 (${plan.monthlyPriceCredits.toFixed(0)} 积分)`}
+                              ? `用 ${plan.monthlyPriceCredits.toFixed(0)} 积分续费 1 个月`
+                              : `用 ${plan.monthlyPriceCredits.toFixed(0)} 积分开通 1 个月`}
                         </Button>
                       )}
                     </div>

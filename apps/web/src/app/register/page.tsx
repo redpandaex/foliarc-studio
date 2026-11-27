@@ -4,12 +4,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { ApiClientError } from "@/lib/api";
+import { formatWebError, isSafeUserMessage } from "@/lib/error-messages";
+
+interface FieldErrors {
+  username?: string;
+  email?: string;
+  password?: string;
+}
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -17,6 +23,7 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -29,42 +36,47 @@ export default function RegisterPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setFieldErrors({});
     setSubmitting(true);
     try {
-      await register(email, username, password);
+      await register(email.trim(), username.trim(), password);
       router.push("/books");
     } catch (err) {
-      if (err instanceof ApiClientError) {
-        const detailMsg = Object.values(err.details).join("；");
-        setError(detailMsg || err.message);
-      } else {
-        setError("注册失败，请检查 biz-java 与 Postgres/Redis 是否已启动");
+      if (err instanceof ApiClientError && err.details) {
+        const nextFields: FieldErrors = {};
+        for (const key of ["username", "email", "password"] as const) {
+          const val = err.details[key];
+          if (typeof val === "string" && isSafeUserMessage(val)) {
+            nextFields[key] = val;
+          }
+        }
+        if (Object.keys(nextFields).length > 0) {
+          setFieldErrors(nextFields);
+          setSubmitting(false);
+          return;
+        }
       }
+      setError(formatWebError(err, "暂时无法注册，请稍后重试", { action: "register" }));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-6 py-12">
-      <div className="mb-3 flex justify-end">
+    <main className="relative flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>
-      <Card surface="elevated" className="p-6">
+      <Card surface="elevated" className="w-full max-w-sm p-7">
         <div className="mb-6 space-y-1">
-          <p className="font-mono text-xs text-muted-foreground">
-            FoliarcStudio · 卷弧工坊
-          </p>
-          <h1 className="text-2xl font-bold tracking-tight">创建作者账号</h1>
-          <p className="text-sm text-muted-foreground">
-            注册后即可创建个人书架、编写章节并管理版本快照
-          </p>
+          <div className="text-xs font-medium text-muted-foreground">卷弧工坊</div>
+          <h1 className="text-xl font-bold tracking-tight">创建作者账号</h1>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="username" className="text-xs font-medium text-muted-foreground">
-              笔名 / 用户名
+              笔名
             </label>
             <Input
               id="username"
@@ -73,10 +85,18 @@ export default function RegisterPage() {
               minLength={2}
               maxLength={64}
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="例如：墨客"
+              onChange={(e) => {
+                setUsername(e.target.value);
+                if (fieldErrors.username) setFieldErrors((p) => ({ ...p, username: undefined }));
+              }}
+              placeholder="墨客"
               className="h-9 text-sm"
             />
+            {fieldErrors.username && (
+              <p role="alert" className="text-xs text-status-danger">
+                {fieldErrors.username}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -89,16 +109,27 @@ export default function RegisterPage() {
               required
               autoComplete="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="author@foliarc.studio"
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined }));
+              }}
+              placeholder="name@example.com"
               className="h-9 text-sm"
             />
+            {fieldErrors.email && (
+              <p role="alert" className="text-xs text-status-danger">
+                {fieldErrors.email}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="password" className="text-xs font-medium text-muted-foreground">
-              密码
-            </label>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <label htmlFor="password" className="font-medium">
+                密码
+              </label>
+              <span>至少 8 位</span>
+            </div>
             <Input
               id="password"
               type="password"
@@ -106,29 +137,37 @@ export default function RegisterPage() {
               minLength={8}
               autoComplete="new-password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="至少 8 位字符"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined }));
+              }}
+              placeholder="请输入密码"
               className="h-9 text-sm"
             />
+            {fieldErrors.password && (
+              <p role="alert" className="text-xs text-status-danger">
+                {fieldErrors.password}
+              </p>
+            )}
           </div>
 
           {error && (
-            <Alert status="danger" announce="assertive">
+            <p role="alert" className="text-xs text-status-danger">
               {error}
-            </Alert>
+            </p>
           )}
 
           <Button type="submit" size="lg" className="w-full" loading={submitting}>
-            {submitting ? "注册中..." : "注册并进入工作台"}
+            {submitting ? "注册中…" : "注册并进入书架"}
           </Button>
         </form>
 
         <div className="mt-5 flex items-center justify-between text-xs text-muted-foreground">
-          <Link href="/" className="hover:underline">
-            ← 返回系统探针
+          <Link href="/" className="hover:text-foreground hover:underline">
+            返回首页
           </Link>
           <Link href="/login" className="font-medium text-foreground hover:underline">
-            已有账号？直接登录
+            已有账号？登录
           </Link>
         </div>
       </Card>

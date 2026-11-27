@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Compass, ShieldCheck } from "lucide-react";
 import {
-  ApiClientError,
   visualApi,
   type BookTreeResponse,
   type ChapterTreeItem,
   type VisualProjectionResponse,
   type VisualVisibility,
 } from "@/lib/api";
+import { formatWebError } from "@/lib/error-messages";
 
 export interface UseVisualProjectionParams {
   bookId: string;
@@ -130,7 +130,7 @@ export function useVisualProjection({
       setProjection(data);
     } catch (err) {
       if (controller.signal.aborted || reqId !== reqVersionRef.current) return;
-      setError(err instanceof ApiClientError ? err.message : errorFallback);
+      setError(formatWebError(err, errorFallback));
     } finally {
       if (reqId === reqVersionRef.current) {
         setLoading(false);
@@ -163,7 +163,7 @@ export function useVisualProjection({
       })
       .catch((err: unknown) => {
         if (!active || controller.signal.aborted || reqId !== reqVersionRef.current) return;
-        setError(err instanceof ApiClientError ? err.message : errorFallback);
+        setError(formatWebError(err, errorFallback));
       })
       .finally(() => {
         if (active && reqId === reqVersionRef.current) {
@@ -252,6 +252,7 @@ export function VisualControlRibbon({
           <button
             type="button"
             onClick={() => onVisibilityChange("AS_OF")}
+            title="防剧透：仅显示截至当前所选章节的内容"
             className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all ${
               visibility === "AS_OF"
                 ? "bg-card text-foreground shadow-2xs"
@@ -259,7 +260,7 @@ export function VisualControlRibbon({
             }`}
           >
             <ShieldCheck className="size-3.5 text-primary" />
-            读到这里（防剧透）
+            读到这里
           </button>
           <button
             type="button"

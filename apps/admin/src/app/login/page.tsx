@@ -1,6 +1,5 @@
 "use client";
 
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,7 +8,8 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { ShieldCheck } from "lucide-react";
-import { ADMIN_API_BASE, AdminApiError, adminAuthApi, setAdminToken } from "@/lib/admin-api";
+import { adminAuthApi, setAdminToken } from "@/lib/admin-api";
+import { formatAdminError } from "@/lib/error-messages";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -27,11 +27,7 @@ export default function AdminLoginPage() {
       setAdminToken(res.accessToken);
       router.replace("/");
     } catch (err) {
-      if (err instanceof AdminApiError) {
-        setError(`[${err.code}] ${err.message}`);
-      } else {
-        setError(err instanceof Error ? err.message : "管理员登录失败");
-      }
+      setError(formatAdminError(err, "暂时无法登录，请稍后重试", { action: "login" }));
     } finally {
       setSubmitting(false);
     }
@@ -42,29 +38,13 @@ export default function AdminLoginPage() {
       <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>
-      <Card surface="elevated" className="w-full max-w-md p-7">
+      <Card surface="elevated" className="w-full max-w-sm p-7">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-primary">
             <ShieldCheck className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">FoliarcAdmin 独立运营后台</h1>
-            <p className="font-mono text-[11px] text-muted-foreground">
-              {ADMIN_API_BASE} · JWT aud=foliarc-admin
-            </p>
-          </div>
+          <h1 className="text-lg font-bold tracking-tight">管理后台</h1>
         </div>
-
-        <Alert status="info" className="mb-5">
-          此入口与作者端（:3000 / :8080）物理隔离，仅允许具备{" "}
-          <code className="font-mono">ROLE_ADMIN</code> 权限的管理员签发后台独立令牌登录。
-        </Alert>
-
-        {error && (
-          <Alert status="danger" announce="assertive" className="mb-4">
-            {error}
-          </Alert>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
@@ -74,10 +54,14 @@ export default function AdminLoginPage() {
             <Input
               id="email"
               type="email"
+              autoComplete="email"
               required
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@foliarc.studio"
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (error) setError(null);
+              }}
+              placeholder="name@example.com"
             />
           </div>
           <div className="space-y-1.5">
@@ -87,14 +71,25 @@ export default function AdminLoginPage() {
             <Input
               id="password"
               type="password"
+              autoComplete="current-password"
               required
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="请输入管理员密码"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (error) setError(null);
+              }}
+              placeholder="请输入密码"
             />
           </div>
+
+          {error && (
+            <p role="alert" className="text-xs text-status-danger">
+              {error}
+            </p>
+          )}
+
           <Button type="submit" loading={submitting} variant="default" size="sm" className="w-full">
-            {submitting ? "正在校验管理员权限..." : "登录运营后台"}
+            {submitting ? "登录中…" : "登录"}
           </Button>
         </form>
       </Card>

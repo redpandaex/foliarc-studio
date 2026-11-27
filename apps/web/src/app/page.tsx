@@ -1,75 +1,116 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
+import { BookOpenText, GitBranch, Network, Sparkles } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
 import { ServiceStatus } from "@/components/service-status";
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
-const PHASES = [
-  { id: "Phase 0", title: "工程基座、JWT 轮换认证与小说/章节/版本 CRUD 闭环", status: "已完成" },
-  { id: "Phase 1", title: "端到端 SSE 流式链路与 Redis Streams 断点续连", status: "已完成" },
-  { id: "Phase 2", title: "手写 Agent Loop + Tool / Skill / MCP + 上下文压缩", status: "已完成" },
-  { id: "Phase 3", title: "Milvus Hybrid RAG + 异步文档导入 + 结构化记忆", status: "已完成" },
-  { id: "Phase 4", title: "多 Agent 协同编排 + 路由 + HITL 中断恢复", status: "已完成" },
-  { id: "Phase 5", title: "企业级网关 + 分布式计费账本 + 安全护栏与硬化 Docker 沙箱", status: "已完成" },
-  { id: "Phase 5.5", title: "百章级 5 层长程记忆 + 零配置自动底座 + 三层作用域 RAG + VIP 权益中台", status: "已完成" },
-  { id: "Phase 5.8A", title: "卷/章/小节柔性结构 + 10万字Map-Reduce + 万章4层对数记忆树 + Coarse-to-Fine检索", status: "已完成" },
-  { id: "Phase 5.8B", title: "伏笔全生命周期导演台 + 双层防剧透隔离 + 别名锁/快照回滚/POV边界与高危提案闸门", status: "已完成" },
-  { id: "Phase 5.8C", title: "6大题材档案包 + 分层Skill路由 + 动态人物表单 + 黄金文风锚点 + 公共RAG题材匹配", status: "已完成" },
-  { id: "Phase 5.8D", title: "双向自选范围蝴蝶效应引擎（Fact Diff → Impact Radar → 分批稀疏补丁审阅）", status: "已完成" },
-  { id: "Phase 6", title: "独立运营后台（apps/admin + admin-java 多模块拆分）+ 会话轨迹中心 + 30 用例 Golden Eval + 多服务容器化", status: "已完成" },
+const WORKSPACE_PILLARS = [
+  { icon: BookOpenText, label: "卷章正文", tag: "专注写作" },
+  { icon: Network, label: "人物关系图谱", tag: "防剧透视角" },
+  { icon: GitBranch, label: "剧情泳道与伏笔", tag: "全书脉络" },
+  { icon: Sparkles, label: "AI 协同写作", tag: "长程记忆" },
 ];
 
 export default function HomePage() {
+  const { user, loading } = useAuth();
+  const [showStatus, setShowStatus] = useState(false);
+
   return (
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-12">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="space-y-2">
-          <Badge status="info" className="font-mono">
-            FoliarcStudio · Phase 6 Complete
-          </Badge>
-          <h1 className="text-3xl font-bold tracking-tight">卷弧工坊 · FoliarcStudio</h1>
-          <p className="text-sm text-muted-foreground">
-            Next.js + Java 21 Spring Boot 4 (MyBatis-Plus) + Python FastAPI + PostgreSQL 16 + Milvus
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-          <Link
-            href="/login"
-            className={buttonVariants({ variant: "outline", size: "sm" })}
-          >
-            登录 / 注册
-          </Link>
-          <Link href="/books" className={buttonVariants({ size: "sm" })}>
-            进入书架与创作台 →
-          </Link>
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
+      <header className="border-b border-border/60">
+        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
+          <span className="font-semibold tracking-tight">卷弧工坊</span>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            {!loading && user ? (
+              <Link href="/books" className={buttonVariants({ size: "sm" })}>
+                进入书架
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  登录
+                </Link>
+                <Link href="/register" className={buttonVariants({ size: "sm" })}>
+                  注册
+                </Link>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
-      <ServiceStatus />
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col items-center justify-center gap-10 px-6 py-16">
+        <section className="flex max-w-xl flex-col items-center space-y-5 text-center">
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">卷弧工坊</h1>
+          <p className="text-base text-muted-foreground">长篇小说创作工作台</p>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+            {!loading && user ? (
+              <Link href="/books" className={buttonVariants({ size: "lg" })}>
+                进入书架
+              </Link>
+            ) : (
+              <>
+                <Link href="/register" className={buttonVariants({ size: "lg" })}>
+                  创建账号
+                </Link>
+                <Link
+                  href="/login"
+                  className={buttonVariants({ variant: "outline", size: "lg" })}
+                >
+                  登录
+                </Link>
+              </>
+            )}
+          </div>
+        </section>
 
-      <Card className="p-6">
-        <h2 className="text-base font-semibold">垂直切片实战路线</h2>
-        <ol className="mt-4 space-y-2.5 text-sm">
-          {PHASES.map((phase) => (
-            <li
-              key={phase.id}
-              className="flex items-center justify-between gap-4 rounded-lg border border-border px-3.5 py-2.5"
+        <section className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {WORKSPACE_PILLARS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Card
+                key={item.label}
+                className="flex flex-col items-start gap-2.5 p-4"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-primary">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">{item.label}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{item.tag}</div>
+                </div>
+              </Card>
+            );
+          })}
+        </section>
+      </main>
+
+      <footer className="border-t border-border/60">
+        <div className="mx-auto flex max-w-5xl flex-col gap-3 px-6 py-4">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>FoliarcStudio</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              aria-expanded={showStatus}
+              onClick={() => setShowStatus((v) => !v)}
             >
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-xs font-semibold text-muted-foreground">
-                  {phase.id}
-                </span>
-                <span>{phase.title}</span>
-              </div>
-              <Badge status="success" className="shrink-0 font-mono">
-                {phase.status}
-              </Badge>
-            </li>
-          ))}
-        </ol>
-      </Card>
-    </main>
+              {showStatus ? "收起服务状态" : "服务状态"}
+            </Button>
+          </div>
+          {showStatus && <ServiceStatus />}
+        </div>
+      </footer>
+    </div>
   );
 }

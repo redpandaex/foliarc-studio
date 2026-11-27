@@ -39,7 +39,6 @@ import {
   useVisualProjection,
 } from "@/components/visual/visual-shared";
 import {
-  ApiClientError,
   memoryApi,
   visualApi,
   type BookTreeResponse,
@@ -50,6 +49,7 @@ import {
   type VisualTimelineLaneEvent,
   type VisualVisibility,
 } from "@/lib/api";
+import { formatWebError } from "@/lib/error-messages";
 
 const COL_WIDTH = 138;
 const LABEL_WIDTH = 208;
@@ -326,7 +326,7 @@ export function PlotlineSwimlanes({
       onDataMutated?.();
       await refetch();
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "保存事件失败");
+      toast.error(formatWebError(err, "保存事件失败，请稍后重试"));
     } finally {
       setSavingEvent(false);
     }
@@ -350,7 +350,7 @@ export function PlotlineSwimlanes({
       onDataMutated?.();
       await refetch();
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "更新事件失败");
+      toast.error(formatWebError(err, "更新事件失败，请稍后重试"));
     } finally {
       setSavingEvent(false);
     }
@@ -415,7 +415,7 @@ export function PlotlineSwimlanes({
                 <Button
                   size="xs"
                   variant="ghost"
-                  title="带入 AI 续写推进该支线"
+                  title="填入 AI 指令草稿"
                   onClick={() =>
                     onSendPromptToAi(
                       isLocation
@@ -424,10 +424,10 @@ export function PlotlineSwimlanes({
                       activeChapterId,
                     )
                   }
-                  className="h-6 shrink-0 px-1.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100"
+                  className="h-6 shrink-0 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
                 >
                   <Sparkles className="size-3" />
-                  推进
+                  带入 AI
                 </Button>
               </div>
 
@@ -823,7 +823,6 @@ export function PlotlineSwimlanes({
                       <span>◆ 照应</span>
                       <span>✓ 回收</span>
                       {visibility === "PLAN" && <span>┄ 计划回收窗口</span>}
-                      <span className="ml-auto opacity-75">按住空白处可左右拖拽平移</span>
                     </div>
                   </div>
 
@@ -833,12 +832,10 @@ export function PlotlineSwimlanes({
                         style={{ width: LABEL_WIDTH }}
                         className="sticky left-0 z-10 shrink-0 border-r border-border bg-card px-3 py-4 text-[11px] text-muted-foreground"
                       >
-                        暂无可见伏笔
+                        暂无伏笔
                       </div>
                       <div className="px-4 py-4 text-[11px] text-muted-foreground">
-                        {visibility === "AS_OF"
-                          ? "截至当前章节暂无已埋伏笔；可在「全书规划」查看待埋设线索或在右侧「故事设定」新建伏笔。"
-                          : "暂无伏笔记录，可在右侧「故事设定 → 伏笔」添加。"}
+                        {visibility === "AS_OF" ? "截至当前章暂无已埋伏笔" : "暂无伏笔记录"}
                       </div>
                     </div>
                   ) : (
@@ -1049,8 +1046,8 @@ export function PlotlineSwimlanes({
                 </div>
                 <div className="text-[10.5px] text-muted-foreground">
                   {selectedArc
-                    ? "伏笔弧线详情 · Esc 关闭"
-                    : `第 ${selectedEvent?.chapterNo ?? "?"} 章事件 · Esc 关闭`}
+                    ? "伏笔详情"
+                    : `第 ${selectedEvent?.chapterNo ?? "?"} 章事件`}
                 </div>
               </div>
               <Button
@@ -1102,7 +1099,7 @@ export function PlotlineSwimlanes({
                     <div className="space-y-1.5 rounded-xl border border-status-warning-border bg-status-warning-bg p-3">
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-semibold text-status-warning">
-                          隐藏底牌（仅作者规划可见）
+                          幕后底牌
                         </span>
                         <button
                           type="button"
@@ -1139,9 +1136,7 @@ export function PlotlineSwimlanes({
 
                   {selectedArc.allowedDirectorModes.length > 0 && (
                     <div className="space-y-2 border-t border-border pt-3">
-                      <div className="text-[11px] font-semibold text-foreground">
-                        一键送入 AI 导演槽
-                      </div>
+                      <div className="text-[11px] font-semibold text-foreground">带入 AI 写作</div>
                       <div className="flex flex-wrap gap-1.5">
                         {selectedArc.allowedDirectorModes.map((mode) => (
                           <Button

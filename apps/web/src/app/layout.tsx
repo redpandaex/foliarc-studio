@@ -13,9 +13,8 @@ const themeInit = `(() => {
 })();`;
 
 export const metadata: Metadata = {
-  title: "FoliarcStudio | 卷弧工坊",
-  description:
-    "企业级长篇小说创作 AI Agent 平台（Next.js + Java 21 Spring Boot + Python FastAPI）",
+  title: "卷弧工坊 · FoliarcStudio",
+  description: "长篇小说创作工作台",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -27,6 +26,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className="h-full antialiased"
     >
       <head>
+        <link rel="preconnect" href="https://fontsapi.zeoseven.com" crossOrigin="anonymous" />
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
       <body className="flex min-h-full flex-col bg-background text-foreground">

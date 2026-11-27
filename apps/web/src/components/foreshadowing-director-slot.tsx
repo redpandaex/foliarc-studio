@@ -150,27 +150,20 @@ export function ForeshadowingDirectorTray({
     <div className="space-y-3 text-[11px]">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <span className="font-semibold text-foreground">伏笔导演与视角</span>
-          <span
-            title={
-              visibility === "AS_OF"
-                ? "与可视化视角同步：仅显示截至当前章节已出现的人物与已埋伏笔（防剧透）"
-                : "与可视化视角同步：全书规划模式，含待埋伏笔与未登场角色"
-            }
-            className="rounded-md bg-muted px-1.5 py-0.5 text-[9.5px] text-muted-foreground"
-          >
-            {visibility === "AS_OF" ? "防剧透" : "全书规划"}
+          <span className="font-semibold text-foreground">伏笔与视角</span>
+          <span className="rounded-md bg-muted px-1.5 py-0.5 text-[9.5px] text-muted-foreground">
+            {visibility === "AS_OF" ? "截至当前章" : "全书规划"}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
             已选 {directives.length}/3
           </span>
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              aria-label="收起伏笔导演面板"
+              aria-label="收起面板"
               className="rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <X className="size-3.5" />
@@ -182,9 +175,7 @@ export function ForeshadowingDirectorTray({
       {/* POV Quick Chips + Custom Input */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] font-medium text-muted-foreground">
-            叙事视角（POV · 防止角色凭空读心）
-          </span>
+          <span className="text-[10px] font-medium text-muted-foreground">视角人物</span>
           {povCharacter && (
             <button
               type="button"
@@ -234,7 +225,7 @@ export function ForeshadowingDirectorTray({
           disabled={disabled}
           value={povCharacter}
           onChange={(e) => onPovCharacterChange(e.target.value)}
-          placeholder="或输入自定义视角人物名..."
+          placeholder="自定义视角人物"
           className="h-7 w-full rounded-lg border border-border bg-background px-2.5 text-[11px] text-foreground placeholder:text-muted-foreground/70 outline-none transition-colors focus:border-ring"
         />
       </div>
@@ -243,9 +234,7 @@ export function ForeshadowingDirectorTray({
       <div className="max-h-44 space-y-2.5 overflow-y-auto pr-0.5">
         {planned.length > 0 && (
           <div className="space-y-1">
-            <div className="text-[10px] font-medium text-muted-foreground">
-              待埋伏笔（勾选本章埋入）
-            </div>
+            <div className="text-[10px] font-medium text-muted-foreground">待埋伏笔</div>
             <ul className="space-y-1">
               {planned.slice(0, 6).map((item) => {
                 const chosen = findDirective(item.id)?.mode === "PLANT";
@@ -281,9 +270,7 @@ export function ForeshadowingDirectorTray({
 
         {activePlanted.length > 0 && (
           <div className="space-y-1">
-            <div className="text-[10px] font-medium text-muted-foreground">
-              已埋伏笔（轻点照应或引爆回收）
-            </div>
+            <div className="text-[10px] font-medium text-muted-foreground">已埋伏笔</div>
             <ul className="space-y-1">
               {activePlanted.slice(0, 8).map((item) => {
                 const cur = findDirective(item.id);
@@ -348,10 +335,8 @@ export function ForeshadowingDirectorTray({
         )}
 
         {planned.length === 0 && activePlanted.length === 0 && (
-          <p className="rounded-lg border border-dashed border-border/80 bg-card/60 px-2.5 py-2 text-[10.5px] leading-relaxed text-muted-foreground">
-            {visibility === "AS_OF"
-              ? "截至当前章节暂无已埋伏笔；切至「全书规划」可选待埋线索，或在「故事设定 → 伏笔」登记。"
-              : "暂无伏笔记录，可在「故事设定 → 伏笔」登记待埋线索或隐藏底牌。"}
+          <p className="rounded-lg border border-dashed border-border/80 bg-card/60 px-2.5 py-2 text-center text-[10.5px] text-muted-foreground">
+            {visibility === "AS_OF" ? "截至当前章暂无已埋伏笔" : "暂无伏笔记录"}
           </p>
         )}
       </div>

@@ -60,7 +60,6 @@ import {
   useVisualProjection,
 } from "@/components/visual/visual-shared";
 import {
-  ApiClientError,
   loreApi,
   memoryApi,
   visualApi,
@@ -71,6 +70,7 @@ import {
   type VisualGraphNode,
   type VisualVisibility,
 } from "@/lib/api";
+import { formatWebError } from "@/lib/error-messages";
 
 const RELATION_PRESETS = ["师徒", "同盟", "仇敌", "挚友", "血亲", "宿敌", "上下级", "暗恋"] as const;
 
@@ -774,7 +774,7 @@ function CharacterRelationGraphInner({
         onDataMutated?.();
       }, 3500);
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "提交记忆抽取失败");
+      toast.error(formatWebError(err, "提交记忆抽取失败，请稍后重试"));
     } finally {
       setExtractingMemory(false);
     }
@@ -800,19 +800,14 @@ function CharacterRelationGraphInner({
       setCharDraft(null);
       if (visibility === "AS_OF" && filteredGraph.nodes.length === 0) {
         onVisibilityChange("PLAN");
-        toast.success(`已创建角色「${createdName}」，已切至「全书规划」展示`);
+        toast.success(`已创建角色「${createdName}」`);
       } else {
-        toast.success(`已创建角色「${createdName}」`, {
-          description:
-            visibility === "AS_OF"
-              ? "尚未在正文出现的新角色可在「全书规划」中查看并连线"
-              : "可直接从卡片边缘圆点拖拽连线建立人物关系",
-        });
+        toast.success(`已创建角色「${createdName}」`);
       }
       onDataMutated?.();
       await refetch();
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "创建角色失败");
+      toast.error(formatWebError(err, "创建角色失败，请稍后重试"));
     } finally {
       setSavingChar(false);
     }
@@ -840,13 +835,11 @@ function CharacterRelationGraphInner({
           effectiveChapterId === activeChapterId && activeSectionId ? activeSectionId : undefined,
       });
       setConnectDraft(null);
-      toast.success("关系已写入结构化长记忆", {
-        description: "后续 AI 续写与 Lorekeeper 校验将自动遵守该关系",
-      });
+      toast.success("已保存人物关系");
       onDataMutated?.();
       await refetch();
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "保存人物关系失败");
+      toast.error(formatWebError(err, "保存人物关系失败，请稍后重试"));
     } finally {
       setSavingRelation(false);
     }
@@ -871,7 +864,7 @@ function CharacterRelationGraphInner({
       onDataMutated?.();
       await refetch();
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "更新人物关系失败");
+      toast.error(formatWebError(err, "更新人物关系失败，请稍后重试"));
     } finally {
       setSavingRelation(false);
     }
@@ -882,11 +875,11 @@ function CharacterRelationGraphInner({
     try {
       const confirmed = await visualApi.confirmRelation(bookId, edge.id);
       setSelectedEdgeId(confirmed.id);
-      toast.success("已转为作者确认关系（无重复边）");
+      toast.success("已转为作者确认关系");
       onDataMutated?.();
       await refetch();
     } catch (err) {
-      toast.error(err instanceof ApiClientError ? err.message : "确认关系失败");
+      toast.error(formatWebError(err, "确认关系失败，请稍后重试"));
     } finally {
       setSavingRelation(false);
     }
@@ -1053,54 +1046,66 @@ function CharacterRelationGraphInner({
         <div className="foliarc-flow relative min-h-0 flex-1">
           {!loading && filteredGraph.nodes.length === 0 ? (
             <div className="flex h-full items-center justify-center p-8">
-              <EmptyState
-                title={
-                  visibility === "AS_OF"
-                    ? "截至当前章节暂无可证实的人物记录"
-                    : "暂无人物与关系数据"
-                }
-                description={
-                  visibility === "AS_OF"
-                    ? "可一键抽取当前章节的人物与关系，或直接新建角色，也可以切换「全书规划」查看尚未登场的人物。"
-                    : "直接新建几位核心角色，或从已写章节一键抽取人物关系网；之后可在画布上直接拖拽连线。"
-                }
-                action={
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    {effectiveChapterId && (
-                      <Button
-                        size="sm"
-                        loading={extractingMemory}
-                        onClick={() => void handleTriggerExtract()}
-                      >
-                        <Wand2 className="size-3.5" />
-                        一键抽取本章人物与关系
-                      </Button>
-                    )}
+              {(projection?.nodes.length ?? 0) > 0 &&
+              (searchTerm.trim() !== "" || selectedFaction !== "ALL") ? (
+                <EmptyState
+                  title="没有符合筛选条件的人物"
+                  action={
                     <Button
                       size="sm"
-                      variant="secondary"
-                      onClick={() =>
-                        setCharDraft({
-                          name: "",
-                          roleType: "PROTAGONIST",
-                          faction: "",
-                          realmOrLevel: "",
-                          aliases: "",
-                          currentLocation: "",
-                        })
-                      }
+                      variant="outline"
+                      onClick={() => {
+                        setSearchTerm("");
+                        setSelectedFaction("ALL");
+                      }}
                     >
-                      <UserPlus className="size-3.5" />
-                      快速新建角色
+                      清除筛选
                     </Button>
-                    {visibility === "AS_OF" && (
-                      <Button size="sm" variant="outline" onClick={() => onVisibilityChange("PLAN")}>
-                        切换到全书规划
+                  }
+                />
+              ) : (
+                <EmptyState
+                  title={
+                    visibility === "AS_OF" ? "截至当前章暂无出场人物" : "暂无人物与关系"
+                  }
+                  action={
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {effectiveChapterId && (
+                        <Button
+                          size="sm"
+                          loading={extractingMemory}
+                          onClick={() => void handleTriggerExtract()}
+                        >
+                          <Wand2 className="size-3.5" />
+                          抽取本章人物
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          setCharDraft({
+                            name: "",
+                            roleType: "PROTAGONIST",
+                            faction: "",
+                            realmOrLevel: "",
+                            aliases: "",
+                            currentLocation: "",
+                          })
+                        }
+                      >
+                        <UserPlus className="size-3.5" />
+                        新建角色
                       </Button>
-                    )}
-                  </div>
-                }
-              />
+                      {visibility === "AS_OF" && (
+                        <Button size="sm" variant="outline" onClick={() => onVisibilityChange("PLAN")}>
+                          查看全书规划
+                        </Button>
+                      )}
+                    </div>
+                  }
+                />
+              )}
             </div>
           ) : (
             <ReactFlow
@@ -1151,14 +1156,14 @@ function CharacterRelationGraphInner({
             </ReactFlow>
           )}
 
-          {/* AI Lorekeeper Cited Relations Highlight Pill */}
+          {/* AI Cited Relations Highlight Pill */}
           {highlightedRelationIds.length > 0 && (
             <div className="absolute top-3 left-3 z-10 flex items-center gap-2 rounded-full border border-status-ai-border bg-status-ai-bg/95 px-3 py-1 text-[11px] font-medium text-status-ai shadow-sm backdrop-blur-sm">
               <Sparkles className="size-3.5 shrink-0" />
               <span>
                 {matchedHighlightCount > 0
-                  ? `已高亮本次 AI 写作引用的 ${matchedHighlightCount} 条人物关系`
-                  : `本次 AI 引用了 ${highlightedRelationIds.length} 条关系（可切「全书规划」查看全部）`}
+                  ? `已高亮本次引用 ${matchedHighlightCount} 条关系`
+                  : `本次引用 ${highlightedRelationIds.length} 条关系`}
               </span>
               {onClearHighlightedRelations && (
                 <button
@@ -1169,13 +1174,6 @@ function CharacterRelationGraphInner({
                   清除
                 </button>
               )}
-            </div>
-          )}
-
-          {/* Subtle drag-to-connect usage hint */}
-          {filteredGraph.nodes.length >= 2 && !selectedNode && !selectedEdge && (
-            <div className="pointer-events-none absolute bottom-3 left-14 rounded-full border border-border bg-card/90 px-3 py-1 text-[11px] text-muted-foreground shadow-2xs backdrop-blur-sm">
-              提示：从人物卡片边缘圆点拖拽到另一人物即可连线建关系；点击人物可看逐章出场热力并跳正文
             </div>
           )}
         </div>
@@ -1197,7 +1195,7 @@ function CharacterRelationGraphInner({
                     ? `${ROLE_META[selectedNode.roleType]?.label ?? selectedNode.roleType} · ${
                         visibility === "AS_OF" ? `截至第 ${projection?.cutoff.chapterNo ?? 0} 章` : "全书规划"
                       }`
-                    : "人物关系详情 · Esc 关闭"}
+                    : "人物关系"}
                 </div>
               </div>
               <Button
@@ -1240,12 +1238,9 @@ function CharacterRelationGraphInner({
 
                   {/* Clickable Chapter Appearance Heat Strip */}
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-foreground">逐章出场热力</span>
-                      <span className="text-[10.5px] text-muted-foreground">点击格子直跳正文</span>
-                    </div>
+                    <div className="font-semibold text-foreground">出场章节</div>
                     {loadingDetail ? (
-                      <div className="text-[11px] text-muted-foreground">正在加载证据...</div>
+                      <div className="text-[11px] text-muted-foreground">加载中…</div>
                     ) : visibleEntityDetail && visibleEntityDetail.heatByChapter.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
                         {visibleEntityDetail.heatByChapter.map((cell) => (
@@ -1270,9 +1265,7 @@ function CharacterRelationGraphInner({
                         ))}
                       </div>
                     ) : (
-                      <p className="text-[11px] text-muted-foreground">
-                        当前范围内暂无逐章出场证据（保存章节并抽取记忆后自动点亮）。
-                      </p>
+                      <p className="text-[11px] text-muted-foreground">暂无出场记录</p>
                     )}
                   </div>
 
@@ -1545,7 +1538,7 @@ function CharacterRelationGraphInner({
             className="w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">快速新建角色（同步故事设定）</h3>
+              <h3 className="text-sm font-semibold text-foreground">新建角色</h3>
               <Button size="icon-xs" variant="ghost" onClick={() => setCharDraft(null)}>
                 <X className="size-3.5" />
               </Button>
@@ -1633,7 +1626,7 @@ function CharacterRelationGraphInner({
             className="w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">新增人物关系（直写长记忆）</h3>
+              <h3 className="text-sm font-semibold text-foreground">新增人物关系</h3>
               <Button size="icon-xs" variant="ghost" onClick={() => setConnectDraft(null)}>
                 <X className="size-3.5" />
               </Button>
@@ -1728,7 +1721,7 @@ function CharacterRelationGraphInner({
                 取消
               </Button>
               <Button type="submit" size="sm" loading={savingRelation}>
-                写入关系网
+                保存关系
               </Button>
             </div>
           </form>

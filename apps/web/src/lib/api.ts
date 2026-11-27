@@ -550,18 +550,18 @@ export function getAccessToken(): string | null {
 async function parseError(res: Response): Promise<ApiClientError> {
   try {
     const data = await res.json();
+    const message =
+      typeof data?.message === "string" && data.message.trim()
+        ? data.message.trim()
+        : "";
     return new ApiClientError(
       res.status,
-      data.code ?? "HTTP_ERROR",
-      data.message ?? `请求失败 (${res.status})`,
-      data.details ?? {},
+      typeof data?.code === "string" ? data.code : `HTTP_${res.status}`,
+      message,
+      data?.details && typeof data.details === "object" ? data.details : {},
     );
   } catch {
-    return new ApiClientError(
-      res.status,
-      "HTTP_ERROR",
-      `请求失败 (${res.status})`,
-    );
+    return new ApiClientError(res.status, `HTTP_${res.status}`, "");
   }
 }
 

@@ -4,12 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { ApiClientError } from "@/lib/api";
+import { formatWebError } from "@/lib/error-messages";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,33 +29,24 @@ export default function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      await login(email, password);
+      await login(email.trim(), password);
       router.push("/books");
     } catch (err) {
-      if (err instanceof ApiClientError) {
-        setError(err.message);
-      } else {
-        setError("登录失败，请检查 biz-java 服务是否已启动");
-      }
+      setError(formatWebError(err, "暂时无法登录，请稍后重试", { action: "login" }));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-6 py-12">
-      <div className="mb-3 flex justify-end">
+    <main className="relative flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>
-      <Card surface="elevated" className="p-6">
+      <Card surface="elevated" className="w-full max-w-sm p-7">
         <div className="mb-6 space-y-1">
-          <p className="font-mono text-xs text-muted-foreground">
-            FoliarcStudio · 卷弧工坊
-          </p>
-          <h1 className="text-2xl font-bold tracking-tight">作者登录</h1>
-          <p className="text-sm text-muted-foreground">
-            Access Token 仅存内存 + HttpOnly Cookie 自动轮换刷新
-          </p>
+          <div className="text-xs font-medium text-muted-foreground">卷弧工坊</div>
+          <h1 className="text-xl font-bold tracking-tight">作者登录</h1>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -70,8 +60,11 @@ export default function LoginPage() {
               required
               autoComplete="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="author@foliarc.studio"
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (error) setError(null);
+              }}
+              placeholder="name@example.com"
               className="h-9 text-sm"
             />
           </div>
@@ -86,29 +79,32 @@ export default function LoginPage() {
               required
               autoComplete="current-password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="请输入至少 8 位密码"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (error) setError(null);
+              }}
+              placeholder="请输入密码"
               className="h-9 text-sm"
             />
           </div>
 
           {error && (
-            <Alert status="danger" announce="assertive">
+            <p role="alert" className="text-xs text-status-danger">
               {error}
-            </Alert>
+            </p>
           )}
 
           <Button type="submit" size="lg" className="w-full" loading={submitting}>
-            {submitting ? "登录中..." : "登录进入书架"}
+            {submitting ? "登录中…" : "登录"}
           </Button>
         </form>
 
         <div className="mt-5 flex items-center justify-between text-xs text-muted-foreground">
-          <Link href="/" className="hover:underline">
-            ← 返回系统探针
+          <Link href="/" className="hover:text-foreground hover:underline">
+            返回首页
           </Link>
           <Link href="/register" className="font-medium text-foreground hover:underline">
-            还没有账号？去注册
+            注册账号
           </Link>
         </div>
       </Card>

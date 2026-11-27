@@ -12,12 +12,19 @@ import { useToast } from "@/components/ui/toast";
 import { useCallback, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin-shell";
 import {
-  AdminApiError,
   adminJobsApi,
   type AdminLibraryDocument,
   type OutboxEventRow,
   type RippleJobRow,
 } from "@/lib/admin-api";
+import {
+  badgeForStatus,
+  labelDocType,
+  labelScope,
+  labelStatus,
+  labelTargetType,
+} from "@/lib/admin-labels";
+import { formatAdminError, formatJobFailureReason } from "@/lib/error-messages";
 
 type JobTab = "outbox" | "documents" | "ripples";
 
@@ -43,7 +50,7 @@ export default function AdminJobsPage() {
       setDocs(d);
       setRipples(r);
     } catch (err) {
-      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载异步任务失败");
+      setError(formatAdminError(err, "加载任务列表失败，请稍后重试"));
     }
   }, []);
 
@@ -63,9 +70,7 @@ export default function AdminJobsPage() {
       })
       .catch((err: unknown) => {
         if (!active) return;
-        setError(
-          err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "加载异步任务失败",
-        );
+        setError(formatAdminError(err, "加载任务列表失败，请稍后重试"));
       });
     return () => {
       active = false;
@@ -77,10 +82,10 @@ export default function AdminJobsPage() {
     setError(null);
     try {
       await adminJobsApi.retryOutbox(eventId);
-      toast.success(`Outbox 事件 ${eventId.slice(0, 8)} 已重置为 PENDING 等待中继投递。`);
+      toast.success("已重新排队投递");
       await loadJobs(statusFilter);
     } catch (err) {
-      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "重试失败");
+      setError(formatAdminError(err, "重试投递失败，请稍后重试", { action: "retry" }));
     } finally {
       setBusyId(null);
     }
@@ -91,10 +96,10 @@ export default function AdminJobsPage() {
     setError(null);
     try {
       await adminJobsApi.retryDocument(docId);
-      toast.success(`文档 ${docId.slice(0, 8)} 已重新入队解析。`);
+      toast.success("已重新排队处理");
       await loadJobs(statusFilter);
     } catch (err) {
-      setError(err instanceof AdminApiError ? `[${err.code}] ${err.message}` : "文档重试失败");
+      setError(formatAdminError(err, "重新处理失败，请稍后重试", { action: "retry" }));
     } finally {
       setBusyId(null);
     }
@@ -102,8 +107,7 @@ export default function AdminJobsPage() {
 
   return (
     <AdminShell
-      title="异步任务中心"
-      subtitle="Outbox 事务发件箱重试 · RAG 文档解析流水线 · 蝴蝶效应改稿作业监控"
+      title="任务中心"
       actions={
         <div className="flex items-center gap-2">
           <Select
@@ -114,10 +118,10 @@ export default function AdminJobsPage() {
             onValueChange={(value) => value !== null && setStatusFilter(value)}
             options={[
               { value: "", label: "全部状态" },
-              { value: "PENDING", label: "PENDING" },
-              { value: "FAILED", label: "FAILED" },
-              { value: "PUBLISHED", label: "PUBLISHED" },
-              { value: "READY", label: "READY" },
+              { value: "PENDING", label: "排队中" },
+              { value: "FAILED", label: "失败" },
+              { value: "PUBLISHED", label: "已投递" },
+              { value: "READY", label: "已就绪" },
             ]}
           />
           <Button
@@ -132,26 +136,44 @@ export default function AdminJobsPage() {
       }
     >
       {error && (
-        <Alert status="danger" announce="assertive">
+        <Alert
+          status="danger"
+          announce="assertive"
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void loadJobs(statusFilter)}
+            >
+              重新加载
+            </Button>
+          }
+        >
           {error}
         </Alert>
       )}
 
-      <div className="flex gap-2">
+      <div
+        role="tablist"
+        aria-label="任务分类"
+        className="inline-flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1"
+      >
         {(
           [
-            ["outbox", `Outbox 发件箱 (${outbox.length})`],
-            ["documents", `文档导入任务 (${docs.length})`],
-            ["ripples", `蝴蝶效应作业 (${ripples.length})`],
+            ["outbox", `事件投递 (${outbox.length})`],
+            ["documents", `资料处理 (${docs.length})`],
+            ["ripples", `跨章修订 (${ripples.length})`],
           ] as [JobTab, string][]
         ).map(([k, label]) => (
           <Button
             key={k}
             type="button"
+            role="tab"
+            aria-selected={tab === k}
             onClick={() => setTab(k)}
-            aria-pressed={tab === k}
             size="sm"
-            variant={tab === k ? "default" : "outline"}
+            variant={tab === k ? "default" : "ghost"}
           >
             {label}
           </Button>
@@ -161,58 +183,72 @@ export default function AdminJobsPage() {
       {tab === "outbox" && (
         <Card className="p-4">
           <DataTable
-            caption="Outbox 发件箱"
+            caption="事件投递任务"
             rows={outbox}
             rowKey={(ev) => ev.id}
-            empty={<EmptyState title="暂无 Outbox 事件" />}
+            empty={
+              statusFilter ? (
+                <EmptyState
+                  title="当前状态下暂无投递任务"
+                  action={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setStatusFilter("")}
+                    >
+                      查看全部
+                    </Button>
+                  }
+                />
+              ) : (
+                <EmptyState title="暂无投递任务" />
+              )
+            }
             columns={[
               {
                 id: "event",
-                header: "事件类型 / RoutingKey",
+                header: "事件",
                 cell: (ev) => (
                   <>
-                    <div className="font-mono font-medium">{ev.eventType}</div>
+                    <div className="font-medium">{ev.eventType}</div>
                     <div className="font-mono text-[10px] text-muted-foreground">
-                      {ev.routingKey}
+                      {ev.id.slice(0, 12)}
                     </div>
                   </>
                 ),
               },
               {
                 id: "aggregate",
-                header: "聚合 ID",
-                className: "font-mono text-[11px]",
+                header: "关联对象",
                 cell: (ev) => (
                   <>
-                    {ev.aggregateType}:{ev.aggregateId.slice(0, 12)}
+                    <span>{labelTargetType(ev.aggregateType)}</span>
+                    <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+                      {ev.aggregateId.slice(0, 10)}
+                    </span>
                   </>
                 ),
               },
               {
                 id: "status",
                 header: "状态",
-                className: "font-mono text-[11px]",
                 cell: (ev) => (
-                  <Badge
-                    status={
-                      ev.status === "FAILED"
-                        ? "danger"
-                        : ev.status === "PUBLISHED"
-                          ? "success"
-                          : "warning"
-                    }
-                  >
-                    {ev.status}
-                  </Badge>
+                  <Badge status={badgeForStatus(ev.status)}>{labelStatus(ev.status)}</Badge>
                 ),
               },
               {
                 id: "retries",
-                header: "重试次数 / 错误",
-                className: "text-[11px] text-muted-foreground",
+                header: "重试与结果",
+                className: "text-xs text-muted-foreground",
                 cell: (ev) => (
                   <>
-                    #{ev.retryCount} {ev.lastError ? `· ${ev.lastError.slice(0, 80)}` : ""}
+                    <span className="font-mono tabular-nums">{ev.retryCount} 次</span>
+                    {ev.lastError && (
+                      <span className="ml-2 text-status-danger">
+                        {formatJobFailureReason(ev.lastError, "投递失败")}
+                      </span>
+                    )}
                   </>
                 ),
               },
@@ -223,12 +259,12 @@ export default function AdminJobsPage() {
                 cell: (ev) => (
                   <Button
                     type="button"
-                    disabled={busyId === ev.id}
+                    loading={busyId === ev.id}
                     onClick={() => void handleRetryOutbox(ev.id)}
                     variant="outline"
                     size="sm"
                   >
-                    重试投递
+                    重试
                   </Button>
                 ),
               },
@@ -240,53 +276,65 @@ export default function AdminJobsPage() {
       {tab === "documents" && (
         <Card className="p-4">
           <DataTable
-            caption="文档导入任务"
+            caption="资料处理任务"
             rows={docs}
             rowKey={(doc) => doc.id}
-            empty={<EmptyState title="暂无文档导入任务" />}
+            empty={
+              statusFilter ? (
+                <EmptyState
+                  title="当前状态下暂无资料任务"
+                  action={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setStatusFilter("")}
+                    >
+                      查看全部
+                    </Button>
+                  }
+                />
+              ) : (
+                <EmptyState title="暂无资料处理任务" />
+              )
+            }
             columns={[
               {
                 id: "title",
-                header: "文档标题",
+                header: "资料",
                 className: "font-medium",
                 cell: (doc) => doc.title,
               },
               {
                 id: "scope",
-                header: "作用域 / 类型",
-                className: "font-mono text-[11px]",
+                header: "范围与类型",
                 cell: (doc) => (
-                  <>
-                    {doc.scope} / {doc.docType}
-                  </>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge status="neutral">{labelScope(doc.scope, doc.accessType)}</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {labelDocType(doc.docType)}
+                    </span>
+                  </div>
                 ),
               },
               {
                 id: "progress",
-                header: "进度",
-                className: "font-mono text-[11px]",
+                header: "状态与进度",
                 cell: (doc) => (
-                  <>
-                    <Badge
-                      status={
-                        doc.status === "READY"
-                          ? "success"
-                          : doc.status === "FAILED"
-                            ? "danger"
-                            : "warning"
-                      }
-                    >
-                      {doc.status}
-                    </Badge>{" "}
-                    ({doc.progress}%) · {doc.chunkCount} chunks
-                  </>
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge status={badgeForStatus(doc.status)}>{labelStatus(doc.status)}</Badge>
+                    <span className="font-mono text-muted-foreground tabular-nums">
+                      {doc.progress}% · {doc.chunkCount} 段
+                    </span>
+                  </div>
                 ),
               },
               {
                 id: "error",
-                header: "错误",
-                className: "text-[11px] text-status-danger",
-                cell: (doc) => doc.errorMessage || "-",
+                header: "异常",
+                className: "text-xs text-status-danger",
+                cell: (doc) =>
+                  doc.errorMessage ? formatJobFailureReason(doc.errorMessage, "解析失败") : "-",
               },
               {
                 id: "actions",
@@ -295,12 +343,12 @@ export default function AdminJobsPage() {
                 cell: (doc) => (
                   <Button
                     type="button"
-                    disabled={busyId === doc.id}
+                    loading={busyId === doc.id}
                     onClick={() => void handleRetryDocument(doc.id)}
                     variant="outline"
                     size="sm"
                   >
-                    重新解析
+                    重新处理
                   </Button>
                 ),
               },
@@ -312,49 +360,49 @@ export default function AdminJobsPage() {
       {tab === "ripples" && (
         <Card className="p-4">
           <DataTable
-            caption="蝴蝶效应作业"
+            caption="跨章修订任务"
             rows={ripples}
             rowKey={(job) => job.id}
-            empty={<EmptyState title="暂无蝴蝶效应作业" />}
+            empty={<EmptyState title="暂无跨章修订任务" />}
             columns={[
               {
                 id: "id",
-                header: "Job ID",
-                className: "font-mono text-[11px]",
+                header: "任务编号",
+                className: "font-mono text-xs",
                 cell: (job) => job.id.slice(0, 14),
               },
               {
                 id: "chapters",
-                header: "源章节 / 扫描区间",
-                className: "font-mono text-[11px]",
+                header: "修订范围",
+                className: "text-xs tabular-nums",
                 cell: (job) => (
                   <>
-                    Ch.{job.sourceChapterNo} → [{job.rangeStartChapterNo}..{job.rangeEndChapterNo}]
+                    第 {job.sourceChapterNo} 章 → 第 {job.rangeStartChapterNo}–
+                    {job.rangeEndChapterNo} 章
                   </>
                 ),
               },
               {
                 id: "status",
                 header: "状态",
-                className: "font-mono text-[11px] text-status-info",
                 cell: (job) => (
-                  <Badge status={job.status === "FAILED" ? "danger" : "info"}>{job.status}</Badge>
+                  <Badge status={badgeForStatus(job.status)}>{labelStatus(job.status)}</Badge>
                 ),
               },
               {
                 id: "progress",
-                header: "候选 / 已补丁",
-                className: "font-mono text-[11px]",
+                header: "已修订 / 候选",
+                className: "font-mono text-xs tabular-nums",
                 cell: (job) => (
                   <>
-                    {job.patchedCount}/{job.totalCandidates}
+                    {job.patchedCount} / {job.totalCandidates}
                   </>
                 ),
               },
               {
                 id: "created",
                 header: "创建时间",
-                className: "font-mono text-[10px] text-muted-foreground",
+                className: "text-xs text-muted-foreground tabular-nums",
                 cell: (job) =>
                   job.createdAt ? new Date(job.createdAt).toLocaleString("zh-CN") : "-",
               },

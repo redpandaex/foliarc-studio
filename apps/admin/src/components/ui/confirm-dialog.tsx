@@ -102,6 +102,32 @@ interface ActiveConfirm {
   resolve: (result: ConfirmResult) => void;
 }
 
+function sanitizeConfirmError(err: unknown): string {
+  const fallback = "操作未能完成，请稍后重试";
+  if (typeof err !== "object" || err === null) return fallback;
+  const candidate = err as { status?: number; message?: string };
+  if (candidate.status === 401) return "登录状态已过期，请重新登录";
+  if (candidate.status === 403) return "当前账号没有此操作权限";
+  if (candidate.status === 404) return "目标记录不存在或已被删除";
+  if (candidate.status === 409) return "内容已在别处更新，请刷新后重试";
+  if (candidate.status === 429) return "操作过于频繁，请稍后再试";
+  const raw =
+    typeof candidate.message === "string"
+      ? candidate.message.replace(/^\s*\[[A-Z0-9_ -]{2,40}\]\s*/, "").trim()
+      : "";
+  if (
+    !raw ||
+    raw.length > 140 ||
+    !/[\u4e00-\u9fff]/.test(raw) ||
+    /<!doctype|<html|exception|traceback|sqlstate|localhost:|:(?:3000|3001|8000|8080|8081)|\b(?:admin-java|biz-java|agent-py|rabbitmq|minio|milvus|postgres|redis|outbox)\b|failed to fetch|networkerror|\bhttp[_\s-]*\d{3}\b/i.test(
+      raw,
+    )
+  ) {
+    return fallback;
+  }
+  return raw;
+}
+
 const ConfirmContext = createContext<ConfirmFn | null>(null);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
@@ -155,14 +181,13 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         current.resolve("succeeded");
       })
       .catch((err: unknown) => {
+        console.error("[ConfirmAction]", err);
         setOpen(false);
         setPending(false);
         inFlightRef.current = false;
         activeRef.current = null;
         setActive(null);
-        const msg =
-          err instanceof Error && err.message ? err.message : "操作未能完成，请稍后重试";
-        toast.error(msg);
+        toast.error(sanitizeConfirmError(err));
         current.resolve("failed");
       });
   }, [toast]);

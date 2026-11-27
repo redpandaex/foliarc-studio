@@ -825,16 +825,13 @@ export function LorePanel({
                   rows={5}
                   value={charterDraft}
                   onChange={(e) => setCharterDraft(e.target.value)}
-                  placeholder="可留空由 AI 随前几章自动总结主线、人称与基调；也可手动写定后锁定，锁定后 AI 不会覆盖..."
+                  placeholder="核心主线、叙事基调与全局设定（留空由系统自动归纳）"
                   className="block w-full resize-none rounded-xl border border-border/70 bg-surface-subtle/60 p-2.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/70 outline-none transition-colors focus:border-ring"
                 />
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-muted-foreground">
-                    锁定后作为全局创作铁律注入
-                  </span>
+                <div className="mt-2 flex justify-end">
                   <Button type="submit" size="xs" disabled={savingCharter}>
                     {savingCharter
-                      ? "保存中..."
+                      ? "保存中…"
                       : charter?.charterSource === "AUTO_INFERRED"
                         ? "确认并锁定"
                         : "保存档案"}
@@ -908,8 +905,8 @@ export function LorePanel({
                 )}
 
                 {styleAnchors.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-border/80 bg-surface-subtle/40 px-3 py-3 text-center text-[11px] leading-relaxed text-muted-foreground">
-                    暂无文风锚点。在正文划选满意段落可一键收藏，让 AI 贴合你的句式与用词节奏。
+                  <p className="rounded-xl border border-dashed border-border/80 bg-surface-subtle/40 px-3 py-3 text-center text-[11px] text-muted-foreground">
+                    暂无文风锚点
                   </p>
                 ) : (
                   <ul className="space-y-1.5">
@@ -976,7 +973,7 @@ export function LorePanel({
               <div className="p-2.5">
                 {libraryDocs.length === 0 ? (
                   <p className="rounded-xl border border-dashed border-border/80 bg-surface-subtle/40 px-3 py-3 text-center text-[11px] text-muted-foreground">
-                    暂无绑定资料，可前往「资料库」上传设定集或行业参考。
+                    暂无参考资料
                   </p>
                 ) : (
                   <ul className="space-y-1.5">
@@ -989,7 +986,9 @@ export function LorePanel({
                           <button
                             type="button"
                             role="switch"
+                            aria-label={`本书启用 ${doc.title}`}
                             aria-checked={doc.boundToBook}
+                            title={doc.boundToBook ? "本书已启用" : "本书未启用"}
                             onClick={() => void handleToggleBookDoc(doc)}
                             className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
                               doc.boundToBook ? "bg-primary" : "bg-muted"
@@ -1006,7 +1005,7 @@ export function LorePanel({
                           </span>
                         </div>
                         <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[9.5px] text-muted-foreground">
-                          {doc.accessType === "USER"
+                          {doc.boundToBook ? "本书启用" : doc.accessType === "USER"
                             ? "个人"
                             : doc.accessType === "ASSIGNED"
                               ? "专属"
@@ -1694,29 +1693,36 @@ export function LorePanel({
                   />
                 </div>
 
-                <textarea
-                  rows={2}
-                  value={fSurfaceClue}
-                  onChange={(e) => setFSurfaceClue(e.target.value)}
-                  placeholder="表层线索（读者与主角可见：玉佩遇血发烫、刻有半截残纹……）"
-                  className="w-full resize-none rounded-lg border border-border bg-surface-subtle/60 p-2 text-xs leading-relaxed outline-none focus:border-ring"
-                />
-                <textarea
-                  rows={2}
-                  value={fHiddenTruth}
-                  onChange={(e) => setFHiddenTruth(e.target.value)}
-                  placeholder="幕后底牌（选填：未在导演槽启用引爆前，AI 写手绝不可提前剧透）"
-                  className="w-full resize-none rounded-lg border border-status-warning-border/70 bg-status-warning-bg/40 p-2 text-xs leading-relaxed outline-none focus:border-ring"
-                />
+                <div className="space-y-1">
+                  <label className="text-[10px] font-medium text-muted-foreground">表层线索</label>
+                  <textarea
+                    rows={2}
+                    value={fSurfaceClue}
+                    onChange={(e) => setFSurfaceClue(e.target.value)}
+                    placeholder="玉佩遇血发烫、刻有半截残纹"
+                    className="w-full resize-none rounded-lg border border-border bg-surface-subtle/60 p-2 text-xs leading-relaxed outline-none focus:border-ring"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-medium text-status-warning">
+                    幕后底牌（选填）
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={fHiddenTruth}
+                    onChange={(e) => setFHiddenTruth(e.target.value)}
+                    placeholder="默认对读者与正文隐藏"
+                    className="w-full resize-none rounded-lg border border-status-warning-border/70 bg-status-warning-bg/40 p-2 text-xs leading-relaxed outline-none focus:border-ring"
+                  />
+                </div>
 
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-surface-subtle/60 px-2.5 py-1.5">
-                  <span className="text-[10.5px] text-muted-foreground">
-                    作者锁定（AI 整理需经确认才可标为已回收）
-                  </span>
+                  <span className="text-[10.5px] text-muted-foreground">作者锁定</span>
                   <button
                     type="button"
                     role="switch"
                     aria-checked={fAuthorLocked}
+                    title="开启后，AI 整理不会自动将其标为已回收"
                     onClick={() => setFAuthorLocked((v) => !v)}
                     className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
                       fAuthorLocked ? "bg-primary" : "bg-muted"
@@ -1750,15 +1756,12 @@ export function LorePanel({
             {filteredForeshadowings.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border bg-card/60 px-4 py-8 text-center">
                 <p className="text-xs font-medium text-foreground">
-                  {foreshadowings.length === 0 ? "尚未登记伏笔线索" : "没有匹配的伏笔"}
-                </p>
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  将表面线索与幕后底牌分开记录，防剧透机制可自动护航长篇伏笔回收。
+                  {foreshadowings.length === 0 ? "暂无伏笔" : "没有匹配的伏笔"}
                 </p>
                 {foreshadowings.length === 0 && !clueComposerOpen && (
                   <Button size="xs" className="mt-3" onClick={openNewClueForm}>
                     <Plus className="size-3.5" />
-                    登记首条伏笔
+                    新建伏笔
                   </Button>
                 )}
               </div>
