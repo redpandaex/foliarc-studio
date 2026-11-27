@@ -9,8 +9,21 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type CSSProperties,
   type FormEvent,
 } from "react";
+import {
+  Check,
+  Download,
+  History,
+  Maximize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  RefreshCw,
+} from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { AiCopilotPanel, type SelectionEditTask } from "@/components/ai-copilot-panel";
 import { AiDiffReviewModal } from "@/components/ai-diff-review-modal";
@@ -18,7 +31,6 @@ import { BookStructureTree } from "@/components/book-structure-tree";
 import { LorePanel } from "@/components/lore-panel";
 import { RippleEditDrawer } from "@/components/ripple-edit-drawer";
 import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
@@ -55,8 +67,85 @@ const CHAPTER_STATUS_OPTIONS: SelectOption[] = Object.entries(CHAPTER_STATUS_LAB
   ([value, label]) => ({ value, label }),
 );
 
+type WorkbenchDensity = "compact" | "balanced" | "relaxed";
+
+const DENSITY_STORAGE_KEY = "foliarc:workbench_density";
+const DENSITY_CHANGE_EVENT = "foliarc-density-change";
+const DENSITY_ORDER: readonly WorkbenchDensity[] = ["compact", "balanced", "relaxed"];
+
+const DENSITY_META: Record<
+  WorkbenchDensity,
+  { label: string; short: string; desc: string; fontSize: string; lineHeight: string }
+> = {
+  compact: {
+    label: "紧凑全宽",
+    short: "紧凑",
+    desc: "全宽高效排布 · 最大化视野",
+    fontSize: "0.96875rem",
+    lineHeight: "1.78",
+  },
+  balanced: {
+    label: "标准宽幅",
+    short: "标准",
+    desc: "居中宽纸面 · 均衡留白",
+    fontSize: "1.03125rem",
+    lineHeight: "1.88",
+  },
+  relaxed: {
+    label: "舒展沉浸",
+    short: "舒展",
+    desc: "经典书卷版心 · 宽松行距",
+    fontSize: "1.09375rem",
+    lineHeight: "1.98",
+  },
+};
+
+function isValidDensity(value: string | null | undefined): value is WorkbenchDensity {
+  return value === "compact" || value === "balanced" || value === "relaxed";
+}
+
+function readStoredDensity(): WorkbenchDensity {
+  if (typeof window === "undefined") return "compact";
+  try {
+    const saved = window.localStorage.getItem(DENSITY_STORAGE_KEY);
+    if (isValidDensity(saved)) return saved;
+  } catch {
+    // ignore storage restrictions
+  }
+  return "compact";
+}
+
+function saveDensity(next: WorkbenchDensity) {
+  try {
+    window.localStorage.setItem(DENSITY_STORAGE_KEY, next);
+  } catch {
+    // ignore storage restrictions
+  }
+  window.dispatchEvent(new Event(DENSITY_CHANGE_EVENT));
+}
+
+function subscribeDensity(onStoreChange: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === DENSITY_STORAGE_KEY) onStoreChange();
+  };
+  window.addEventListener(DENSITY_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(DENSITY_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
 function countWords(text: string): number {
   return text.replace(/\s+/g, "").length;
+}
+
+function countParagraphs(text: string): number {
+  if (!text.trim()) return 0;
+  return text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean).length;
 }
 
 function activeChapterStorageKey(bookId: string): string {
@@ -114,7 +203,37 @@ function BookWorkbenchContent() {
   const [creatingChapter, setCreatingChapter] = useState(false);
 
   const [rightTab, setRightTab] = useState<"ai" | "lore">("ai");
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [densityMenuOpen, setDensityMenuOpen] = useState(false);
+
+  const density = useSyncExternalStore<WorkbenchDensity>(
+    subscribeDensity,
+    readStoredDensity,
+    () => "compact",
+  );
+  const isCompact = density === "compact";
+  const densityMeta = DENSITY_META[density];
+  const densityMenuRef = useRef<HTMLDivElement | null>(null);
+  const manuscriptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!densityMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (densityMenuRef.current && !densityMenuRef.current.contains(e.target as Node)) {
+        setDensityMenuOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setDensityMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [densityMenuOpen]);
 
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [rippleOpen, setRippleOpen] = useState(false);
@@ -145,6 +264,19 @@ function BookWorkbenchContent() {
   }, [tree]);
 
   const liveWordCount = useMemo(() => countWords(draftContent), [draftContent]);
+  const liveParagraphCount = useMemo(() => countParagraphs(draftContent), [draftContent]);
+  const estimatedReadMinutes = useMemo(
+    () => (liveWordCount === 0 ? 0 : Math.max(1, Math.ceil(liveWordCount / 450))),
+    [liveWordCount],
+  );
+  const editorTypographyStyle = useMemo(
+    () =>
+      ({
+        "--editor-font-size": densityMeta.fontSize,
+        "--editor-line-height": densityMeta.lineHeight,
+      }) as CSSProperties,
+    [densityMeta.fontSize, densityMeta.lineHeight],
+  );
 
   const activeTreeChapter = useMemo(() => {
     if (!activeId) return null;
@@ -622,37 +754,45 @@ function BookWorkbenchContent() {
   }
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden bg-background">
-      {/* Top Toolbar */}
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-4">
-        <div className="flex min-w-0 items-center gap-3">
+    <div
+      style={editorTypographyStyle}
+      className="relative flex h-screen flex-col overflow-hidden bg-background"
+    >
+      {/* Top Toolbar — airy, hairline, single focal CTA */}
+      <header
+        className={`flex shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 ${
+          isCompact ? "h-11" : "h-12"
+        }`}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title={leftPanelOpen ? "收起目录（沉浸写作）" : "展开目录"}
+            aria-label={leftPanelOpen ? "收起目录" : "展开目录"}
+            onClick={() => setLeftPanelOpen((v) => !v)}
+          >
+            {leftPanelOpen ? (
+              <PanelLeftClose className="size-4" />
+            ) : (
+              <PanelLeftOpen className="size-4" />
+            )}
+          </Button>
           <Link
             href="/books"
-            className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             ← 书架
           </Link>
-          <span className="text-muted-foreground">/</span>
-          <h1 className="truncate text-sm font-semibold">
+          <span className="text-border">/</span>
+          <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
             {book?.title ?? "未命名小说"}
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {activeChapter && (
             <>
-              <span className="hidden font-mono text-xs text-muted-foreground md:inline">
-                {liveWordCount.toLocaleString()} 字 ·{" "}
-                {saveState === "saving"
-                  ? "保存中..."
-                  : saveState === "dirty"
-                    ? "未保存"
-                    : saveState === "conflict"
-                      ? "版本冲突"
-                      : saveState === "saved"
-                        ? "已保存"
-                        : "就绪"}
-              </span>
               {!isMultiSectionEditing && (
                 <Select
                   id="workbench-chapter-status"
@@ -665,13 +805,14 @@ function BookWorkbenchContent() {
                     setDraftStatus(next);
                     setSaveState("dirty");
                   }}
-                  className="w-24"
+                  className="w-22 [&_button]:h-7 [&_button]:border-transparent [&_button]:bg-muted [&_button]:px-2.5 [&_button]:hover:bg-muted/80"
                 />
               )}
+              <span className="mx-1 hidden h-4 w-px bg-border sm:inline-block" />
               {isMultiSectionEditing && activeTreeChapter && (
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="ghost"
                   onClick={() => void handleOpenFullPreview(activeTreeChapter)}
                 >
                   整章预览
@@ -680,43 +821,40 @@ function BookWorkbenchContent() {
               {effectiveSectionId && (
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="ghost"
                   onClick={() => setRippleOpen(true)}
                 >
-                  同步前后文
+                  <RefreshCw className="size-3.5" />
+                  <span className="hidden lg:inline">同步前后文</span>
                 </Button>
               )}
               {!isMultiSectionEditing && (
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="ghost"
                   onClick={() => setVersionsOpen(true)}
                 >
-                  历史版本 ({versions.length})
+                  <History className="size-3.5" />
+                  <span className="hidden lg:inline">历史版本 ({versions.length})</span>
                 </Button>
               )}
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={saveState === "saving" || saveState === "conflict"}
-                onClick={() => void saveCurrentUnit()}
-              >
-                保存
-              </Button>
             </>
           )}
           {book && (
             <div className="relative">
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 disabled={exportingFormat !== null}
                 onClick={() => setExportMenuOpen((v) => !v)}
               >
-                {exportingFormat ? `导出 ${exportingFormat.toUpperCase()}...` : "导出成品"}
+                <Download className="size-3.5" />
+                <span className="hidden md:inline">
+                  {exportingFormat ? `导出 ${exportingFormat.toUpperCase()}...` : "导出"}
+                </span>
               </Button>
               {exportMenuOpen && (
-                <div className="absolute right-0 top-9 z-40 w-48 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
+                <div className="absolute right-0 top-9 z-40 w-48 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-lg">
                   {(
                     [
                       ["epub", "EPUB 3.0 电子书 (.epub)"],
@@ -744,7 +882,7 @@ function BookWorkbenchContent() {
                           })
                           .finally(() => setExportingFormat(null));
                       }}
-                      className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+                      className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-primary-soft hover:text-primary-soft-foreground"
                     >
                       {label}
                     </button>
@@ -753,40 +891,118 @@ function BookWorkbenchContent() {
               )}
             </div>
           )}
+
+          {/* Density / Canvas Width Switcher */}
+          <div ref={densityMenuRef} className="relative">
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-haspopup="menu"
+              aria-expanded={densityMenuOpen}
+              title="切换版心与界面密度"
+              onClick={() => setDensityMenuOpen((v) => !v)}
+            >
+              <Maximize2 className="size-3.5 text-primary" />
+              <span className="hidden sm:inline">{densityMeta.short}</span>
+            </Button>
+            {densityMenuOpen && (
+              <div
+                role="menu"
+                aria-label="切换版心与界面密度"
+                className="absolute right-0 top-9 z-50 w-56 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+              >
+                {DENSITY_ORDER.map((mode) => {
+                  const meta = DENSITY_META[mode];
+                  const active = density === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={active}
+                      onClick={() => {
+                        saveDensity(mode);
+                        setDensityMenuOpen(false);
+                      }}
+                      className={`flex w-full items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                        active
+                          ? "bg-primary-soft text-primary-soft-foreground"
+                          : "text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      <div>
+                        <div className="text-xs font-medium">{meta.label}</div>
+                        <div className="mt-0.5 text-[10.5px] opacity-75">{meta.desc}</div>
+                      </div>
+                      {active && <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <ThemeToggle />
+          {activeChapter && (
+            <Button
+              size="sm"
+              variant="default"
+              disabled={saveState === "saving" || saveState === "conflict"}
+              onClick={() => void saveCurrentUnit()}
+              className="ml-0.5 px-3"
+            >
+              保存
+            </Button>
+          )}
+          <span className="mx-1 h-4 w-px bg-border" />
           <Button
             size="sm"
             variant="ghost"
+            title={rightPanelOpen ? "收起右侧助手" : "展开右侧助手"}
             onClick={() => setRightPanelOpen((v) => !v)}
           >
-            {rightPanelOpen ? "收起助手" : "展开助手"}
+            {rightPanelOpen ? (
+              <PanelRightClose className="size-4" />
+            ) : (
+              <PanelRightOpen className="size-4" />
+            )}
+            <span className="hidden sm:inline">
+              {rightPanelOpen ? "收起助手" : "展开助手"}
+            </span>
           </Button>
         </div>
       </header>
 
       {/* Main Three-Pane Body */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <BookStructureTree
-          tree={tree}
-          activeChapterId={activeId}
-          activeSectionId={activeSection?.id ?? null}
-          runningChapterIds={runningChapterIds}
-          creatingChapter={creatingChapter}
-          newChapterTitle={newChapterTitle}
-          onNewChapterTitleChange={setNewChapterTitle}
-          onCreateChapter={handleCreateChapter}
-          onSelectChapter={(ch) => void handleSelectChapter(ch)}
-          onSelectSection={(ch, sec) => void handleSelectSection(ch, sec)}
-          onDeleteChapter={(ch) => void handleDeleteChapter(ch)}
-          onCreateSection={(ch) => void handleCreateSection(ch)}
-          onDeleteSection={(ch, sec) => void handleDeleteSection(ch, sec)}
-          onOpenFullPreview={(ch) => void handleOpenFullPreview(ch)}
-          onCreateVolume={handleCreateVolume}
-          onUpdateVolume={handleUpdateVolume}
-        />
+        {leftPanelOpen && (
+          <BookStructureTree
+            tree={tree}
+            activeChapterId={activeId}
+            activeSectionId={activeSection?.id ?? null}
+            runningChapterIds={runningChapterIds}
+            creatingChapter={creatingChapter}
+            newChapterTitle={newChapterTitle}
+            compact={isCompact}
+            onNewChapterTitleChange={setNewChapterTitle}
+            onCreateChapter={handleCreateChapter}
+            onSelectChapter={(ch) => void handleSelectChapter(ch)}
+            onSelectSection={(ch, sec) => void handleSelectSection(ch, sec)}
+            onDeleteChapter={(ch) => void handleDeleteChapter(ch)}
+            onCreateSection={(ch) => void handleCreateSection(ch)}
+            onDeleteSection={(ch, sec) => void handleDeleteSection(ch, sec)}
+            onOpenFullPreview={(ch) => void handleOpenFullPreview(ch)}
+            onCreateVolume={handleCreateVolume}
+            onUpdateVolume={handleUpdateVolume}
+          />
+        )}
 
-        {/* Center Pane: Manuscript Editor */}
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Center Pane: Adaptive Paper Manuscript Editor + Docked Status Bar */}
+        <section
+          className={`flex min-w-0 flex-1 flex-col overflow-hidden ${
+            isCompact ? "bg-background" : "bg-surface-subtle/55"
+          }`}
+        >
           {vipLimitError && (
             <Alert
               status="vip"
@@ -842,130 +1058,244 @@ function BookWorkbenchContent() {
           )}
 
           {activeChapter ? (
-            <div className="flex min-h-0 flex-1 flex-col px-6 py-6 sm:px-10">
-              <div className="mx-auto mb-4 flex w-full max-w-editor items-center gap-3 border-b border-border pb-3">
-                <Badge status="neutral" className="shrink-0 font-mono text-[11px]">
-                  {isMultiSectionEditing && activeSection
-                    ? `第 ${activeChapter.chapterNo} 章 · 第 ${activeSection.sectionNo} 节`
-                    : `第 ${activeChapter.chapterNo} 章`}
-                </Badge>
-                <input
-                  value={draftTitle}
-                  onChange={(e) => {
-                    setDraftTitle(e.target.value);
-                    if (saveState !== "conflict") setSaveState("dirty");
-                  }}
-                  placeholder={isMultiSectionEditing ? "请输入小节标题" : "请输入章节标题"}
-                  className="min-w-0 flex-1 bg-transparent font-editor text-xl font-bold text-foreground placeholder:text-muted-foreground outline-none"
-                />
-              </div>
-
-              {selectedExcerpt.length >= 10 && selectedRange && (
-                <div className="mx-auto mb-3 flex w-full max-w-editor flex-wrap items-center justify-between gap-2 rounded-lg border border-status-ai-border bg-status-ai-bg px-3 py-1.5 text-xs text-status-ai">
-                  <span className="truncate font-medium">
-                    已划选 {selectedExcerpt.length} 字片段
-                  </span>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Button
-                      size="xs"
-                      onClick={() => {
-                        setSelectionTask({
-                          mode: "REWRITE",
-                          text: selectedExcerpt,
-                          start: selectedRange.start,
-                          end: selectedRange.end,
-                        });
-                        setRightTab("ai");
-                        setRightPanelOpen(true);
-                      }}
-                    >
-                      AI 划词改写
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => {
-                        setSelectionTask({
-                          mode: "EXPAND",
-                          text: selectedExcerpt,
-                          start: selectedRange.start,
-                          end: selectedRange.end,
-                        });
-                        setRightTab("ai");
-                        setRightPanelOpen(true);
-                      }}
-                    >
-                      AI 划词扩写
-                    </Button>
-                    {selectedExcerpt.length >= 20 && selectedExcerpt.length <= 900 && (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => {
-                          const titleLabel = activeChapter
-                            ? `第${activeChapter.chapterNo}章片段`
-                            : "正文选段";
-                          void styleAnchorsApi
-                            .upsert(bookId, {
-                              title: titleLabel,
-                              excerptText: selectedExcerpt,
-                              enabled: true,
-                            })
-                            .then(() => {
-                              setSelectedExcerpt("");
-                              setSelectedRange(null);
-                              setAnchorRefreshKey((k) => k + 1);
-                              toast.success("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
-                            })
-                            .catch((err) => {
-                              const msg =
-                                err instanceof Error ? err.message : "设为文风锚点失败";
-                              setErrorMsg(msg);
-                              toast.error(msg);
-                            });
-                        }}
-                      >
-                        设为文风锚点
-                      </Button>
-                    )}
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => {
-                        setSelectedExcerpt("");
-                        setSelectedRange(null);
-                      }}
-                      title="清除选中条"
-                    >
-                      ×
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              <Textarea
-                variant="manuscript"
-                value={draftContent}
-                onSelect={(e) => {
-                  const el = e.currentTarget;
-                  const start = el.selectionStart;
-                  const end = el.selectionEnd;
-                  const chunk = el.value.slice(start, end).trim();
-                  if (chunk.length >= 10) {
-                    setSelectedExcerpt(chunk);
-                    setSelectedRange({ start, end });
-                  } else {
-                    setSelectedExcerpt("");
-                    setSelectedRange(null);
+            <>
+              <div
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) {
+                    manuscriptRef.current?.focus();
                   }
                 }}
-                onChange={(e) => {
-                  setDraftContent(e.target.value);
-                  if (saveState !== "conflict") setSaveState("dirty");
-                }}
-                placeholder="在此开始撰写正文...（支持自动保存与 Ctrl+S 手动保存；划选段落可触发 AI 划词改写/扩写或设为本书文风锚点）"
-              />
-            </div>
+                className={`flex-1 cursor-text overflow-y-auto ${
+                  isCompact
+                    ? "px-5 py-3.5 sm:px-7"
+                    : density === "balanced"
+                      ? "px-5 py-5 sm:px-8"
+                      : "px-5 py-6 sm:px-10"
+                }`}
+              >
+                <div
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) {
+                      manuscriptRef.current?.focus();
+                    }
+                  }}
+                  className={
+                    isCompact
+                      ? "w-full pb-16"
+                      : density === "balanced"
+                        ? "mx-auto min-h-full w-full max-w-[940px] rounded-xl border border-border/80 bg-background px-7 py-6 pb-20 shadow-2xs sm:px-10"
+                        : "mx-auto min-h-full w-full max-w-[740px] rounded-2xl border border-border/80 bg-background px-8 py-8 pb-28 shadow-2xs sm:px-12"
+                  }
+                >
+                  {isCompact ? (
+                    <div className="mb-3 flex items-center gap-2.5 border-b border-border/80 pb-2.5">
+                      <span className="shrink-0 rounded-md bg-primary-soft px-2 py-0.5 font-mono text-[11px] font-semibold text-primary-soft-foreground">
+                        {isMultiSectionEditing && activeSection
+                          ? `第 ${activeChapter.chapterNo} 章 · 第 ${activeSection.sectionNo} 节`
+                          : `第 ${activeChapter.chapterNo} 章`}
+                      </span>
+                      <input
+                        value={draftTitle}
+                        onChange={(e) => {
+                          setDraftTitle(e.target.value);
+                          if (saveState !== "conflict") setSaveState("dirty");
+                        }}
+                        placeholder={isMultiSectionEditing ? "请输入小节标题" : "请输入章节标题"}
+                        className="min-w-0 flex-1 bg-transparent font-editor text-lg font-bold tracking-tight text-foreground placeholder:text-muted-foreground/50 outline-none"
+                      />
+                    </div>
+                  ) : (
+                    <div className="mb-6 border-b border-border/80 pb-3.5">
+                      <div className="mb-1 font-mono text-xs font-semibold tracking-wider text-primary">
+                        {isMultiSectionEditing && activeSection
+                          ? `第 ${activeChapter.chapterNo} 章 · 第 ${activeSection.sectionNo} 节`
+                          : `第 ${activeChapter.chapterNo} 章`}
+                      </div>
+                      <input
+                        value={draftTitle}
+                        onChange={(e) => {
+                          setDraftTitle(e.target.value);
+                          if (saveState !== "conflict") setSaveState("dirty");
+                        }}
+                        placeholder={isMultiSectionEditing ? "请输入小节标题" : "请输入章节标题"}
+                        className={`w-full bg-transparent font-editor font-bold tracking-tight text-foreground placeholder:text-muted-foreground/50 outline-none ${
+                          density === "balanced" ? "text-xl sm:text-2xl" : "text-2xl sm:text-[26px]"
+                        }`}
+                      />
+                    </div>
+                  )}
+
+                  {selectedExcerpt.length >= 10 && selectedRange && (
+                    <div className="sticky top-2 z-20 mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card/95 px-3 py-1.5 text-xs text-foreground shadow-sm backdrop-blur-md">
+                      <span className="truncate font-medium text-primary">
+                        已划选 {selectedExcerpt.length} 字片段
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button
+                          size="xs"
+                          onClick={() => {
+                            setSelectionTask({
+                              mode: "REWRITE",
+                              text: selectedExcerpt,
+                              start: selectedRange.start,
+                              end: selectedRange.end,
+                            });
+                            setRightTab("ai");
+                            setRightPanelOpen(true);
+                          }}
+                        >
+                          AI 划词改写
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          onClick={() => {
+                            setSelectionTask({
+                              mode: "EXPAND",
+                              text: selectedExcerpt,
+                              start: selectedRange.start,
+                              end: selectedRange.end,
+                            });
+                            setRightTab("ai");
+                            setRightPanelOpen(true);
+                          }}
+                        >
+                          AI 划词扩写
+                        </Button>
+                        {selectedExcerpt.length >= 20 && selectedExcerpt.length <= 900 && (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => {
+                              const titleLabel = activeChapter
+                                ? `第${activeChapter.chapterNo}章片段`
+                                : "正文选段";
+                              void styleAnchorsApi
+                                .upsert(bookId, {
+                                  title: titleLabel,
+                                  excerptText: selectedExcerpt,
+                                  enabled: true,
+                                })
+                                .then(() => {
+                                  setSelectedExcerpt("");
+                                  setSelectedRange(null);
+                                  setAnchorRefreshKey((k) => k + 1);
+                                  toast.success("已收藏为本书文风锚点，AI 后续创作将对齐该段句式与质感。");
+                                })
+                                .catch((err) => {
+                                  const msg =
+                                    err instanceof Error ? err.message : "设为文风锚点失败";
+                                  setErrorMsg(msg);
+                                  toast.error(msg);
+                                });
+                            }}
+                          >
+                            设为文风锚点
+                          </Button>
+                        )}
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => {
+                            setSelectedExcerpt("");
+                            setSelectedRange(null);
+                          }}
+                          title="清除选中条"
+                        >
+                          ×
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  <Textarea
+                    ref={manuscriptRef}
+                    variant="manuscript"
+                    value={draftContent}
+                    onSelect={(e) => {
+                      const el = e.currentTarget;
+                      const start = el.selectionStart;
+                      const end = el.selectionEnd;
+                      const chunk = el.value.slice(start, end).trim();
+                      if (chunk.length >= 10) {
+                        setSelectedExcerpt(chunk);
+                        setSelectedRange({ start, end });
+                      } else {
+                        setSelectedExcerpt("");
+                        setSelectedRange(null);
+                      }
+                    }}
+                    onChange={(e) => {
+                      setDraftContent(e.target.value);
+                      if (saveState !== "conflict") setSaveState("dirty");
+                    }}
+                    placeholder="在此开始撰写正文…（整页无缝滚动，支持自动保存、Ctrl+S 与划词 AI 改写）"
+                  />
+                </div>
+              </div>
+
+              {/* Docked Antigravity-Style Editor Status Bar */}
+              <div className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border/80 bg-surface-subtle/80 px-4 text-[11px] text-muted-foreground">
+                <div className="flex min-w-0 items-center gap-2.5 font-mono">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      className={`inline-block size-1.5 rounded-full ${
+                        saveState === "saving"
+                          ? "animate-pulse bg-status-warning"
+                          : saveState === "dirty"
+                            ? "bg-status-warning"
+                            : saveState === "conflict" || saveState === "error"
+                              ? "bg-status-danger"
+                              : "bg-primary"
+                      }`}
+                    />
+                    <span>
+                      {saveState === "saving"
+                        ? "保存中..."
+                        : saveState === "dirty"
+                          ? "未保存"
+                          : saveState === "conflict"
+                            ? "版本冲突"
+                            : saveState === "saved"
+                              ? "已保存"
+                              : "就绪"}
+                    </span>
+                  </span>
+                  <span className="text-border">|</span>
+                  <span>{liveWordCount.toLocaleString()} 字</span>
+                  <span className="hidden text-border sm:inline">·</span>
+                  <span className="hidden sm:inline">{liveParagraphCount} 段</span>
+                  {estimatedReadMinutes > 0 && (
+                    <>
+                      <span className="hidden text-border md:inline">·</span>
+                      <span className="hidden md:inline">约 {estimatedReadMinutes} 分钟阅读</span>
+                    </>
+                  )}
+                  {selectedExcerpt.length > 0 && (
+                    <>
+                      <span className="text-border">|</span>
+                      <span className="text-primary">已选 {selectedExcerpt.length} 字</span>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextIdx = (DENSITY_ORDER.indexOf(density) + 1) % DENSITY_ORDER.length;
+                      saveDensity(DENSITY_ORDER[nextIdx]);
+                    }}
+                    title="点击切换布局密度（紧凑全宽 / 标准宽幅 / 舒展沉浸）"
+                    className="rounded px-1.5 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    {densityMeta.label}
+                  </button>
+                  <span className="hidden text-border sm:inline">·</span>
+                  <span className="hidden font-mono text-[10.5px] sm:inline">Ctrl+S 保存</span>
+                </div>
+              </div>
+            </>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-sm text-muted-foreground">
               <p>选择左侧章节开始创作，或新建第一章</p>
@@ -977,17 +1307,19 @@ function BookWorkbenchContent() {
         <aside
           className={
             rightPanelOpen
-              ? "flex w-96 shrink-0 flex-col border-l border-border bg-card/40"
+              ? `flex shrink-0 flex-col border-l border-border bg-surface-subtle transition-[width] duration-150 ${
+                  isCompact ? "w-[356px]" : "w-[376px]"
+                }`
               : "hidden"
           }
         >
-          <div className="grid grid-cols-2 border-b border-border text-xs font-medium">
+          <div className="grid grid-cols-2 border-b border-border bg-card px-3 text-xs font-medium">
             <button
               type="button"
               onClick={() => setRightTab("ai")}
-              className={`py-2.5 transition-colors ${
+              className={`relative transition-colors ${isCompact ? "py-2.5" : "py-3"} ${
                 rightTab === "ai"
-                  ? "border-b-2 border-primary text-foreground"
+                  ? "font-semibold text-foreground after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -996,9 +1328,9 @@ function BookWorkbenchContent() {
             <button
               type="button"
               onClick={() => setRightTab("lore")}
-              className={`py-2.5 transition-colors ${
+              className={`relative transition-colors ${isCompact ? "py-2.5" : "py-3"} ${
                 rightTab === "lore"
-                  ? "border-b-2 border-primary text-foreground"
+                  ? "font-semibold text-foreground after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -1013,6 +1345,7 @@ function BookWorkbenchContent() {
               sectionId={effectiveSectionId}
               chapterNo={activeChapter?.chapterNo ?? null}
               chapterContent={draftContent}
+              compact={isCompact}
               selectionTask={selectionTask}
               onClearSelectionTask={() => setSelectionTask(null)}
               onReviewDiff={(payload) => setDiffModalState(payload)}

@@ -86,7 +86,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         <Palette className="size-3.5 text-primary" />
         <span>主题</span>
@@ -95,7 +95,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         <div
           role="menu"
           aria-label="切换外观主题"
-          className="absolute right-0 top-9 z-50 w-36 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+          className="absolute right-0 top-9 z-50 w-36 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-lg"
         >
           {ALLOWED_THEMES.map((id) => {
             const active = id === currentTheme;
@@ -110,9 +110,9 @@ export function ThemeToggle({ className }: { className?: string }) {
                   setOpen(false);
                 }}
                 className={cn(
-                  "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors",
+                  "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors",
                   active
-                    ? "bg-accent font-medium text-accent-foreground"
+                    ? "bg-primary-soft font-medium text-primary-soft-foreground"
                     : "text-foreground hover:bg-muted",
                 )}
               >

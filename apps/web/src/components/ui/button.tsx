@@ -8,13 +8,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground hover:brightness-95 dark:hover:brightness-110",
+          "bg-primary text-primary-foreground shadow-2xs hover:brightness-95 dark:hover:brightness-110",
         outline:
-          "border-border bg-card text-foreground hover:bg-muted aria-expanded:bg-muted",
+          "border-border bg-card text-foreground shadow-2xs hover:bg-muted aria-expanded:bg-muted",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent",
+          "bg-muted text-foreground hover:bg-primary-soft hover:text-primary-soft-foreground aria-expanded:bg-primary-soft",
         ghost:
-          "text-foreground hover:bg-muted aria-expanded:bg-muted",
+          "text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted",
         destructive:
           "border-status-danger-border bg-status-danger-bg text-status-danger hover:brightness-95 dark:hover:brightness-110",
         link: "text-primary underline-offset-4 hover:underline",
@@ -23,7 +23,7 @@ const buttonVariants = cva(
         default:
           "h-8 gap-1.5 px-3 text-xs has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-xs [&_svg:not([class*='size-'])]:size-3.5",
+        sm: "h-7 gap-1.5 rounded-[min(var(--radius-md),12px)] px-2.5 text-xs [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 gap-1.5 px-4 text-sm",
         icon: "size-8",
         "icon-xs": "size-6 rounded-[min(var(--radius-md),10px)] [&_svg:not([class*='size-'])]:size-3",

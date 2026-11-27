@@ -89,17 +89,17 @@ export function ForeshadowingDirectorSlot({
   const planned = dueData?.readyToPlant ?? [];
 
   return (
-    <div className="rounded-md border border-border bg-muted/20">
+    <div className="rounded-xl border border-border bg-card">
       <button
         type="button"
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-2.5 py-1.5 text-[11px] font-medium hover:bg-muted/40 disabled:opacity-60"
+        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-[11px] font-medium text-foreground transition-colors hover:bg-surface-subtle disabled:opacity-60"
       >
         <span className="flex items-center gap-1.5">
           <span>伏笔导演与视角</span>
           {directives.length > 0 && (
-            <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] text-primary">
+            <span className="rounded-full bg-primary-soft px-2 py-0.5 font-mono text-[10px] text-primary-soft-foreground">
               已选 {directives.length}/3
             </span>
           )}

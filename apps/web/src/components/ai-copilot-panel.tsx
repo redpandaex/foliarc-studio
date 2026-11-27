@@ -31,6 +31,7 @@ interface AiCopilotPanelProps {
   sectionId?: string | null;
   chapterNo?: number | null;
   chapterContent: string;
+  compact?: boolean;
   selectionTask?: SelectionEditTask | null;
   onClearSelectionTask?: () => void;
   onReviewDiff?: (payload: {
@@ -121,6 +122,12 @@ const AGENT_HINT: Record<string, string> = {
   critic: "正在检查剧情连贯性与设定一致性...",
 };
 
+const THOUGHT_AGENT_LABEL: Record<string, string> = {
+  director: "构思大纲",
+  writer: "写作思考",
+  critic: "连贯性审稿",
+};
+
 function storageKey(bookId: string, chapterId: string | null): string {
   return `foliarc:sse_run:${bookId}:${chapterId ?? "book"}`;
 }
@@ -152,6 +159,7 @@ export function AiCopilotPanel({
   sectionId,
   chapterNo,
   chapterContent,
+  compact = false,
   selectionTask,
   onClearSelectionTask,
   onReviewDiff,
@@ -301,6 +309,7 @@ export function AiCopilotPanel({
 
       let accText = seed.text;
       let accThought = seed.thought;
+      let lastThoughtAgent: string | null = null;
       let accLastEventId = cursor;
       let accSeq = seed.seq;
       let accAgent = seed.activeAgent ?? null;
@@ -393,6 +402,14 @@ export function AiCopilotPanel({
             scheduleSnapshotPersist(buildSnap("streaming"));
           } else if (envelope.type === "thought_delta") {
             const delta = String(envelope.payload.content ?? "");
+            const thoughtAgent = envelope.agent ?? null;
+            if (thoughtAgent && thoughtAgent !== lastThoughtAgent) {
+              const label = THOUGHT_AGENT_LABEL[thoughtAgent];
+              if (label && accThought.trim().length > 0) {
+                accThought += `\n\n【${label}】\n`;
+              }
+              lastThoughtAgent = thoughtAgent;
+            }
             accThought += delta;
             setThoughtText(accThought);
             if (!accText && !userToggledThoughtRef.current) {
@@ -1056,14 +1073,18 @@ export function AiCopilotPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
       {/* Control Area */}
-      <div className="space-y-2.5 border-b border-border p-3">
+      <div
+        className={`border-b border-border/70 ${
+          compact ? "space-y-2 p-2.5" : "space-y-3 p-3.5"
+        }`}
+      >
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <span className={`inline-block h-2 w-2 rounded-full ${badge.dot}`} />
-            <span className="font-medium">{badge.label}</span>
+          <div className="flex items-center gap-2">
+            <span className={`inline-block size-2 rounded-full ${badge.dot}`} />
+            <span className="font-medium text-foreground">{badge.label}</span>
           </div>
           {chapterNo != null && chapterNo > 1 && (
-            <span className="rounded-full border border-status-success-border bg-status-success-bg px-2 py-0.5 text-[10px] font-medium text-status-success">
+            <span className="rounded-full border border-status-success-border bg-status-success-bg px-2.5 py-0.5 text-[10.5px] font-medium text-status-success">
               自动衔接第 {chapterNo - 1} 章
             </span>
           )}
@@ -1071,7 +1092,7 @@ export function AiCopilotPanel({
 
         {/* Inline Selection Task Banner */}
         {selectionTask && (
-          <div className="space-y-1.5 rounded-lg border border-status-ai-border bg-status-ai-bg p-2.5">
+          <div className="space-y-1.5 rounded-xl border border-status-ai-border bg-card p-3 shadow-2xs">
             <div className="flex items-center justify-between gap-2">
               <span className="font-semibold text-status-ai">
                 {selectionTask.mode === "EXPAND"
@@ -1082,30 +1103,30 @@ export function AiCopilotPanel({
                 <button
                   type="button"
                   onClick={onClearSelectionTask}
-                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                  className="text-[11px] text-muted-foreground hover:text-foreground"
                 >
                   取消划词
                 </button>
               )}
             </div>
-            <p className="line-clamp-2 whitespace-pre-wrap rounded bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">
+            <p className="line-clamp-2 whitespace-pre-wrap rounded-lg bg-surface-subtle px-2.5 py-1.5 text-[11px] text-muted-foreground">
               {selectionTask.text}
             </p>
           </div>
         )}
 
-        {/* Action Pills */}
-        <div className="grid grid-cols-3 gap-1">
+        {/* Segmented Action Pills */}
+        <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">
           {ACTION_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
               disabled={isRunning || connState === "paused"}
               onClick={() => setAction(opt.value)}
-              className={`rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors ${
+              className={`rounded-lg px-2 py-1.5 text-[11.5px] font-medium transition-all ${
                 action === opt.value
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-background text-muted-foreground hover:text-foreground"
+                  ? "bg-card font-semibold text-foreground shadow-2xs"
+                  : "text-muted-foreground hover:text-foreground"
               } disabled:opacity-50`}
             >
               {opt.label}
@@ -1115,28 +1136,37 @@ export function AiCopilotPanel({
 
         {/* HITL Outline Confirmation Card vs Normal Pause vs Instruction Input */}
         {connState === "paused" && outlineApproval ? (
-          <div className="space-y-2 rounded-lg border border-status-info-border bg-status-info-bg p-2.5">
-            <div className="font-semibold text-status-info">
-              确认本章大纲
+          <div
+            className={`rounded-2xl border border-border bg-card shadow-[0_1px_2px_oklch(0.2_0.02_200/0.04),0_8px_24px_oklch(0.2_0.02_200/0.05)] ${
+              compact ? "space-y-2 p-2.5" : "space-y-2.5 p-3.5"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[13px] font-semibold text-foreground">
+                确认本章大纲
+              </div>
+              <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-medium text-primary-soft-foreground">
+                大纲确认
+              </span>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              可直接修改下方剧情大纲，确认后将紧接前文展开正文写作：
+            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+              可直接微调下方剧情大纲，确认后将紧接前文展开正文写作：
             </p>
             <textarea
-              rows={6}
+              rows={compact ? 6 : 7}
               value={editedOutline}
               onChange={(e) => setEditedOutline(e.target.value)}
-              className="w-full rounded-md border border-input bg-card p-2 text-[11px] leading-relaxed outline-none focus-visible:outline-2 focus-visible:outline-ring"
+              className="w-full resize-none rounded-xl border border-border bg-surface-subtle px-3 py-2 text-xs leading-6 text-foreground outline-none transition-colors focus:border-ring"
             />
             <input
               value={approvalFeedback}
               onChange={(e) => setApprovalFeedback(e.target.value)}
               placeholder="如不满意，可写下调整方向后点击「重新构思」..."
-              className="w-full rounded-md border border-input bg-card px-2 py-1 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-ring"
+              className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-[11.5px] text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring"
             />
-            <div className="flex gap-1.5">
+            <div className="flex items-center gap-1.5 pt-0.5">
               <Button
-                size="xs"
+                size="sm"
                 className="flex-1"
                 disabled={busyControl}
                 onClick={() => void handleApproveOutline(true)}
@@ -1144,35 +1174,36 @@ export function AiCopilotPanel({
                 确认并开始写作
               </Button>
               <Button
-                size="xs"
-                variant="outline"
+                size="sm"
+                variant="secondary"
                 disabled={busyControl}
                 onClick={() => void handleApproveOutline(false)}
               >
                 重新构思
               </Button>
               <Button
-                size="xs"
-                variant="destructive"
+                size="sm"
+                variant="ghost"
                 disabled={busyControl}
                 onClick={() => void handleCancel()}
+                className="px-2 text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
               >
                 取消
               </Button>
             </div>
           </div>
         ) : connState === "paused" ? (
-          <div className="space-y-2">
+          <div className="space-y-2.5 rounded-2xl border border-border bg-card p-3.5 shadow-2xs">
             <textarea
               rows={2}
               value={revisedInstruction}
               onChange={(e) => setRevisedInstruction(e.target.value)}
               placeholder="可选：补充或微调接下来的剧情走向..."
-              className="w-full resize-none rounded-md border border-status-info-border bg-card px-2.5 py-1.5 text-xs outline-none focus-visible:outline-2 focus-visible:outline-ring"
+              className="w-full resize-none rounded-xl border border-border bg-surface-subtle px-3 py-2 text-xs leading-relaxed outline-none focus:border-ring"
             />
             <div className="flex gap-1.5">
               <Button
-                size="xs"
+                size="sm"
                 className="flex-1"
                 disabled={busyControl}
                 onClick={() => void handleResume()}
@@ -1180,24 +1211,25 @@ export function AiCopilotPanel({
                 继续生成
               </Button>
               <Button
-                size="xs"
-                variant="destructive"
+                size="sm"
+                variant="ghost"
                 disabled={busyControl}
                 onClick={() => void handleCancel()}
+                className="text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
               >
                 取消
               </Button>
             </div>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             <textarea
               rows={3}
               value={instruction}
               disabled={isRunning}
               onChange={(e) => setInstruction(e.target.value)}
               placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写）..."
-              className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+              className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring disabled:opacity-60"
             />
 
             <ForeshadowingDirectorSlot
@@ -1210,7 +1242,7 @@ export function AiCopilotPanel({
               onDirectivesChange={setForeshadowingDirectives}
             />
 
-            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-muted-foreground">
               {mode === "MULTI_AGENT" && action !== "OUTLINE" ? (
                 <label className="flex cursor-pointer items-center gap-1.5">
                   <input
@@ -1218,6 +1250,7 @@ export function AiCopilotPanel({
                     disabled={isRunning}
                     checked={requireOutlineApproval}
                     onChange={(e) => setRequireOutlineApproval(e.target.checked)}
+                    className="accent-primary"
                   />
                   先确认大纲再动笔
                 </label>
@@ -1227,21 +1260,21 @@ export function AiCopilotPanel({
               <button
                 type="button"
                 onClick={() => setShowAdvanced((v) => !v)}
-                className="text-[11px] text-muted-foreground hover:text-foreground"
+                className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
               >
                 {showAdvanced ? "收起设置 ▴" : "写作设置 ▾"}
               </button>
             </div>
 
             {showAdvanced && (
-              <div className="grid grid-cols-2 gap-1.5 rounded-md border border-border bg-muted/25 p-2">
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-2.5">
                 <div className="space-y-1">
                   <div className="text-[10px] text-muted-foreground">创作模式</div>
                   <select
                     value={mode}
                     disabled={isRunning}
                     onChange={(e) => setMode(e.target.value as RunMode)}
-                    className="w-full rounded border border-input bg-background px-2 py-1 text-[11px] outline-none disabled:opacity-60"
+                    className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring disabled:opacity-60"
                   >
                     {MODE_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -1256,7 +1289,7 @@ export function AiCopilotPanel({
                     value={modelAlias}
                     disabled={isRunning}
                     onChange={(e) => setModelAlias(e.target.value)}
-                    className="w-full rounded border border-input bg-background px-2 py-1 text-[11px] outline-none disabled:opacity-60"
+                    className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring disabled:opacity-60"
                   >
                     {MODEL_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -1271,7 +1304,7 @@ export function AiCopilotPanel({
             {isRunning ? (
               <div className="flex gap-1.5">
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="secondary"
                   className="flex-1"
                   disabled={busyControl}
@@ -1280,10 +1313,11 @@ export function AiCopilotPanel({
                   暂停
                 </Button>
                 <Button
-                  size="xs"
-                  variant="destructive"
+                  size="sm"
+                  variant="ghost"
                   disabled={busyControl}
                   onClick={() => void handleCancel()}
+                  className="text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
                 >
                   取消
                 </Button>
@@ -1291,7 +1325,7 @@ export function AiCopilotPanel({
             ) : (
               <div className="flex gap-1.5">
                 <Button
-                  size="xs"
+                  size="sm"
                   className="flex-1"
                   disabled={busyControl}
                   onClick={() => void handleStart()}
@@ -1303,7 +1337,7 @@ export function AiCopilotPanel({
                       : "开始 AI 创作"}
                 </Button>
                 {(generatedText || thoughtText || connState !== "idle") && (
-                  <Button size="xs" variant="outline" onClick={handleClear}>
+                  <Button size="sm" variant="ghost" onClick={handleClear}>
                     清空
                   </Button>
                 )}
@@ -1312,49 +1346,73 @@ export function AiCopilotPanel({
           </div>
         )}
 
-        {/* Compact Progress Strip */}
-        {showProgressStrip && (
-          <div className="grid grid-cols-4 gap-1 text-center text-[10px]">
-            {WRITER_STAGES.map((stage) => {
-              const isCurrent = activeAgent === stage.id && (isRunning || connState === "paused");
-              const isDone =
-                connState === "completed" || completedStages.includes(stage.id);
-              return (
-                <div
-                  key={stage.id}
-                  className={`rounded py-1 font-medium transition-colors ${
-                    isCurrent
-                      ? "bg-primary text-primary-foreground"
-                      : isDone
-                        ? "border border-status-success-border bg-status-success-bg text-status-success"
-                        : "bg-muted/50 text-muted-foreground"
-                  }`}
-                >
-                  {stage.label}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* Minimal Connected Stepper + Status Note */}
+        {(showProgressStrip || statusDetail) && (
+          <div className="space-y-2.5 rounded-xl border border-border bg-card p-3">
+            {showProgressStrip && (
+              <div className="relative grid grid-cols-4 items-start text-center">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute top-[5px] right-[12.5%] left-[12.5%] h-[1.5px] bg-border"
+                />
+                {WRITER_STAGES.map((stage) => {
+                  const isCurrent =
+                    activeAgent === stage.id && (isRunning || connState === "paused");
+                  const isDone =
+                    connState === "completed" || completedStages.includes(stage.id);
+                  return (
+                    <div
+                      key={stage.id}
+                      className="relative z-10 flex flex-col items-center gap-1.5"
+                    >
+                      <span
+                        className={`size-[11px] rounded-full border-2 transition-all ${
+                          isCurrent
+                            ? "border-primary bg-primary shadow-[0_0_0_3px_var(--primary-soft)]"
+                            : isDone
+                              ? "border-primary bg-primary"
+                              : "border-border bg-card"
+                        }`}
+                      />
+                      <span
+                        className={`text-[10.5px] transition-colors ${
+                          isCurrent || isDone
+                            ? "font-semibold text-primary-soft-foreground"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {stage.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-        {statusDetail && (
-          <div
-            className={`rounded-md px-2.5 py-1.5 text-[11px] leading-relaxed ${
-              connState === "error"
-                ? "border border-destructive/40 bg-destructive/10 text-destructive"
-                : "bg-muted/60 text-muted-foreground"
-            }`}
-          >
-            {statusDetail}
+            {statusDetail && (
+              <div
+                className={`rounded-lg px-2.5 py-2 text-[11px] leading-relaxed ${
+                  connState === "error"
+                    ? "border border-status-danger-border bg-status-danger-bg text-status-danger"
+                    : "bg-surface-subtle text-muted-foreground"
+                }`}
+              >
+                {statusDetail}
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Output Area */}
-      <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto p-3">
+      <div
+        className={`flex min-h-0 flex-1 flex-col overflow-y-auto ${
+          compact ? "space-y-2 p-2.5" : "space-y-3 p-3.5"
+        }`}
+      >
         {criticInfo && (
           <div
-            className={`rounded-lg border px-2.5 py-2 text-[11px] ${
+            className={`rounded-xl border px-3 py-2.5 text-[11px] ${
               criticInfo.passed
                 ? "border-status-success-border bg-status-success-bg text-status-success"
                 : "border-status-warning-border bg-status-warning-bg text-status-warning"
@@ -1376,7 +1434,7 @@ export function AiCopilotPanel({
         )}
 
         {thoughtText && (
-          <div className="rounded-lg border border-border bg-muted/35 p-2.5">
+          <div className="rounded-xl border border-border bg-card p-3">
             <button
               type="button"
               onClick={() => {
@@ -1389,7 +1447,7 @@ export function AiCopilotPanel({
               <span>{showThought ? "收起" : "展开"}</span>
             </button>
             {showThought && (
-              <div className="mt-1.5 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
+              <div className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
                 {thoughtText}
               </div>
             )}
@@ -1398,7 +1456,7 @@ export function AiCopilotPanel({
 
         {generatedText ? (
           diffReviewOpen && !isRunning ? (
-            <div className="space-y-2 rounded-lg border border-status-success-border bg-background p-2.5">
+            <div className="space-y-2 rounded-xl border border-status-success-border bg-card p-3">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-status-success">
                   逐段挑选采纳
@@ -1417,10 +1475,10 @@ export function AiCopilotPanel({
                   return (
                     <div
                       key={idx}
-                      className={`rounded border p-2 text-[11px] leading-relaxed ${
+                      className={`rounded-lg border p-2.5 text-[11px] leading-relaxed ${
                         accepted
                           ? "border-status-success-border bg-status-success-bg"
-                          : "border-border bg-muted/40 opacity-55 line-through"
+                          : "border-border bg-muted/50 opacity-55 line-through"
                       }`}
                     >
                       <div className="mb-1 flex items-center justify-between text-[10px]">
@@ -1443,13 +1501,13 @@ export function AiCopilotPanel({
                   );
                 })}
               </div>
-              <Button size="xs" className="w-full" onClick={handleApplySelectedDiff}>
+              <Button size="sm" className="w-full" onClick={handleApplySelectedDiff}>
                 将已选段落追加到正文
               </Button>
             </div>
           ) : (
-            <div className="rounded-lg border border-border bg-background p-3 leading-relaxed">
-              <div className="whitespace-pre-wrap text-xs leading-6 text-foreground">
+            <div className="rounded-xl border border-border bg-card p-3.5 leading-relaxed shadow-2xs">
+              <div className="whitespace-pre-wrap font-editor text-[13.5px] leading-7 text-foreground">
                 {generatedText}
                 {connState === "streaming" && (
                   <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-primary align-middle" />
@@ -1457,12 +1515,19 @@ export function AiCopilotPanel({
               </div>
             </div>
           )
+        ) : connState === "completed" && !outlineApproval ? (
+          <div className="rounded-xl border border-status-warning-border bg-status-warning-bg p-4 text-[11.5px] leading-relaxed text-status-warning">
+            <p className="font-semibold">本次未返回正文内容</p>
+            <p className="mt-1 text-foreground/85">
+              可能因推理模型思考过程耗时或耗尽输出配额导致正文为空。建议在「写作设置」中切换为「默认主力模型」后重试。
+            </p>
+          </div>
         ) : (
           !thoughtText &&
           !outlineApproval && (
-            <div className="rounded-lg border border-dashed border-border p-5 text-center text-[11px] leading-relaxed text-muted-foreground">
+            <div className="rounded-xl border border-dashed border-border bg-card/60 p-5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
               <p className="font-medium text-foreground">AI 写作助手</p>
-              <p className="mt-1">
+              <p className="mt-1.5">
                 输入本章剧情方向即可开始生成。系统会自动承接上一章剧情与「故事设定」中的人物和伏笔，刷新页面也不会中断生成进度。
               </p>
             </div>
@@ -1476,7 +1541,7 @@ export function AiCopilotPanel({
           {selectionTask && onReviewDiff ? (
             <div className="flex gap-1.5">
               <Button
-                size="xs"
+                size="sm"
                 className="flex-1"
                 onClick={() =>
                   onReviewDiff({
@@ -1493,8 +1558,8 @@ export function AiCopilotPanel({
                 Git Diff 审阅并替换选段
               </Button>
               <Button
-                size="xs"
-                variant="outline"
+                size="sm"
+                variant="secondary"
                 onClick={() => onAppendText(generatedText)}
               >
                 追加末尾
@@ -1503,22 +1568,22 @@ export function AiCopilotPanel({
           ) : (
             <div className="flex flex-wrap gap-1.5">
               <Button
-                size="xs"
+                size="sm"
                 className="flex-1"
                 onClick={() => onAppendText(generatedText)}
               >
                 追加到正文
               </Button>
               <Button
-                size="xs"
-                variant="outline"
+                size="sm"
+                variant="secondary"
                 onClick={handleOpenDiffReview}
               >
                 {diffReviewOpen ? "全文" : "逐段挑选"}
               </Button>
               {onReviewDiff ? (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="outline"
                   onClick={() =>
                     onReviewDiff({
@@ -1532,7 +1597,7 @@ export function AiCopilotPanel({
                 </Button>
               ) : (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="outline"
                   onClick={() => onReplaceText(generatedText)}
                 >

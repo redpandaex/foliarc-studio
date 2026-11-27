@@ -2,39 +2,40 @@
 :root,
 [data-theme],
 .dark {
-  --status-success: oklch(var(--status-text-l) 0.071 153);
-  --status-success-bg: oklch(var(--status-bg-l) 0.022 153);
-  --status-success-border: oklch(var(--status-border-l) 0.048 153);
-  --status-warning: oklch(var(--status-text-l) 0.074 57);
-  --status-warning-bg: oklch(var(--status-bg-l) 0.029 57);
-  --status-warning-border: oklch(var(--status-border-l) 0.059 57);
-  --status-danger: oklch(var(--status-text-l) 0.109 26);
-  --status-danger-bg: oklch(var(--status-bg-l) 0.025 26);
-  --status-danger-border: oklch(var(--status-border-l) 0.068 26);
-  --status-info: oklch(var(--status-text-l) 0.077 248);
-  --status-info-bg: oklch(var(--status-bg-l) 0.018 248);
-  --status-info-border: oklch(var(--status-border-l) 0.055 248);
-  --status-ai: oklch(var(--status-text-l) 0.094 293);
-  --status-ai-bg: oklch(var(--status-bg-l) 0.02 293);
-  --status-ai-border: oklch(var(--status-border-l) 0.055 293);
-  --status-vip: oklch(var(--status-text-l) 0.074 88);
-  --status-vip-bg: oklch(var(--status-bg-l) 0.029 88);
-  --status-vip-border: oklch(var(--status-border-l) 0.052 88);
+  --status-success: oklch(var(--status-text-l) 0.085 156);
+  --status-success-bg: oklch(var(--status-bg-l) 0.025 156);
+  --status-success-border: oklch(var(--status-border-l) 0.042 156);
+  --status-warning: oklch(var(--status-text-l) 0.082 62);
+  --status-warning-bg: oklch(var(--status-bg-l) 0.030 68);
+  --status-warning-border: oklch(var(--status-border-l) 0.048 65);
+  --status-danger: oklch(var(--status-text-l) 0.125 25);
+  --status-danger-bg: oklch(var(--status-bg-l) 0.025 25);
+  --status-danger-border: oklch(var(--status-border-l) 0.052 25);
+  --status-info: oklch(var(--status-text-l) 0.085 242);
+  --status-info-bg: oklch(var(--status-bg-l) 0.022 242);
+  --status-info-border: oklch(var(--status-border-l) 0.042 242);
+  --status-ai: oklch(var(--status-text-l) 0.095 288);
+  --status-ai-bg: oklch(var(--status-bg-l) 0.022 288);
+  --status-ai-border: oklch(var(--status-border-l) 0.044 288);
+  --status-vip: oklch(var(--status-text-l) 0.082 82);
+  --status-vip-bg: oklch(var(--status-bg-l) 0.030 85);
+  --status-vip-border: oklch(var(--status-border-l) 0.046 82);
 
-  --type-ui: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --type-ui: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   --type-literary: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif;
   --type-code: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --space-unit: 0.25rem;
   --radius: 0.625rem;
-  --editor-font-size: 1.125rem;
-  --editor-line-height: 1.9;
-  --editor-measure: 36ic;
+  --editor-font-size: 1.09375rem;
+  --editor-line-height: 1.98;
+  --editor-measure: 38ic;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-card: var(--card);
   --color-surface-elevated: var(--surface-elevated);
+  --color-surface-subtle: var(--surface-subtle);
   --color-popover: var(--popover);
   --color-muted: var(--muted);
   --color-sidebar: var(--sidebar);
@@ -44,6 +45,8 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-soft-foreground: var(--primary-soft-foreground);
   --color-secondary: var(--muted);
   --color-secondary-foreground: var(--foreground);
   --color-accent: var(--accent);

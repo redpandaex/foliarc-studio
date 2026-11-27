@@ -2,9 +2,9 @@ export const themeConfig = {
   key: "foliarc-theme",
   fallback: "paper",
   labels: {
-    paper: "宣纸日间",
-    sepia: "护眼羊皮纸",
-    ink: "深夜墨蓝",
+    paper: "晨露素白",
+    sepia: "柔光暖纸",
+    ink: "静谧夜墨",
   },
 } as const;
 
