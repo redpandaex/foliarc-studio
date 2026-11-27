@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ForeshadowingDirectorSlot } from "@/components/foreshadowing-director-slot";
+import { Bookmark, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import {
+  ForeshadowingDirectorTray,
+  useDirectorOptions,
+} from "@/components/foreshadowing-director-slot";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -98,16 +102,16 @@ const ACTION_OPTIONS: { value: RunAction; label: string }[] = [
   { value: "OUTLINE", label: "生成大纲" },
 ];
 
-const MODE_OPTIONS: { value: RunMode; label: string }[] = [
-  { value: "MULTI_AGENT", label: "协同精写（推荐）" },
-  { value: "AGENT", label: "智能单步" },
-  { value: "DIRECT", label: "快速直写" },
+const MODE_OPTIONS: { value: RunMode; label: string; short: string; desc: string }[] = [
+  { value: "MULTI_AGENT", label: "协同精写", short: "精写", desc: "大纲 → 设定核验 → 执笔 → 审稿" },
+  { value: "AGENT", label: "智能单步", short: "单步", desc: "结合设定库直接成稿" },
+  { value: "DIRECT", label: "快速直写", short: "直写", desc: "极速流式续写" },
 ];
 
 const MODEL_OPTIONS = [
-  { value: "writer-main", label: "默认主力模型" },
-  { value: "critic-reasoner", label: "深度推理模型" },
-  { value: "fast-router", label: "极速响应模型" },
+  { value: "writer-main", label: "主力模型" },
+  { value: "critic-reasoner", label: "深度推理" },
+  { value: "fast-router", label: "极速响应" },
 ];
 
 const WRITER_STAGES = [
@@ -258,7 +262,16 @@ export function AiCopilotPanel({
   const [action, setAction] = useState<RunAction>("CONTINUE");
   const [modelAlias, setModelAlias] = useState("writer-main");
   const [requireOutlineApproval, setRequireOutlineApproval] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [activeTray, setActiveTray] = useState<"none" | "director" | "settings">("none");
+
+  const directorData = useDirectorOptions({
+    bookId,
+    chapterId,
+    sectionId: sectionId ?? null,
+    chapterNo: chapterNo ?? null,
+    visibility,
+    refreshSignal: visualRefreshSignal,
+  });
 
   const [instruction, setInstruction] = useState("");
   const [povCharacter, setPovCharacter] = useState("");
@@ -1001,6 +1014,7 @@ export function AiCopilotPanel({
 
   async function handleStart() {
     setBusyControl(true);
+    setActiveTray("none");
     setStatusDetail("正在启动创作...");
     setControlsExpanded(false);
     setGeneratedText("");
@@ -1482,113 +1496,263 @@ export function AiCopilotPanel({
                 </div>
               </div>
             ) : (
-              <div className="space-y-2.5">
+              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-2xs transition-colors focus-within:border-ring/80">
                 <textarea
-                  rows={3}
+                  rows={compact ? 2 : 3}
                   value={instruction}
                   onChange={(e) => setInstruction(e.target.value)}
-                  placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写）..."
-                  className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring"
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !busyControl) {
+                      e.preventDefault();
+                      void handleStart();
+                    } else if (e.key === "Escape" && activeTray !== "none") {
+                      setActiveTray("none");
+                    }
+                  }}
+                  placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写；Ctrl+Enter 开始）..."
+                  className="block w-full resize-none bg-transparent px-3 pt-2.5 pb-1.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/70 outline-none"
                 />
 
-                <ForeshadowingDirectorSlot
-                  bookId={bookId}
-                  chapterId={chapterId}
-                  sectionId={sectionId ?? null}
-                  chapterNo={chapterNo ?? null}
-                  visibility={visibility}
-                  refreshSignal={visualRefreshSignal}
-                  disabled={false}
-                  povCharacter={povCharacter}
-                  onPovCharacterChange={setPovCharacter}
-                  directives={foreshadowingDirectives}
-                  onDirectivesChange={setForeshadowingDirectives}
-                />
-
-                <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-muted-foreground">
-                  {mode === "MULTI_AGENT" && action !== "OUTLINE" ? (
-                    <label className="flex cursor-pointer items-center gap-1.5">
-                      <input
-                        type="checkbox"
-                        checked={requireOutlineApproval}
-                        onChange={(e) => setRequireOutlineApproval(e.target.checked)}
-                        className="accent-primary"
-                      />
-                      先确认大纲再动笔
-                    </label>
-                  ) : (
-                    <span />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowAdvanced((v) => !v)}
-                    className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {showAdvanced ? "收起设置 ▴" : "写作设置 ▾"}
-                  </button>
-                </div>
-
-                {showAdvanced && (
-                  <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-2.5">
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-muted-foreground">创作模式</div>
-                      <select
-                        value={mode}
-                        onChange={(e) => setMode(e.target.value as RunMode)}
-                        className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring"
-                      >
-                        {MODE_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-muted-foreground">写作模型</div>
-                      <select
-                        value={modelAlias}
-                        onChange={(e) => setModelAlias(e.target.value)}
-                        className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring"
-                      >
-                        {MODEL_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                {/* Active POV & Foreshadowing Chips (0px height when empty) */}
+                {(povCharacter.trim() || foreshadowingDirectives.length > 0) && (
+                  <div className="flex flex-wrap items-center gap-1 px-2.5 pb-2">
+                    {povCharacter.trim() && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-status-info-border bg-status-info-bg px-2 py-0.5 text-[10px] font-medium text-status-info">
+                        <span>视角：{povCharacter.trim()}</span>
+                        <button
+                          type="button"
+                          onClick={() => setPovCharacter("")}
+                          aria-label="清除叙事视角"
+                          className="rounded-full hover:opacity-75"
+                        >
+                          <X className="size-2.5" />
+                        </button>
+                      </span>
+                    )}
+                    {foreshadowingDirectives.map((dir) => {
+                      const matched = directorData.arcById.get(dir.foreshadowingId);
+                      const modeTag =
+                        dir.mode === "PLANT" ? "埋入" : dir.mode === "HINT" ? "照应" : "引爆";
+                      const title = matched
+                        ? `${matched.code ? `${matched.code} ` : ""}${matched.title}`
+                        : "已选伏笔";
+                      return (
+                        <span
+                          key={dir.foreshadowingId}
+                          className={`inline-flex max-w-48 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                            dir.mode === "PAYOFF"
+                              ? "border-status-warning-border bg-status-warning-bg text-status-warning"
+                              : "border-primary/35 bg-primary-soft text-primary-soft-foreground"
+                          }`}
+                        >
+                          <span className="truncate">
+                            {modeTag} · {title}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setForeshadowingDirectives((prev) =>
+                                prev.filter((d) => d.foreshadowingId !== dir.foreshadowingId),
+                              )
+                            }
+                            aria-label={`移除伏笔指令 ${title}`}
+                            className="shrink-0 rounded-full hover:opacity-75"
+                          >
+                            <X className="size-2.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
 
-                <div className="flex gap-1.5">
-                  <Button
-                    size="sm"
-                    className="flex-1"
-                    disabled={busyControl}
-                    onClick={() => void handleStart()}
-                  >
-                    {action === "OUTLINE"
-                      ? "生成本章大纲"
-                      : action === "REWRITE"
-                        ? "开始润色扩写"
-                        : "开始 AI 创作"}
-                  </Button>
-                  {connState === "completed" && generatedText && controlsExpanded && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => setControlsExpanded(false)}
+                {/* Unified Bottom Composer Toolbar */}
+                <div className="flex items-center justify-between gap-1.5 border-t border-border/60 bg-surface-subtle/45 px-2 py-1.5">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveTray((cur) => (cur === "director" ? "none" : "director"))
+                      }
+                      title="配置本章叙事视角（POV）与伏笔埋设/照应/回收"
+                      className={`inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition-colors ${
+                        activeTray === "director"
+                          ? "bg-primary-soft text-primary-soft-foreground"
+                          : foreshadowingDirectives.length > 0 || povCharacter.trim()
+                            ? "bg-primary-soft/65 text-primary-soft-foreground hover:bg-primary-soft"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      }`}
                     >
-                      收起
+                      <Bookmark className="size-3.5 shrink-0" />
+                      <span className="truncate">伏笔·视角</span>
+                      {foreshadowingDirectives.length > 0 ? (
+                        <span className="rounded-full bg-primary px-1.5 py-0 font-mono text-[9.5px] leading-4 text-primary-foreground">
+                          {foreshadowingDirectives.length}
+                        </span>
+                      ) : directorData.dueCount > 0 ? (
+                        <span className="rounded-full border border-status-warning-border bg-status-warning-bg px-1.5 py-0 font-mono text-[9.5px] leading-4 text-status-warning">
+                          {directorData.dueCount}到期
+                        </span>
+                      ) : null}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveTray((cur) => (cur === "settings" ? "none" : "settings"))
+                      }
+                      title="切换创作模式、模型与大纲确认开关"
+                      className={`inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition-colors ${
+                        activeTray === "settings"
+                          ? "bg-primary-soft text-primary-soft-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      }`}
+                    >
+                      <SlidersHorizontal className="size-3.5 shrink-0" />
+                      <span className="truncate">
+                        {MODE_OPTIONS.find((m) => m.value === mode)?.short ?? "精写"}
+                        {mode === "MULTI_AGENT" && action !== "OUTLINE" && requireOutlineApproval
+                          ? "·审纲"
+                          : ""}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    {connState === "completed" && generatedText && controlsExpanded && (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => setControlsExpanded(false)}
+                      >
+                        收起
+                      </Button>
+                    )}
+                    {(generatedText || thoughtText || liveOutlineText || connState !== "idle") && (
+                      <Button size="xs" variant="ghost" onClick={handleClear}>
+                        清空
+                      </Button>
+                    )}
+                    <Button
+                      size="xs"
+                      disabled={busyControl}
+                      onClick={() => void handleStart()}
+                      className="h-7 px-2.5"
+                    >
+                      <Sparkles className="size-3" />
+                      {action === "OUTLINE"
+                        ? "生成大纲"
+                        : action === "REWRITE"
+                          ? "润色扩写"
+                          : "开始创作"}
                     </Button>
-                  )}
-                  {(generatedText || thoughtText || liveOutlineText || connState !== "idle") && (
-                    <Button size="sm" variant="ghost" onClick={handleClear}>
-                      清空
-                    </Button>
-                  )}
+                  </div>
                 </div>
+
+                {/* Mutually Exclusive Pop-Down Tray inside Composer Card */}
+                {activeTray === "director" && (
+                  <div className="border-t border-border/70 bg-surface-subtle/60 p-2.5">
+                    <ForeshadowingDirectorTray
+                      visibility={visibility}
+                      characters={directorData.characters}
+                      planned={directorData.planned}
+                      activePlanted={directorData.activePlanted}
+                      disabled={false}
+                      povCharacter={povCharacter}
+                      onPovCharacterChange={setPovCharacter}
+                      directives={foreshadowingDirectives}
+                      onDirectivesChange={setForeshadowingDirectives}
+                      onClose={() => setActiveTray("none")}
+                    />
+                  </div>
+                )}
+
+                {activeTray === "settings" && (
+                  <div className="space-y-2.5 border-t border-border/70 bg-surface-subtle/60 p-2.5 text-[11px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground">写作设置</span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTray("none")}
+                        aria-label="收起写作设置"
+                        className="rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span>创作模式</span>
+                        <span>{MODE_OPTIONS.find((m) => m.value === mode)?.desc}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-0.5">
+                        {MODE_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setMode(opt.value)}
+                            className={`rounded-md px-2 py-1 text-[11px] font-medium transition-all ${
+                              mode === opt.value
+                                ? "bg-card text-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-muted-foreground">写作模型</div>
+                      <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-0.5">
+                        {MODEL_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setModelAlias(opt.value)}
+                            className={`rounded-md px-2 py-1 text-[11px] font-medium transition-all ${
+                              modelAlias === opt.value
+                                ? "bg-card text-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {mode === "MULTI_AGENT" && action !== "OUTLINE" && (
+                      <div className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-card px-2.5 py-2">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-medium text-foreground">
+                            先确认大纲再动笔
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            执笔前可先审阅或微调本章剧情节拍
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={requireOutlineApproval}
+                          onClick={() => setRequireOutlineApproval((v) => !v)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                            requireOutlineApproval ? "bg-primary" : "bg-muted"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block size-3.5 rounded-full bg-card shadow-xs transition-transform ${
+                              requireOutlineApproval ? "translate-x-4.5" : "translate-x-0.5"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </>
