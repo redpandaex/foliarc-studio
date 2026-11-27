@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -189,8 +190,6 @@ export function AiDiffReviewModal({
     return out.join(preferredSeparator);
   }, [hunks, decisions, changeHunks.length, acceptedCount, originalText, proposedText, preferredSeparator]);
 
-  if (!open) return null;
-
   function setAll(accept: boolean) {
     const next: Record<number, boolean> = {};
     for (const h of changeHunks) {
@@ -200,20 +199,11 @@ export function AiDiffReviewModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3.5">
           <div className="flex items-center gap-2.5">
-            <h2 className="text-sm font-semibold">{title}</h2>
+            <DialogTitle className="text-sm font-semibold">{title}</DialogTitle>
             <Badge status="info" className="font-mono text-[10.5px]">
               {acceptedCount} / {changeHunks.length} 处采用
             </Badge>
@@ -232,9 +222,9 @@ export function AiDiffReviewModal({
             >
               {showPreview ? "返回对比" : "合并预览"}
             </Button>
-            <Button size="xs" variant="ghost" onClick={onClose}>
+            <DialogClose render={<Button size="xs" variant="ghost" />}>
               关闭
-            </Button>
+            </DialogClose>
           </div>
         </div>
 
@@ -387,9 +377,9 @@ export function AiDiffReviewModal({
             已采用 {acceptedCount}/{changeHunks.length} 处 · 更新当前草稿并自动保存
           </span>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={onClose}>
+            <DialogClose render={<Button size="sm" variant="outline" />}>
               取消
-            </Button>
+            </DialogClose>
             <Button
               size="sm"
               onClick={() => {
@@ -401,7 +391,7 @@ export function AiDiffReviewModal({
             </Button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

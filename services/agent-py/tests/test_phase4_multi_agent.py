@@ -8,12 +8,17 @@ from foliarc_agent.agent.multi_agent import (
     EditorialBlackboard,
     EditorialTeamOrchestrator,
     InMemoryCheckpointStore,
+    _extract_critic_json_obj,
     _parse_critic_json,
 )
 from foliarc_agent.agent.router import FallbackStreamClient, IntentAndModelRouter
 from foliarc_agent.agent.skills import SkillRegistry
 from foliarc_agent.config import Settings
-from foliarc_agent.streaming.llm_client import LlmStreamChunk, LlmUpstreamError
+from foliarc_agent.streaming.llm_client import (
+    LlmStreamChunk,
+    LlmUpstreamError,
+    effective_max_tokens,
+)
 
 
 class _FakeStreamClient:
@@ -31,8 +36,16 @@ class _FakeStreamClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.8,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[LlmStreamChunk]:
-        self.calls.append({"model_alias": model_alias, "messages": messages, "max_tokens": max_tokens})
+        self.calls.append(
+            {
+                "model_alias": model_alias,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "response_format": response_format,
+            }
+        )
         item = self._script.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -417,3 +430,68 @@ async def test_writer_empty_after_fallback_raises_llm_empty_draft() -> None:
 
     assert exc_info.value.code == "LLM_EMPTY_DRAFT"
     assert len(fake.calls) == 3  # DIRECTOR + WRITER + WRITER fallback; CRITIC never called!
+
+
+@pytest.mark.asyncio
+async def test_critic_json_mode_robust_extraction_and_inconclusive_preserves_valid_draft() -> None:
+    settings = Settings(llm_api_key="", embedding_api_key="")
+    assert effective_max_tokens(settings, "critic-reasoner", 2048) >= 10240
+
+    # Robust extraction handles prose braces + fenced JSON + raw newline inside string
+    messy = '核查说明 {非JSON注释}：\n```json\n{"passed": true, "score": 91, "issues": [], "revision_guidance": "第一行\n第二行"}\n```'
+    extracted = _extract_critic_json_obj(messy)
+    assert extracted is not None
+    assert extracted["score"] == 91
+    assert extracted["passed"] is True
+
+    # If both primary critic and writer-main fallback truncate while draft is non-empty,
+    # orchestrator keeps the valid draft instead of wiping it with draft_reset!
+    fake = _FakeStreamClient(
+        [
+            "1. 十三路公交停靠槐荫里",
+            "车门吱呀一声合拢，林默攥紧了那张皱巴巴的旧车票，后窗玻璃上忽然映出一张惨白的脸。",
+            [LlmStreamChunk(reasoning_delta="长思考...", content_delta="", finish_reason="length")],
+            [LlmStreamChunk(content_delta="", finish_reason="length")],
+        ]
+    )
+    orchestrator = EditorialTeamOrchestrator(
+        settings=settings,
+        llm_client=FallbackStreamClient(fake),  # type: ignore[arg-type]
+        router=IntentAndModelRouter(settings=settings),
+        checkpoint_store=InMemoryCheckpointStore(),
+        skill_registry=SkillRegistry(),
+        rag_retriever=None,
+        enable_mcp=False,
+        max_revisions=2,
+    )
+    events: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def emit(ev_type: str, payload: dict[str, Any], agent: str = "writer") -> str:
+        events.append((ev_type, agent, payload))
+        return f"ev-{len(events)}"
+
+    async def check_ctrl() -> None:
+        return None
+
+    res = await orchestrator.run(
+        initial_state=EditorialBlackboard(
+            run_id="run-critic-double-truncate",
+            book_title="十三路公交车",
+            chapter_no=1,
+            chapter_title="不能回的终点",
+            require_outline_approval=False,
+        ),
+        emit=emit,
+        control_event=asyncio.Event(),
+        check_control=check_ctrl,
+    )
+
+    assert res.status == "COMPLETED"
+    assert res.revision_count == 0
+    assert "旧车票" in res.accumulated_text
+    assert not any(t == "draft_reset" for t, _, _ in events)
+    # Fallback critic call explicitly requested JSON mode with >= 2048 tokens
+    assert fake.calls[3]["model_alias"] == "writer-main"
+    assert fake.calls[3]["response_format"] == {"type": "json_object"}
+    assert fake.calls[3]["max_tokens"] >= 2048
+

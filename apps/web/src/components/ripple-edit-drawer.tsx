@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { Select } from "@/components/ui/select";
 import { Alert } from "@/components/ui/alert";
 import { Badge, type UiStatus } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -138,8 +140,6 @@ export function RippleEditDrawer({
       if (timer) clearTimeout(timer);
     };
   }, [open, bookId, activeJobId]);
-
-  if (!open) return null;
 
   const maxRange = vip?.entitlements.rippleMaxRangeChapters ?? 50;
   const maxBatch = detail?.job.maxPatchBatchLimit ?? vip?.entitlements.rippleMaxPatchChapters ?? 5;
@@ -352,28 +352,19 @@ export function RippleEditDrawer({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-[1px]"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="跨章修订"
-        className="flex h-full w-[600px] max-w-full flex-col border-l border-border bg-surface-elevated shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Sheet open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <SheetContent side="right" className="w-[600px]">
         <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold">跨章修订</h2>
-            <p className="truncate text-[11px] text-muted-foreground tabular-nums">
+            <SheetTitle className="text-sm font-semibold">跨章修订</SheetTitle>
+            <SheetDescription className="truncate text-[11px] text-muted-foreground tabular-nums">
               基准：第 {chapterNo} 章《{chapterTitle}》
               {vip && ` · 范围 ≤ ${maxRange} 章 · 单批 ≤ ${vip.entitlements.rippleMaxPatchChapters} 章`}
-            </p>
+            </SheetDescription>
           </div>
-          <Button size="xs" variant="ghost" onClick={onClose}>
+          <SheetClose render={<Button size="xs" variant="ghost" />}>
             关闭
-          </Button>
+          </SheetClose>
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-5 text-xs">
@@ -501,21 +492,19 @@ export function RippleEditDrawer({
                   className="w-full rounded border border-input bg-background px-2 py-1.5 text-xs"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] text-muted-foreground">对比基线（选填）</label>
-                <select
-                  value={oldVersionId}
-                  onChange={(e) => setOldVersionId(e.target.value)}
-                  className="w-full rounded border border-input bg-background px-2 py-1.5 text-xs"
-                >
-                  <option value="">最近一次保存版本</option>
-                  {versions.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      v{v.versionNo} · {v.changeSummary || "历史快照"}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <Select
+                id="ripple-baseline"
+                label="对比基线（选填）"
+                value={oldVersionId}
+                onValueChange={(value) => setOldVersionId(value ?? "")}
+                options={[
+                  { value: "", label: "最近一次保存版本" },
+                  ...versions.map((version) => ({
+                    value: version.id,
+                    label: `v${version.versionNo} · ${version.changeSummary || "历史快照"}`,
+                  })),
+                ]}
+              />
             </div>
 
             <Button
@@ -750,7 +739,7 @@ export function RippleEditDrawer({
             </section>
           )}
         </div>
-      </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }

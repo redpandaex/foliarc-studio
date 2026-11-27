@@ -305,6 +305,7 @@ class EditorialTeamOrchestrator:
             messages: list[dict[str, Any]],
             temperature: float = 0.7,
             max_tokens: int = 1800,
+            response_format: dict[str, Any] | None = None,
             stream_as: Literal["text_delta", "thought_delta", "outline_delta"] = "thought_delta",
         ) -> _StreamCollectResult:
             nonlocal total_in, total_cached, total_out
@@ -314,12 +315,16 @@ class EditorialTeamOrchestrator:
             seg_in = 0
             seg_cached = 0
             seg_out = 0
+            extra_kwargs: dict[str, Any] = {}
+            if response_format is not None:
+                extra_kwargs["response_format"] = response_format
             stream_iter = self._llm.stream_chat(
                 model_alias=model_alias,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 on_fallback=_on_fallback,
+                **extra_kwargs,
             )
             try:
                 while True:
@@ -451,7 +456,7 @@ class EditorialTeamOrchestrator:
                 model_alias=director_model,
                 messages=director_msgs,
                 temperature=0.6,
-                max_tokens=1200,
+                max_tokens=1800,
                 stream_as="outline_delta",
             )
             if collected.ctrl in ("PAUSE", "CANCEL"):
@@ -474,7 +479,7 @@ class EditorialTeamOrchestrator:
                         model_alias="writer-main",
                         messages=director_msgs,
                         temperature=0.6,
-                        max_tokens=1200,
+                        max_tokens=1800,
                         stream_as="outline_delta",
                     )
                     if collected.ctrl in ("PAUSE", "CANCEL"):
@@ -625,7 +630,7 @@ class EditorialTeamOrchestrator:
                     model_alias=writer_model,
                     messages=writer_msgs,
                     temperature=0.8 if state.revision_count == 0 else 0.65,
-                    max_tokens=3200,
+                    max_tokens=4096,
                     stream_as="text_delta",
                 )
                 if collected.ctrl in ("PAUSE", "CANCEL"):
@@ -655,7 +660,7 @@ class EditorialTeamOrchestrator:
                         model_alias=fallback_alias,
                         messages=writer_msgs,
                         temperature=0.75,
-                        max_tokens=3200,
+                        max_tokens=4096,
                         stream_as="text_delta",
                     )
                     if collected.ctrl in ("PAUSE", "CANCEL"):
@@ -699,12 +704,14 @@ class EditorialTeamOrchestrator:
             if state.current_node == "CRITIC":
                 critic_msgs = self._build_critic_messages(state)
                 critic_model = state.model_plan.get("critic", "critic-reasoner")
+                critic_json_fmt = {"type": "json_object"}
                 collected = await _collect_stream(
                     agent="critic",
                     model_alias=critic_model,
                     messages=critic_msgs,
                     temperature=0.1,
-                    max_tokens=1200,
+                    max_tokens=2048,
+                    response_format=critic_json_fmt,
                     stream_as="thought_delta",
                 )
                 if collected.ctrl in ("PAUSE", "CANCEL"):
@@ -715,7 +722,14 @@ class EditorialTeamOrchestrator:
                         total_cached,
                         total_out,
                     )
-                if _extract_critic_json_obj(collected.text) is None and critic_model != "writer-main":
+                critic_raw = collected.text
+                if (
+                    _extract_critic_json_obj(critic_raw) is None
+                    and _extract_critic_json_obj(collected.reasoning_text) is not None
+                ):
+                    critic_raw = collected.reasoning_text
+
+                if _extract_critic_json_obj(critic_raw) is None and critic_model != "writer-main":
                     await emit(
                         "thought_delta",
                         {
@@ -732,7 +746,8 @@ class EditorialTeamOrchestrator:
                         model_alias="writer-main",
                         messages=critic_msgs,
                         temperature=0.1,
-                        max_tokens=1200,
+                        max_tokens=2048,
+                        response_format=critic_json_fmt,
                         stream_as="thought_delta",
                     )
                     if collected.ctrl in ("PAUSE", "CANCEL"):
@@ -743,16 +758,30 @@ class EditorialTeamOrchestrator:
                             total_cached,
                             total_out,
                         )
+                    critic_raw = collected.text
 
                 parsed_review = _parse_critic_json(
-                    collected.text,
+                    critic_raw,
                     draft_text=state.draft_text,
                     finish_reason=collected.finish_reason,
                 )
-                state.critic_score = int(parsed_review["score"])
-                state.critic_passed = bool(parsed_review["passed"])
-                state.critic_issues = list(parsed_review["issues"])
-                state.critic_guidance = str(parsed_review["revision_guidance"])
+                if parsed_review.get("inconclusive") and state.draft_text.strip():
+                    await emit(
+                        "thought_delta",
+                        {
+                            "content": "\n[审稿保护] 审校输出不完整，已保留当前正文稿件，不触发强制返工。\n"
+                        },
+                        "critic",
+                    )
+                    state.critic_score = 80
+                    state.critic_passed = True
+                    state.critic_issues = []
+                    state.critic_guidance = ""
+                else:
+                    state.critic_score = int(parsed_review["score"])
+                    state.critic_passed = bool(parsed_review["passed"])
+                    state.critic_issues = list(parsed_review["issues"])
+                    state.critic_guidance = str(parsed_review["revision_guidance"])
 
                 state.step_no += 1
                 await self._checkpoints.save(
@@ -1403,16 +1432,54 @@ def _extract_beats(outline_text: str) -> list[str]:
 
 
 def _extract_critic_json_obj(raw: str) -> dict[str, Any] | None:
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
+    if not raw or not raw.strip():
+        return None
+    decoder = json.JSONDecoder(strict=False)
+    candidates: list[dict[str, Any]] = []
+
+    # 1. Try fenced ```json ... ``` blocks first
+    fence_pos = 0
+    while True:
+        f_start = raw.find("```", fence_pos)
+        if f_start < 0:
+            break
+        nl = raw.find("\n", f_start)
+        if nl < 0:
+            break
+        f_end = raw.find("```", nl + 1)
+        if f_end < 0:
+            break
+        block = raw[nl + 1 : f_end].strip()
+        if block.startswith("{"):
+            try:
+                obj, _ = decoder.raw_decode(block)
+                if isinstance(obj, dict):
+                    candidates.append(obj)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                pass
+        fence_pos = f_end + 3
+
+    # 2. Scan all JSON object candidates from every '{'
+    idx = 0
+    while True:
+        brace = raw.find("{", idx)
+        if brace < 0:
+            break
         try:
-            obj = json.loads(raw[start : end + 1])
+            obj, end = decoder.raw_decode(raw, brace)
             if isinstance(obj, dict):
-                return obj
+                candidates.append(obj)
+                idx = max(brace + 1, end)
+                continue
         except (ValueError, TypeError, json.JSONDecodeError):
-            return None
-    return None
+            pass
+        idx = brace + 1
+
+    # Prefer a dict that explicitly contains critic review keys
+    for obj in reversed(candidates):
+        if "passed" in obj or "score" in obj or "issues" in obj:
+            return obj
+    return candidates[-1] if candidates else None
 
 
 def _parse_critic_json(
@@ -1448,6 +1515,7 @@ def _parse_critic_json(
             "score": 50,
             "issues": ["审稿输出被截断或为空，未完成有效连贯性核查"],
             "revision_guidance": "请对照批准大纲与前文设定重新核查并完善正文。",
+            "inconclusive": True,
         }
 
     return {

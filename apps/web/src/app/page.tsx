@@ -6,7 +6,9 @@ import { BookOpenText, GitBranch, Network, Sparkles } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { ServiceStatus } from "@/components/service-status";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { BlurText } from "@/components/motion/blur-text";
+import { FadeContent } from "@/components/motion/fade-content";
+import { SpotlightCard } from "@/components/motion/spotlight-card";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 const WORKSPACE_PILLARS = [
@@ -50,7 +52,9 @@ export default function HomePage() {
 
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col items-center justify-center gap-10 px-6 py-16">
         <section className="flex max-w-xl flex-col items-center space-y-5 text-center">
-          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">卷弧工坊</h1>
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
+            <BlurText>卷弧工坊</BlurText>
+          </h1>
           <p className="text-base text-muted-foreground">长篇小说创作工作台</p>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
             {!loading && user ? (
@@ -74,21 +78,20 @@ export default function HomePage() {
         </section>
 
         <section className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {WORKSPACE_PILLARS.map((item) => {
+          {WORKSPACE_PILLARS.map((item, index) => {
             const Icon = item.icon;
             return (
-              <Card
-                key={item.label}
-                className="flex flex-col items-start gap-2.5 p-4"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-primary">
-                  <Icon className="h-4 w-4" />
-                </div>
-                <div>
-                  <div className="text-sm font-semibold">{item.label}</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">{item.tag}</div>
-                </div>
-              </Card>
+              <FadeContent key={item.label} delayMs={index * 45}>
+                <SpotlightCard className="flex h-full flex-col items-start gap-2.5 p-4">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-primary">
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold">{item.label}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">{item.tag}</div>
+                  </div>
+                </SpotlightCard>
+              </FadeContent>
             );
           })}
         </section>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -354,6 +355,13 @@ class FallbackStreamClient:
     ) -> None:
         self._client = primary_client
         self._chains = fallback_chains or DEFAULT_FALLBACK_CHAINS
+        try:
+            params = inspect.signature(primary_client.stream_chat).parameters
+            self._supports_response_format = "response_format" in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+        except (TypeError, ValueError):
+            self._supports_response_format = True
 
     async def stream_chat(
         self,
@@ -363,6 +371,7 @@ class FallbackStreamClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.8,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
         on_fallback: FallbackHook | None = None,
     ) -> AsyncIterator[LlmStreamChunk]:
         chain = list(self._chains.get(model_alias, [model_alias]))
@@ -373,12 +382,16 @@ class FallbackStreamClient:
         for idx, alias in enumerate(chain):
             yielded_any = False
             try:
+                extra_kwargs: dict[str, Any] = {}
+                if response_format is not None and self._supports_response_format:
+                    extra_kwargs["response_format"] = response_format
                 async for chunk in self._client.stream_chat(
                     model_alias=alias,
                     messages=messages,
                     tools=tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **extra_kwargs,
                 ):
                     yielded_any = True
                     yield chunk

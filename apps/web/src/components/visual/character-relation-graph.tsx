@@ -49,6 +49,8 @@ import {
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge, type UiStatus } from "@/components/ui/badge";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -476,16 +478,7 @@ function CharacterRelationGraphInner({
     };
   }, []);
 
-  const hasAnyOverlay = Boolean(selectedNodeId || selectedEdgeId || connectDraft || charDraft);
-  useEscapeKey(hasAnyOverlay, () => {
-    if (connectDraft) {
-      setConnectDraft(null);
-      return;
-    }
-    if (charDraft) {
-      setCharDraft(null);
-      return;
-    }
+  useEscapeKey(!charDraft && !connectDraft && Boolean(selectedNodeId || selectedEdgeId), () => {
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setEditingEdge(null);
@@ -1528,204 +1521,193 @@ function CharacterRelationGraphInner({
 
       {/* Quick Create Character Dialog */}
       {charDraft && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-[1px]"
-          onClick={() => setCharDraft(null)}
-        >
-          <form
-            onSubmit={handleSubmitQuickCharacter}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">新建角色</h3>
-              <Button size="icon-xs" variant="ghost" onClick={() => setCharDraft(null)}>
-                <X className="size-3.5" />
-              </Button>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-2 space-y-1">
-                <label className="text-[11px] text-muted-foreground">角色名称</label>
-                <Input
-                  required
-                  value={charDraft.name}
-                  onChange={(e) => setCharDraft({ ...charDraft, name: e.target.value })}
-                  placeholder="例如：李火旺"
-                />
+        <Dialog defaultOpen onOpenChangeComplete={(open) => { if (!open) setCharDraft(null); }}>
+          <DialogContent className="max-w-md">
+            <form onSubmit={handleSubmitQuickCharacter} className="space-y-3">
+              <div className="flex items-center justify-between">
+                <DialogTitle className="text-sm font-semibold text-foreground">新建角色</DialogTitle>
+                <DialogClose aria-label="关闭" render={<Button size="icon-xs" variant="ghost" />}>
+                  <X className="size-3.5" />
+                </DialogClose>
               </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">定位</label>
-                <select
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2 space-y-1">
+                  <label className="text-[11px] text-muted-foreground">角色名称</label>
+                  <Input
+                    required
+                    value={charDraft.name}
+                    onChange={(e) => setCharDraft({ ...charDraft, name: e.target.value })}
+                    placeholder="例如：李火旺"
+                  />
+                </div>
+                <Select
+                  id="graph-character-role"
+                  label="定位"
                   value={charDraft.roleType}
-                  onChange={(e) => setCharDraft({ ...charDraft, roleType: e.target.value })}
-                  className="h-9 w-full rounded-lg border border-input bg-background px-2 text-xs outline-none focus:border-ring"
-                >
-                  <option value="PROTAGONIST">主角</option>
-                  <option value="SUPPORTING">配角</option>
-                  <option value="ANTAGONIST">反派</option>
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">所属势力（可选）</label>
-                <Input
-                  value={charDraft.faction}
-                  onChange={(e) => setCharDraft({ ...charDraft, faction: e.target.value })}
-                  placeholder="例如：清风观"
+                  onValueChange={(roleType) => { if (roleType) setCharDraft({ ...charDraft, roleType }); }}
+                  options={[
+                    { value: "PROTAGONIST", label: "主角" },
+                    { value: "SUPPORTING", label: "配角" },
+                    { value: "ANTAGONIST", label: "反派" },
+                  ]}
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">境界 / 身份（可选）</label>
-                <Input
-                  value={charDraft.realmOrLevel}
-                  onChange={(e) => setCharDraft({ ...charDraft, realmOrLevel: e.target.value })}
-                  placeholder="例如：心素 / 筑基"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">所属势力（可选）</label>
+                  <Input
+                    value={charDraft.faction}
+                    onChange={(e) => setCharDraft({ ...charDraft, faction: e.target.value })}
+                    placeholder="例如：清风观"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">境界 / 身份（可选）</label>
+                  <Input
+                    value={charDraft.realmOrLevel}
+                    onChange={(e) => setCharDraft({ ...charDraft, realmOrLevel: e.target.value })}
+                    placeholder="例如：心素 / 筑基"
+                  />
+                </div>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">别名 / 称谓（逗号分隔）</label>
-                <Input
-                  value={charDraft.aliases}
-                  onChange={(e) => setCharDraft({ ...charDraft, aliases: e.target.value })}
-                  placeholder="例如：火旺, 小道爷"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">别名 / 称谓（逗号分隔）</label>
+                  <Input
+                    value={charDraft.aliases}
+                    onChange={(e) => setCharDraft({ ...charDraft, aliases: e.target.value })}
+                    placeholder="例如：火旺, 小道爷"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">所在位置（可选）</label>
+                  <Input
+                    value={charDraft.currentLocation}
+                    onChange={(e) => setCharDraft({ ...charDraft, currentLocation: e.target.value })}
+                    placeholder="例如：戒律堂地牢"
+                  />
+                </div>
               </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">所在位置（可选）</label>
-                <Input
-                  value={charDraft.currentLocation}
-                  onChange={(e) => setCharDraft({ ...charDraft, currentLocation: e.target.value })}
-                  placeholder="例如：戒律堂地牢"
-                />
+              <div className="flex justify-end gap-2 pt-1">
+                <DialogClose render={<Button size="sm" variant="ghost" />}>
+                  取消
+                </DialogClose>
+                <Button type="submit" size="sm" loading={savingChar}>
+                  创建角色
+                </Button>
               </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" size="sm" variant="ghost" onClick={() => setCharDraft(null)}>
-                取消
-              </Button>
-              <Button type="submit" size="sm" loading={savingChar}>
-                创建角色
-              </Button>
-            </div>
-          </form>
-        </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Drag-to-Connect / New Relation Dialog */}
       {connectDraft && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-[1px]"
-          onClick={() => setConnectDraft(null)}
-        >
-          <form
-            onSubmit={handleSubmitNewRelation}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">新增人物关系</h3>
-              <Button size="icon-xs" variant="ghost" onClick={() => setConnectDraft(null)}>
-                <X className="size-3.5" />
-              </Button>
-            </div>
+        <Dialog defaultOpen onOpenChangeComplete={(open) => { if (!open) setConnectDraft(null); }}>
+          <DialogContent className="max-w-md">
+            <form onSubmit={handleSubmitNewRelation} className="space-y-3">
+              <div className="flex items-center justify-between">
+                <DialogTitle className="text-sm font-semibold text-foreground">新增人物关系</DialogTitle>
+                <DialogClose aria-label="关闭" render={<Button size="icon-xs" variant="ghost" />}>
+                  <X className="size-3.5" />
+                </DialogClose>
+              </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">角色 A（源）</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">角色 A（源）</label>
+                  <Input
+                    required
+                    list="foliarc-graph-char-names"
+                    value={connectDraft.sourceName}
+                    onChange={(e) =>
+                      setConnectDraft({ ...connectDraft, sourceName: e.target.value })
+                    }
+                    placeholder="选择或输入角色"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">角色 B（目标）</label>
+                  <Input
+                    required
+                    list="foliarc-graph-char-names"
+                    value={connectDraft.targetName}
+                    onChange={(e) =>
+                      setConnectDraft({ ...connectDraft, targetName: e.target.value })
+                    }
+                    placeholder="选择或输入角色"
+                  />
+                </div>
+                <datalist id="foliarc-graph-char-names">
+                  {(projection?.nodes ?? []).map((n) => (
+                    <option key={n.id} value={n.name} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-muted-foreground">关系类型</label>
+                <div className="flex flex-wrap gap-1">
+                  {RELATION_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setConnectDraft({ ...connectDraft, relationType: preset })}
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                        connectDraft.relationType === preset
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
                 <Input
                   required
-                  list="foliarc-graph-char-names"
-                  value={connectDraft.sourceName}
+                  value={connectDraft.relationType}
                   onChange={(e) =>
-                    setConnectDraft({ ...connectDraft, sourceName: e.target.value })
+                    setConnectDraft({ ...connectDraft, relationType: e.target.value })
                   }
-                  placeholder="选择或输入角色"
+                  placeholder="自定义关系标签（如：同门宿敌）"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">角色 B（目标）</label>
-                <Input
-                  required
-                  list="foliarc-graph-char-names"
-                  value={connectDraft.targetName}
-                  onChange={(e) =>
-                    setConnectDraft({ ...connectDraft, targetName: e.target.value })
-                  }
-                  placeholder="选择或输入角色"
-                />
-              </div>
-              <datalist id="foliarc-graph-char-names">
-                {(projection?.nodes ?? []).map((n) => (
-                  <option key={n.id} value={n.name} />
-                ))}
-              </datalist>
-            </div>
 
-            <div className="space-y-1.5">
-              <label className="text-[11px] text-muted-foreground">关系类型</label>
-              <div className="flex flex-wrap gap-1">
-                {RELATION_PRESETS.map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setConnectDraft({ ...connectDraft, relationType: preset })}
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
-                      connectDraft.relationType === preset
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {preset}
-                  </button>
-                ))}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">生效章节号</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={connectDraft.sinceChapterNo}
+                    onChange={(e) =>
+                      setConnectDraft({ ...connectDraft, sinceChapterNo: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="col-span-2 space-y-1">
+                  <label className="text-[11px] text-muted-foreground">关系说明（可选）</label>
+                  <Input
+                    value={connectDraft.description}
+                    onChange={(e) =>
+                      setConnectDraft({ ...connectDraft, description: e.target.value })
+                    }
+                    placeholder="例如：地牢同行后结下生死契约"
+                  />
+                </div>
               </div>
-              <Input
-                required
-                value={connectDraft.relationType}
-                onChange={(e) =>
-                  setConnectDraft({ ...connectDraft, relationType: e.target.value })
-                }
-                placeholder="自定义关系标签（如：同门宿敌）"
-              />
-            </div>
 
-            <div className="grid grid-cols-3 gap-2">
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">生效章节号</label>
-                <Input
-                  type="number"
-                  min={0}
-                  value={connectDraft.sinceChapterNo}
-                  onChange={(e) =>
-                    setConnectDraft({ ...connectDraft, sinceChapterNo: e.target.value })
-                  }
-                />
+              <div className="flex justify-end gap-2 pt-1">
+                <DialogClose render={<Button size="sm" variant="ghost" />}>
+                  取消
+                </DialogClose>
+                <Button type="submit" size="sm" loading={savingRelation}>
+                  保存关系
+                </Button>
               </div>
-              <div className="col-span-2 space-y-1">
-                <label className="text-[11px] text-muted-foreground">关系说明（可选）</label>
-                <Input
-                  value={connectDraft.description}
-                  onChange={(e) =>
-                    setConnectDraft({ ...connectDraft, description: e.target.value })
-                  }
-                  placeholder="例如：地牢同行后结下生死契约"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" size="sm" variant="ghost" onClick={() => setConnectDraft(null)}>
-                取消
-              </Button>
-              <Button type="submit" size="sm" loading={savingRelation}>
-                保存关系
-              </Button>
-            </div>
-          </form>
-        </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type {
   BookTreeResponse,
   ChapterTreeItem,
@@ -76,27 +77,6 @@ export function BookStructureTree({
   const [editVolGoal, setEditVolGoal] = useState("");
   const [editVolRealm, setEditVolRealm] = useState("");
 
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const menuContainerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!openMenuId) return;
-    function handlePointerDown(e: MouseEvent) {
-      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target as Node)) {
-        setOpenMenuId(null);
-      }
-    }
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpenMenuId(null);
-    }
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [openMenuId]);
-
   const volumes = tree?.volumes ?? [];
   const totalChapters = volumes.reduce((acc, v) => acc + v.chapters.length, 0);
 
@@ -110,7 +90,6 @@ export function BookStructureTree({
     setEditVolTitle(vol.title);
     setEditVolGoal(vol.arcGoal || "");
     setEditVolRealm(vol.realmScope || "");
-    setOpenMenuId(null);
   }
 
   async function handleCreateVolumeSubmit(e: FormEvent) {
@@ -150,7 +129,6 @@ export function BookStructureTree({
 
   return (
     <aside
-      ref={menuContainerRef}
       className={`flex shrink-0 flex-col border-r border-border bg-sidebar transition-[width] duration-150 ${
         compact ? "w-56" : "w-60"
       }`}
@@ -327,7 +305,6 @@ export function BookStructureTree({
                         const isChapterActive = ch.id === activeChapterId && !isMulti;
                         const isChapterSelected = ch.id === activeChapterId;
                         const isGenerating = Boolean(runningChapterIds[ch.id]);
-                        const menuOpen = openMenuId === `ch:${ch.id}`;
                         return (
                           <li key={ch.id} className="space-y-0.5">
                             <div
@@ -375,70 +352,31 @@ export function BookStructureTree({
                                 </div>
                               </button>
 
-                              <div className="relative ml-1 shrink-0">
-                                <button
-                                  type="button"
+                              <DropdownMenu modal={false}>
+                                <DropdownMenuTrigger
                                   aria-label={`第 ${ch.chapterNo} 章更多操作`}
-                                  aria-haspopup="menu"
-                                  aria-expanded={menuOpen}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenMenuId(menuOpen ? null : `ch:${ch.id}`);
-                                  }}
-                                  className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card/80 hover:text-foreground"
+                                  render={<Button size="icon-xs" variant="ghost" className="ml-1" />}
                                 >
                                   <MoreHorizontal className="size-3.5" />
-                                </button>
-                                {menuOpen && (
-                                  <div
-                                    role="menu"
-                                    className="absolute right-0 top-7 z-30 w-28 rounded-lg border border-border bg-popover p-1 text-[11px] text-popover-foreground shadow-lg"
-                                  >
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      onClick={() => {
-                                        setOpenMenuId(null);
-                                        onCreateSection(ch);
-                                      }}
-                                      className="block w-full rounded-md px-2 py-1 text-left hover:bg-muted"
-                                    >
-                                      {isMulti ? "新增小节" : "拆为多节"}
-                                    </button>
-                                    {isMulti && (
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setOpenMenuId(null);
-                                          onOpenFullPreview(ch);
-                                        }}
-                                        className="block w-full rounded-md px-2 py-1 text-left hover:bg-muted"
-                                      >
-                                        整章预览
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      onClick={() => {
-                                        setOpenMenuId(null);
-                                        onDeleteChapter(ch);
-                                      }}
-                                      className="block w-full rounded-md px-2 py-1 text-left text-status-danger hover:bg-status-danger-bg"
-                                    >
-                                      删除章节
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-28">
+                                  <DropdownMenuItem onClick={() => onCreateSection(ch)}>
+                                    {isMulti ? "新增小节" : "拆为多节"}
+                                  </DropdownMenuItem>
+                                  {isMulti && (
+                                    <DropdownMenuItem onClick={() => onOpenFullPreview(ch)}>整章预览</DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuItem variant="destructive" onClick={() => onDeleteChapter(ch)}>
+                                    删除章节
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
 
                             {isMulti && (
                               <ul className="ml-3 space-y-0.5 border-l border-border pl-2">
                                 {ch.sections.map((sec) => {
                                   const isSecActive = sec.id === activeSectionId;
-                                  const secMenuOpen = openMenuId === `sec:${sec.id}`;
                                   return (
                                     <li
                                       key={sec.id}
@@ -467,39 +405,19 @@ export function BookStructureTree({
                                         </div>
                                       </button>
                                       {ch.sections.length > 1 && (
-                                        <div className="relative ml-1 shrink-0">
-                                          <button
-                                            type="button"
+                                        <DropdownMenu modal={false}>
+                                          <DropdownMenuTrigger
                                             aria-label={`第 ${sec.sectionNo} 节更多操作`}
-                                            aria-haspopup="menu"
-                                            aria-expanded={secMenuOpen}
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setOpenMenuId(secMenuOpen ? null : `sec:${sec.id}`);
-                                            }}
-                                            className="flex size-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card/80 hover:text-foreground"
+                                            render={<Button size="icon-xs" variant="ghost" className="ml-1 size-5" />}
                                           >
                                             <MoreHorizontal className="size-3" />
-                                          </button>
-                                          {secMenuOpen && (
-                                            <div
-                                              role="menu"
-                                              className="absolute right-0 top-6 z-30 w-24 rounded-lg border border-border bg-popover p-1 text-[11px] text-popover-foreground shadow-lg"
-                                            >
-                                              <button
-                                                type="button"
-                                                role="menuitem"
-                                                onClick={() => {
-                                                  setOpenMenuId(null);
-                                                  onDeleteSection(ch, sec);
-                                                }}
-                                                className="block w-full rounded-md px-2 py-1 text-left text-status-danger hover:bg-status-danger-bg"
-                                              >
-                                                删除小节
-                                              </button>
-                                            </div>
-                                          )}
-                                        </div>
+                                          </DropdownMenuTrigger>
+                                          <DropdownMenuContent align="end" className="w-24">
+                                            <DropdownMenuItem variant="destructive" onClick={() => onDeleteSection(ch, sec)}>
+                                              删除小节
+                                            </DropdownMenuItem>
+                                          </DropdownMenuContent>
+                                        </DropdownMenu>
                                       )}
                                     </li>
                                   );

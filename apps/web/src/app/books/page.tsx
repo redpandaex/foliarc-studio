@@ -7,6 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { SpotlightCard } from "@/components/motion/spotlight-card";
 import { Card } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -576,7 +577,7 @@ export default function BookshelfPage() {
               const genreMeta = genres.find((g) => g.code === book.genreCode);
               const subTags = splitTags(book.subGenreTags);
               return (
-                <Card key={book.id} className="flex flex-col justify-between p-5">
+                <SpotlightCard key={book.id} className="flex flex-col justify-between p-5">
                   <div className="space-y-2.5">
                     <div className="flex items-start justify-between gap-2">
                       <h2 className="text-base font-semibold leading-snug">{book.title}</h2>
@@ -621,7 +622,7 @@ export default function BookshelfPage() {
                       </Button>
                     </div>
                   </div>
-                </Card>
+                </SpotlightCard>
               );
             })}
           </div>

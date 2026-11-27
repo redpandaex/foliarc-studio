@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
@@ -924,22 +925,13 @@ export function LorePanel({
                             {anchor.title || "文风锚点"}
                           </span>
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={anchor.enabled}
+                            <Switch
+                              size="sm"
+                              aria-label={`启用 ${anchor.title || "文风锚点"}`}
+                              checked={anchor.enabled}
                               title={anchor.enabled ? "已启用（点击停用）" : "已停用（点击启用）"}
-                              onClick={() => void handleToggleStyleAnchor(anchor)}
-                              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                                anchor.enabled ? "bg-primary" : "bg-muted"
-                              }`}
-                            >
-                              <span
-                                className={`inline-block size-3 rounded-full bg-card shadow-2xs transition-transform ${
-                                  anchor.enabled ? "translate-x-3.5" : "translate-x-0.5"
-                                }`}
-                              />
-                            </button>
+                              onCheckedChange={() => void handleToggleStyleAnchor(anchor)}
+                            />
                             <button
                               type="button"
                               title="删除文风锚点"
@@ -983,23 +975,13 @@ export function LorePanel({
                         className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-surface-subtle/50 px-2.5 py-2"
                       >
                         <div className="flex min-w-0 items-center gap-2">
-                          <button
-                            type="button"
-                            role="switch"
+                          <Switch
+                            size="sm"
                             aria-label={`本书启用 ${doc.title}`}
-                            aria-checked={doc.boundToBook}
+                            checked={doc.boundToBook}
                             title={doc.boundToBook ? "本书已启用" : "本书未启用"}
-                            onClick={() => void handleToggleBookDoc(doc)}
-                            className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
-                              doc.boundToBook ? "bg-primary" : "bg-muted"
-                            }`}
-                          >
-                            <span
-                              className={`inline-block size-3 rounded-full bg-card shadow-2xs transition-transform ${
-                                doc.boundToBook ? "translate-x-3.5" : "translate-x-0.5"
-                              }`}
-                            />
-                          </button>
+                            onCheckedChange={() => void handleToggleBookDoc(doc)}
+                          />
                           <span className="truncate text-[11px] font-medium text-foreground">
                             {doc.title}
                           </span>
@@ -1718,22 +1700,13 @@ export function LorePanel({
 
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-surface-subtle/60 px-2.5 py-1.5">
                   <span className="text-[10.5px] text-muted-foreground">作者锁定</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={fAuthorLocked}
+                  <Switch
+                    size="sm"
+                    aria-label="作者锁定"
+                    checked={fAuthorLocked}
                     title="开启后，AI 整理不会自动将其标为已回收"
-                    onClick={() => setFAuthorLocked((v) => !v)}
-                    className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
-                      fAuthorLocked ? "bg-primary" : "bg-muted"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block size-3 rounded-full bg-card shadow-2xs transition-transform ${
-                        fAuthorLocked ? "translate-x-3.5" : "translate-x-0.5"
-                      }`}
-                    />
-                  </button>
+                    onCheckedChange={setFAuthorLocked}
+                  />
                 </div>
 
                 <div className="flex justify-end gap-1.5">

@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge, type UiStatus } from "@/components/ui/badge";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -200,12 +202,7 @@ export function PlotlineSwimlanes({
   const dragPanRef = useRef<{ active: boolean; startX: number; scrollLeft: number } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
-  const hasAnyOverlay = Boolean(selectedArcId || selectedEventId || eventDraft);
-  useEscapeKey(hasAnyOverlay, () => {
-    if (eventDraft) {
-      setEventDraft(null);
-      return;
-    }
+  useEscapeKey(!eventDraft && Boolean(selectedArcId || selectedEventId), () => {
     setSelectedArcId(null);
     setSelectedEventId(null);
     setEditingEvent(null);
@@ -516,24 +513,21 @@ export function PlotlineSwimlanes({
         leftExtra={
           <>
             {volumes.length > 1 && (
-              <select
+              <Select
+                id="swimlane-volume"
+                label="按分卷筛选"
+                hideLabel
                 value={selectedVolumeId}
-                onChange={(e) => {
-                  setSelectedVolumeId(e.target.value);
+                onValueChange={(value) => {
+                  if (value === null) return;
+                  setSelectedVolumeId(value);
                   setWindowOffset(null);
                 }}
-                aria-label="按分卷筛选"
-                className="h-7 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none focus:border-ring"
-              >
-                <option value="ALL">全部卷 ({volumes.length})</option>
-                {volumes
-                  .filter((v) => v.id)
-                  .map((v) => (
-                    <option key={v.id!} value={v.id!}>
-                      {v.title || `第 ${v.volumeNo} 卷`}
-                    </option>
-                  ))}
-              </select>
+                options={[
+                  { value: "ALL", label: `全部卷 (${volumes.length})` },
+                  ...volumes.flatMap((v) => v.id ? [{ value: v.id, label: v.title || `第 ${v.volumeNo} 卷` }] : []),
+                ]}
+              />
             )}
 
             {allTreeChapters.length > CHAPTER_WINDOW_SIZE && selectedVolumeId === "ALL" && (
@@ -1327,82 +1321,77 @@ export function PlotlineSwimlanes({
 
       {/* Add Timeline Event Dialog */}
       {eventDraft && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-[1px]"
-          onClick={() => setEventDraft(null)}
-        >
-          <form
-            onSubmit={handleSaveNewEvent}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">记录剧情时间线事件</h3>
-              <Button size="icon-xs" variant="ghost" onClick={() => setEventDraft(null)}>
-                <X className="size-3.5" />
-              </Button>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
+        <Dialog defaultOpen onOpenChangeComplete={(open) => { if (!open) setEventDraft(null); }}>
+          <DialogContent className="max-w-md">
+            <form onSubmit={handleSaveNewEvent} className="space-y-3">
+              <div className="flex items-center justify-between">
+                <DialogTitle className="text-sm font-semibold text-foreground">记录剧情时间线事件</DialogTitle>
+                <DialogClose aria-label="关闭" render={<Button size="icon-xs" variant="ghost" />}>
+                  <X className="size-3.5" />
+                </DialogClose>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">章节号</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    required
+                    value={eventDraft.chapterNo}
+                    onChange={(e) => setEventDraft({ ...eventDraft, chapterNo: e.target.value })}
+                  />
+                </div>
+                <div className="col-span-2 space-y-1">
+                  <label className="text-[11px] text-muted-foreground">事件标题</label>
+                  <Input
+                    required
+                    value={eventDraft.eventTitle}
+                    onChange={(e) => setEventDraft({ ...eventDraft, eventTitle: e.target.value })}
+                    placeholder="例如：地牢夜谈与铜钱异动"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">涉及角色（逗号分隔）</label>
+                  <Input
+                    value={eventDraft.involvedCharacters}
+                    onChange={(e) =>
+                      setEventDraft({ ...eventDraft, involvedCharacters: e.target.value })
+                    }
+                    placeholder="李火旺, 舟师"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">发生地点</label>
+                  <Input
+                    value={eventDraft.location}
+                    onChange={(e) => setEventDraft({ ...eventDraft, location: e.target.value })}
+                    placeholder="戒律堂地牢"
+                  />
+                </div>
+              </div>
               <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">章节号</label>
-                <Input
-                  type="number"
-                  min={1}
-                  required
-                  value={eventDraft.chapterNo}
-                  onChange={(e) => setEventDraft({ ...eventDraft, chapterNo: e.target.value })}
+                <label className="text-[11px] text-muted-foreground">事件摘要</label>
+                <textarea
+                  rows={3}
+                  value={eventDraft.summary}
+                  onChange={(e) => setEventDraft({ ...eventDraft, summary: e.target.value })}
+                  placeholder="简述核心转折或对后续支线的影响..."
+                  className="w-full resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:border-ring"
                 />
               </div>
-              <div className="col-span-2 space-y-1">
-                <label className="text-[11px] text-muted-foreground">事件标题</label>
-                <Input
-                  required
-                  value={eventDraft.eventTitle}
-                  onChange={(e) => setEventDraft({ ...eventDraft, eventTitle: e.target.value })}
-                  placeholder="例如：地牢夜谈与铜钱异动"
-                />
+              <div className="flex justify-end gap-2">
+                <DialogClose render={<Button size="sm" variant="ghost" />}>
+                  取消
+                </DialogClose>
+                <Button type="submit" size="sm" loading={savingEvent}>
+                  保存事件
+                </Button>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">涉及角色（逗号分隔）</label>
-                <Input
-                  value={eventDraft.involvedCharacters}
-                  onChange={(e) =>
-                    setEventDraft({ ...eventDraft, involvedCharacters: e.target.value })
-                  }
-                  placeholder="李火旺, 舟师"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">发生地点</label>
-                <Input
-                  value={eventDraft.location}
-                  onChange={(e) => setEventDraft({ ...eventDraft, location: e.target.value })}
-                  placeholder="戒律堂地牢"
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] text-muted-foreground">事件摘要</label>
-              <textarea
-                rows={3}
-                value={eventDraft.summary}
-                onChange={(e) => setEventDraft({ ...eventDraft, summary: e.target.value })}
-                placeholder="简述核心转折或对后续支线的影响..."
-                className="w-full resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:border-ring"
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" size="sm" variant="ghost" onClick={() => setEventDraft(null)}>
-                取消
-              </Button>
-              <Button type="submit" size="sm" loading={savingEvent}>
-                保存事件
-              </Button>
-            </div>
-          </form>
-        </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

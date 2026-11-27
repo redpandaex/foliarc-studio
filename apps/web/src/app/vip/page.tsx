@@ -7,6 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { SpotlightCard } from "@/components/motion/spotlight-card";
 import { Card } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useToast } from "@/components/ui/toast";
@@ -253,7 +254,7 @@ export default function VipCenterPage() {
               {plans.map((plan) => {
                 const isCurrent = status?.planCode === plan.planCode;
                 return (
-                  <Card
+                  <SpotlightCard
                     key={plan.planCode}
                     surface={isCurrent ? "elevated" : "card"}
                     className={`flex flex-col justify-between p-5 ${
@@ -315,7 +316,7 @@ export default function VipCenterPage() {
                         </Button>
                       )}
                     </div>
-                  </Card>
+                  </SpotlightCard>
                 );
               })}
             </div>

@@ -48,6 +48,10 @@ import { RippleEditDrawer } from "@/components/ripple-edit-drawer";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { usePrompt } from "@/components/ui/prompt-dialog";
 import { Select, type SelectOption } from "@/components/ui/select";
@@ -426,7 +430,6 @@ function BookWorkbenchContent() {
   const [rightTab, setRightTab] = useState<"ai" | "lore">("ai");
   const [leftPanelOverride, setLeftPanelOverride] = useState<boolean | null>(null);
   const [rightPanelOverride, setRightPanelOverride] = useState<boolean | null>(null);
-  const [densityMenuOpen, setDensityMenuOpen] = useState(false);
 
   const density = useSyncExternalStore<WorkbenchDensity>(
     subscribeDensity,
@@ -443,7 +446,6 @@ function BookWorkbenchContent() {
   }, [typoPrefs.font]);
   const isCompact = density === "compact";
   const densityMeta = DENSITY_META[density];
-  const densityMenuRef = useRef<HTMLDivElement | null>(null);
   const manuscriptRef = useRef<HTMLTextAreaElement | null>(null);
 
   const storedRightWidth = useSyncExternalStore<number>(
@@ -548,27 +550,8 @@ function BookWorkbenchContent() {
     saveRightWidth(RIGHT_PANEL_WIDE_WIDTH);
   }, [isRightWide, leftPanelOpen, setLeftPanelOpen]);
 
-  useEffect(() => {
-    if (!densityMenuOpen) return;
-    function onPointerDown(e: MouseEvent) {
-      if (densityMenuRef.current && !densityMenuRef.current.contains(e.target as Node)) {
-        setDensityMenuOpen(false);
-      }
-    }
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setDensityMenuOpen(false);
-    }
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [densityMenuOpen]);
-
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [rippleOpen, setRippleOpen] = useState(false);
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<string | null>(null);
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [previewVersion, setPreviewVersion] = useState<ChapterVersion | null>(null);
@@ -916,7 +899,7 @@ function BookWorkbenchContent() {
     };
   }, [saveState, activeChapter, saveCurrentUnit]);
 
-  // Global Workbench Shortcuts: Ctrl/Cmd+S save, Alt+1/2/3 view switch, Ctrl/Cmd+\ left pane, Ctrl/Cmd+. right pane, Esc close overlays
+  // Global Workbench Shortcuts: Ctrl/Cmd+S save, Alt+1/2/3 view switch, Ctrl/Cmd+\ left pane, Ctrl/Cmd+. right pane
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -953,11 +936,6 @@ function BookWorkbenchContent() {
           return;
         }
       }
-      if (e.key === "Escape") {
-        if (exportMenuOpen) setExportMenuOpen(false);
-        if (versionsOpen) setVersionsOpen(false);
-        if (fullPreview) setFullPreview(null);
-      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -968,9 +946,6 @@ function BookWorkbenchContent() {
     switchWorkbenchView,
     setLeftPanelOpen,
     setRightPanelOpen,
-    exportMenuOpen,
-    versionsOpen,
-    fullPreview,
   ]);
 
   const handleRunStateChange = useCallback(
@@ -1311,215 +1286,199 @@ function BookWorkbenchContent() {
             </>
           )}
           {book && (
-            <div className="relative">
-              <Button
-                size="sm"
-                variant="ghost"
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger
+                render={<Button size="sm" variant="ghost" />}
                 disabled={exportingFormat !== null}
-                onClick={() => setExportMenuOpen((v) => !v)}
+                aria-label="导出"
               >
                 <Download className="size-3.5" />
                 <span className="hidden md:inline">
                   {exportingFormat ? `导出 ${exportingFormat.toUpperCase()}...` : "导出"}
                 </span>
-              </Button>
-              {exportMenuOpen && (
-                <div className="absolute right-0 top-9 z-40 w-48 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-lg">
-                  {(
-                    [
-                      ["epub", "EPUB 3.0 电子书 (.epub)"],
-                      ["md", "Markdown 文稿 (.md)"],
-                      ["txt", "纯文本全本 (.txt)"],
-                    ] as const
-                  ).map(([fmt, label]) => (
-                    <button
-                      key={fmt}
-                      type="button"
-                      onClick={() => {
-                        setExportMenuOpen(false);
-                        setExportingFormat(fmt);
-                        setErrorMsg(null);
-                        void booksApi
-                          .exportBook(book.id, fmt, book.title)
-                          .then(() => {
-                            toast.success(`已导出 ${fmt.toUpperCase()} 成品`);
-                          })
-                          .catch((err) => {
-                            const msg =
-                              err instanceof Error ? err.message : `导出 ${fmt.toUpperCase()} 失败`;
-                            setErrorMsg(msg);
-                            toast.error(msg);
-                          })
-                          .finally(() => setExportingFormat(null));
-                      }}
-                      className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-primary-soft hover:text-primary-soft-foreground"
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                {(
+                  [
+                    ["epub", "EPUB 3.0 电子书 (.epub)"],
+                    ["md", "Markdown 文稿 (.md)"],
+                    ["txt", "纯文本全本 (.txt)"],
+                  ] as const
+                ).map(([fmt, label]) => (
+                  <DropdownMenuItem
+                    key={fmt}
+                    onClick={() => {
+                      setExportingFormat(fmt);
+                      setErrorMsg(null);
+                      void booksApi
+                        .exportBook(book.id, fmt, book.title)
+                        .then(() => {
+                          toast.success(`已导出 ${fmt.toUpperCase()} 成品`);
+                        })
+                        .catch((err) => {
+                          const msg = formatWebError(err, `导出 ${fmt.toUpperCase()} 失败`);
+                          setErrorMsg(msg);
+                          toast.error(msg);
+                        })
+                        .finally(() => setExportingFormat(null));
+                    }}
+                  >
+                    {label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
 
-          {/* Density & Typography Switcher */}
-          <div ref={densityMenuRef} className="relative">
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-haspopup="menu"
-              aria-expanded={densityMenuOpen}
-              title="切换版心密度与正文排版"
-              onClick={() => setDensityMenuOpen((v) => !v)}
-            >
+          <Popover>
+            <PopoverTrigger render={<Button size="sm" variant="ghost" />} title="切换版心密度与正文排版">
               <Maximize2 className="size-3.5 text-primary" />
               <span className="hidden sm:inline">{densityMeta.short}</span>
-            </Button>
-            {densityMenuOpen && (
-              <div
-                role="menu"
-                aria-label="切换版心密度与正文排版"
-                className="absolute right-0 top-9 z-50 w-72 max-h-[80vh] overflow-y-auto space-y-2 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
-              >
-                <div className="space-y-0.5">
-                  <div className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    版心与密度
-                  </div>
-                  {DENSITY_ORDER.map((mode) => {
-                    const meta = DENSITY_META[mode];
-                    const active = density === mode;
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              aria-label="切换版心密度与正文排版"
+              className="max-h-[min(80vh,var(--available-height))] w-72 max-w-[var(--available-width)] space-y-2 overflow-y-auto p-2"
+            >
+              <div className="space-y-0.5">
+                <div className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  版心与密度
+                </div>
+                {DENSITY_ORDER.map((mode) => {
+                  const meta = DENSITY_META[mode];
+                  const active = density === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => saveDensity(mode)}
+                      className={`flex w-full items-start justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                        active
+                          ? "bg-primary-soft text-primary-soft-foreground"
+                          : "text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      <div>
+                        <div className="text-xs font-medium">{meta.label}</div>
+                        <div className="mt-0.5 text-[10px] opacity-75">{meta.desc}</div>
+                      </div>
+                      {active && <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-1.5 border-t border-border pt-2">
+                <div className="px-2 text-[10px] font-medium text-muted-foreground">正文字体</div>
+                <div className="space-y-1 px-1">
+                  {EDITOR_FONT_ORDER.map((fontId) => {
+                    const meta = EDITOR_FONT_META[fontId];
+                    const active = typoPrefs.font === fontId;
                     return (
                       <button
-                        key={mode}
+                        key={fontId}
                         type="button"
-                        role="menuitemradio"
-                        aria-checked={active}
-                        onClick={() => saveDensity(mode)}
-                        className={`flex w-full items-start justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                        aria-pressed={active}
+                        onClick={() => saveTypography({ ...typoPrefs, font: fontId })}
+                        className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
                           active
-                            ? "bg-primary-soft text-primary-soft-foreground"
-                            : "text-foreground hover:bg-muted"
+                            ? "border-primary bg-primary-soft text-primary-soft-foreground"
+                            : "border-border bg-background text-foreground hover:bg-muted"
                         }`}
                       >
-                        <div>
-                          <div className="text-xs font-medium">{meta.label}</div>
-                          <div className="mt-0.5 text-[10px] opacity-75">{meta.desc}</div>
+                        <div className="min-w-0">
+                          <div
+                            className="truncate text-xs font-medium"
+                            style={{ fontFamily: meta.stack }}
+                          >
+                            {meta.label}
+                          </div>
                         </div>
-                        {active && <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />}
+                        {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
                       </button>
                     );
                   })}
                 </div>
+              </div>
 
-                <div className="space-y-1.5 border-t border-border pt-2">
-                  <div className="px-2 text-[10px] font-medium text-muted-foreground">正文字体</div>
-                  <div className="space-y-1 px-1">
-                    {EDITOR_FONT_ORDER.map((fontId) => {
-                      const meta = EDITOR_FONT_META[fontId];
-                      const active = typoPrefs.font === fontId;
+              <div className="space-y-1.5 border-t border-border pt-2 px-1">
+                <div className="flex items-center justify-between text-[10.5px]">
+                  <span className="text-muted-foreground">字号</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        saveTypography({
+                          ...typoPrefs,
+                          fontSizePx: Math.max(14, (typoPrefs.fontSizePx ?? 16) - 1),
+                        })
+                      }
+                      className="flex size-6 items-center justify-center rounded border border-border bg-background text-xs hover:bg-muted"
+                    >
+                      −
+                    </button>
+                    <span className="w-10 text-center font-mono text-[11px] text-foreground">
+                      {typoPrefs.fontSizePx != null ? `${typoPrefs.fontSizePx}px` : "默认"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        saveTypography({
+                          ...typoPrefs,
+                          fontSizePx: Math.min(22, (typoPrefs.fontSizePx ?? 16) + 1),
+                        })
+                      }
+                      className="flex size-6 items-center justify-center rounded border border-border bg-background text-xs hover:bg-muted"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-[10.5px]">
+                  <span className="text-muted-foreground">行距</span>
+                  <div className="flex items-center gap-1">
+                    {(
+                      [
+                        [null, "默认"],
+                        [1.75, "紧"],
+                        [1.92, "适"],
+                        [2.1, "宽"],
+                      ] as const
+                    ).map(([val, lbl]) => {
+                      const active = typoPrefs.lineHeight === val;
                       return (
                         <button
-                          key={fontId}
+                          key={lbl}
                           type="button"
-                          onClick={() => saveTypography({ ...typoPrefs, font: fontId })}
-                          className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                          aria-pressed={active}
+                          onClick={() => saveTypography({ ...typoPrefs, lineHeight: val })}
+                          className={`rounded px-1.5 py-0.5 text-[10.5px] ${
                             active
-                              ? "border-primary bg-primary-soft text-primary-soft-foreground"
-                              : "border-border bg-background text-foreground hover:bg-muted"
+                              ? "bg-primary-soft font-semibold text-primary-soft-foreground"
+                              : "border border-border bg-background text-muted-foreground hover:text-foreground"
                           }`}
                         >
-                          <div className="min-w-0">
-                            <div
-                              className="truncate text-xs font-medium"
-                              style={{ fontFamily: meta.stack }}
-                            >
-                              {meta.label}
-                            </div>
-                          </div>
-                          {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                          {lbl}
                         </button>
                       );
                     })}
                   </div>
                 </div>
-
-                <div className="space-y-1.5 border-t border-border pt-2 px-1">
-                  <div className="flex items-center justify-between text-[10.5px]">
-                    <span className="text-muted-foreground">字号</span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          saveTypography({
-                            ...typoPrefs,
-                            fontSizePx: Math.max(14, (typoPrefs.fontSizePx ?? 16) - 1),
-                          })
-                        }
-                        className="flex size-6 items-center justify-center rounded border border-border bg-background text-xs hover:bg-muted"
-                      >
-                        −
-                      </button>
-                      <span className="w-10 text-center font-mono text-[11px] text-foreground">
-                        {typoPrefs.fontSizePx != null ? `${typoPrefs.fontSizePx}px` : "默认"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          saveTypography({
-                            ...typoPrefs,
-                            fontSizePx: Math.min(22, (typoPrefs.fontSizePx ?? 16) + 1),
-                          })
-                        }
-                        className="flex size-6 items-center justify-center rounded border border-border bg-background text-xs hover:bg-muted"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-[10.5px]">
-                    <span className="text-muted-foreground">行距</span>
-                    <div className="flex items-center gap-1">
-                      {(
-                        [
-                          [null, "默认"],
-                          [1.75, "紧"],
-                          [1.92, "适"],
-                          [2.1, "宽"],
-                        ] as const
-                      ).map(([val, lbl]) => {
-                        const active = typoPrefs.lineHeight === val;
-                        return (
-                          <button
-                            key={lbl}
-                            type="button"
-                            onClick={() => saveTypography({ ...typoPrefs, lineHeight: val })}
-                            className={`rounded px-1.5 py-0.5 text-[10.5px] ${
-                              active
-                                ? "bg-primary-soft font-semibold text-primary-soft-foreground"
-                                : "border border-border bg-background text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            {lbl}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  {(typoPrefs.font !== DEFAULT_EDITOR_FONT ||
-                    typoPrefs.fontSizePx != null ||
-                    typoPrefs.lineHeight != null) && (
-                    <button
-                      type="button"
-                      onClick={() => saveTypography(DEFAULT_TYPO_PREFS)}
-                      className="w-full rounded-md py-1 text-center text-[10.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      恢复默认排版
-                    </button>
-                  )}
-                </div>
+                {(typoPrefs.font !== DEFAULT_EDITOR_FONT ||
+                  typoPrefs.fontSizePx != null ||
+                  typoPrefs.lineHeight != null) && (
+                  <button
+                    type="button"
+                    onClick={() => saveTypography(DEFAULT_TYPO_PREFS)}
+                    className="w-full rounded-md py-1 text-center text-[10.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    恢复默认排版
+                  </button>
+                )}
               </div>
-            )}
-          </div>
+            </PopoverContent>
+          </Popover>
 
           <ThemeToggle />
           {activeChapter && (
@@ -2072,32 +2031,26 @@ function BookWorkbenchContent() {
 
       {/* Full Chapter Preview Modal (for Multi-Section Big Chapters) */}
       {fullPreview && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-[1px]"
-          onClick={() => setFullPreview(null)}
-        >
-          <div
-            className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-surface-elevated shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <Dialog defaultOpen onOpenChangeComplete={(open) => { if (!open) setFullPreview(null); }}>
+          <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col overflow-hidden p-0">
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
               <div>
-                <h2 className="text-sm font-semibold">
+                <DialogTitle className="text-sm font-semibold">
                   第 {fullPreview.chapterNo} 章 · {fullPreview.title}（整章预览）
-                </h2>
-                <p className="text-[11px] text-muted-foreground">
+                </DialogTitle>
+                <DialogDescription className="text-[11px] text-muted-foreground">
                   共 {fullPreview.sectionCount} 个小节 · {fullPreview.totalWordCount.toLocaleString()} 字
-                </p>
+                </DialogDescription>
               </div>
-              <Button size="xs" variant="ghost" onClick={() => setFullPreview(null)}>
+              <DialogClose render={<Button size="xs" variant="ghost" />}>
                 关闭
-              </Button>
+              </DialogClose>
             </div>
             <div className="flex-1 overflow-y-auto whitespace-pre-wrap p-6 font-editor text-editor text-foreground">
               {fullPreview.combinedContent || "（本章暂无正文）"}
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {activeChapter && effectiveSectionId && (
@@ -2122,29 +2075,19 @@ function BookWorkbenchContent() {
       )}
 
       {/* On-Demand Version History Slide-Over Drawer */}
-      {versionsOpen && activeChapter && (
-        <div
-          className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-[1px]"
-          onClick={() => setVersionsOpen(false)}
-        >
-          <div
-            className="flex h-full w-96 max-w-full flex-col border-l border-border bg-surface-elevated shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {activeChapter && (
+        <Sheet open={versionsOpen} onOpenChange={setVersionsOpen}>
+          <SheetContent side="right">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div>
-                <h2 className="text-sm font-semibold">历史版本</h2>
-                <p className="text-[11px] text-muted-foreground">
+                <SheetTitle className="text-sm font-semibold">历史版本</SheetTitle>
+                <SheetDescription className="text-[11px] text-muted-foreground">
                   第 {activeChapter.chapterNo} 章 · {activeChapter.title}
-                </p>
+                </SheetDescription>
               </div>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => setVersionsOpen(false)}
-              >
+              <SheetClose render={<Button size="xs" variant="ghost" />}>
                 关闭
-              </Button>
+              </SheetClose>
             </div>
 
             <form
@@ -2219,8 +2162,8 @@ function BookWorkbenchContent() {
                 </ul>
               )}
             </div>
-          </div>
-        </div>
+          </SheetContent>
+        </Sheet>
       )}
     </div>
   );

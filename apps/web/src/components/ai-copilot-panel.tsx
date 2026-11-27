@@ -6,6 +6,8 @@ import {
   ForeshadowingDirectorTray,
   useDirectorOptions,
 } from "@/components/foreshadowing-director-slot";
+import { ShinyText } from "@/components/motion/shiny-text";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -283,7 +285,9 @@ export function AiCopilotPanel({
 
   const [runId, setRunId] = useState<string | null>(null);
   const [connState, setConnState] = useState<StreamConnectionState>("idle");
-  const [statusDetail, setStatusDetail] = useState<string | null>(null);
+  const [statusMessage, setStatusDetail] = useState<string | { error: string } | null>(null);
+  const statusDetail = typeof statusMessage === "string" ? statusMessage : statusMessage?.error;
+  const statusIsError = connState === "error" || Boolean(statusMessage && typeof statusMessage === "object");
   const [controlsExpanded, setControlsExpanded] = useState(false);
 
   const [generatedText, setGeneratedText] = useState("");
@@ -522,7 +526,7 @@ export function AiCopilotPanel({
           accState = nextState;
           updateConnState(nextState);
           if (meta?.detail) {
-            setStatusDetail(meta.detail);
+            setStatusDetail(nextState === "error" ? { error: meta.detail } : meta.detail);
           } else if (nextState === "streaming" && accAgent && AGENT_HINT[accAgent]) {
             setStatusDetail(AGENT_HINT[accAgent]);
           } else if (nextState === "completed") {
@@ -662,13 +666,13 @@ export function AiCopilotPanel({
             flushSnapshotNow(buildSnap("paused"));
           } else if (envelope.type === "error") {
             accState = "error";
-            setStatusDetail(
-              formatStreamError(
+            setStatusDetail({
+              error: formatStreamError(
                 typeof envelope.payload.message === "string"
                   ? envelope.payload.message
                   : null,
               ),
-            );
+            });
             flushSnapshotNow(buildSnap("error"));
           } else if (envelope.type === "done") {
             accOutline = null;
@@ -950,7 +954,7 @@ export function AiCopilotPanel({
           }
           if (matchedRun.status === "FAILED") {
             updateConnState("error");
-            setStatusDetail(formatStreamError(matchedRun.errorMessage));
+            setStatusDetail({ error: formatStreamError(matchedRun.errorMessage) });
             flushSnapshotNow({
               ...saved,
               text: finalText,
@@ -1116,7 +1120,7 @@ export function AiCopilotPanel({
       });
     } catch (err) {
       updateConnState("error");
-      setStatusDetail(formatWebError(err, "启动创作失败，请稍后重试", { action: "generate" }));
+      setStatusDetail({ error: formatWebError(err, "启动创作失败，请稍后重试", { action: "generate" }) });
     } finally {
       setBusyControl(false);
     }
@@ -1129,7 +1133,7 @@ export function AiCopilotPanel({
       await runsApi.pause(runId);
       setStatusDetail("正在保存进度并暂停…");
     } catch (err) {
-      setStatusDetail(formatWebError(err, "暂停失败，请稍后重试", { action: "generate" }));
+      setStatusDetail({ error: formatWebError(err, "暂停失败，请稍后重试", { action: "generate" }) });
     } finally {
       setBusyControl(false);
     }
@@ -1178,7 +1182,7 @@ export function AiCopilotPanel({
       });
     } catch (err) {
       updateConnState("error");
-      setStatusDetail(formatWebError(err, "继续创作失败，请稍后重试", { action: "generate" }));
+      setStatusDetail({ error: formatWebError(err, "继续创作失败，请稍后重试", { action: "generate" }) });
     } finally {
       setBusyControl(false);
     }
@@ -1241,7 +1245,7 @@ export function AiCopilotPanel({
       });
     } catch (err) {
       updateConnState("error");
-      setStatusDetail(formatWebError(err, "提交确认失败，请稍后重试", { action: "generate" }));
+      setStatusDetail({ error: formatWebError(err, "提交确认失败，请稍后重试", { action: "generate" }) });
     } finally {
       setBusyControl(false);
     }
@@ -1260,7 +1264,7 @@ export function AiCopilotPanel({
         flushSnapshotNow(null);
       }
     } catch (err) {
-      setStatusDetail(formatWebError(err, "取消失败，请稍后重试", { action: "generate" }));
+      setStatusDetail({ error: formatWebError(err, "取消失败，请稍后重试", { action: "generate" }) });
     } finally {
       setBusyControl(false);
     }
@@ -1741,21 +1745,11 @@ export function AiCopilotPanel({
                         <span className="text-[11px] font-medium text-foreground">
                           先确认大纲再动笔
                         </span>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={requireOutlineApproval}
-                          onClick={() => setRequireOutlineApproval((v) => !v)}
-                          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                            requireOutlineApproval ? "bg-primary" : "bg-muted"
-                          }`}
-                        >
-                          <span
-                            className={`inline-block size-3.5 rounded-full bg-card shadow-xs transition-transform ${
-                              requireOutlineApproval ? "translate-x-4.5" : "translate-x-0.5"
-                            }`}
-                          />
-                        </button>
+                        <Switch
+                          aria-label="先确认大纲再动笔"
+                          checked={requireOutlineApproval}
+                          onCheckedChange={setRequireOutlineApproval}
+                        />
                       </div>
                     )}
                   </div>
@@ -1812,12 +1806,16 @@ export function AiCopilotPanel({
               <div
                 title={statusDetail}
                 className={`flex h-8 items-center rounded-lg px-2.5 text-[11px] ${
-                  connState === "error"
+                  statusIsError
                     ? "border border-status-danger-border bg-status-danger-bg text-status-danger"
                     : "bg-surface-subtle text-muted-foreground"
                 }`}
               >
-                <span className="truncate">{statusDetail}</span>
+                {isRunning && !statusIsError && connState !== "reconnecting" ? (
+                  <ShinyText>{statusDetail}</ShinyText>
+                ) : (
+                  <span className="truncate">{statusDetail}</span>
+                )}
               </div>
             )}
           </div>

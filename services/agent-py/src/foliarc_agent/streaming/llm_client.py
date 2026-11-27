@@ -58,7 +58,7 @@ def is_reasoning_model(model_name: str, model_alias: str = "") -> bool:
     low = model_name.strip().lower()
     if not low:
         return False
-    if any(tok in low for tok in ("reasoner", "thinking", "qwq", "deepseek-r1")):
+    if any(tok in low for tok in ("reasoner", "thinking", "qwq", "deepseek-r1", "glm-z1", "gemini-2.5")):
         return True
     return low.startswith(("o1", "o3", "o4"))
 
@@ -68,7 +68,7 @@ def effective_max_tokens(settings: Settings, model_alias: str, requested_max_tok
     model = resolve_model_name(settings, model_alias)
     if not is_reasoning_model(model, model_alias):
         return requested_max_tokens
-    return min(16384, max(requested_max_tokens + 4096, requested_max_tokens * 3, 6144))
+    return min(16384, max(requested_max_tokens + 6144, requested_max_tokens * 4, 10240))
 
 
 def build_novel_messages(
@@ -189,6 +189,7 @@ class OpenAICompatibleStreamClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.8,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[LlmStreamChunk]:
         if not self._settings.llm_configured:
             raise LlmConfigurationError(
@@ -209,6 +210,8 @@ class OpenAICompatibleStreamClient:
         }
         if not is_reasoning_model(model, model_alias):
             payload["temperature"] = temperature
+            if response_format is not None:
+                payload["response_format"] = response_format
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -274,7 +277,7 @@ def _parse_openai_chunk(data_str: str) -> LlmStreamChunk | None:
     if choices:
         choice = choices[0] or {}
         delta = choice.get("delta") or {}
-        reasoning_delta = delta.get("reasoning_content") or ""
+        reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
         content_delta = delta.get("content") or ""
         finish_reason = choice.get("finish_reason")
 
