@@ -421,6 +421,10 @@ export interface CharacterRelationItem {
   sinceChapterNo: number | null;
   confidence: number;
   updatedAt: string | null;
+  sourceSectionId?: string | null;
+  narrativeOrder?: number;
+  source?: "AUTHOR" | "AI_EXTRACTED" | string;
+  knownBy?: string;
 }
 
 export interface TimelineEventItem {
@@ -432,6 +436,10 @@ export interface TimelineEventItem {
   involvedCharacters: string;
   location: string;
   updatedAt: string | null;
+  sourceSectionId?: string | null;
+  narrativeOrder?: number;
+  source?: "AUTHOR" | "AI_EXTRACTED" | string;
+  knownBy?: string;
 }
 
 export interface StructuredMemorySnapshot {
@@ -1346,6 +1354,8 @@ export const memoryApi = {
       relationType: string;
       description?: string;
       sinceChapterNo?: number;
+      sourceSectionId?: string;
+      knownBy?: string;
     },
   ): Promise<CharacterRelationItem> {
     return request<CharacterRelationItem>(
@@ -1566,5 +1576,314 @@ export const billingApi = {
       method: "PUT",
       body: JSON.stringify({ monthlyBudgetCredits }),
     });
+  },
+};
+
+// ============================================================================
+// Phase 7A: Visual Storytelling (Character Graph + Plotline & Foreshadowing Lanes)
+// ============================================================================
+
+export type VisualVisibility = "AS_OF" | "PLAN";
+
+export interface VisualCapabilities {
+  visualExplore: boolean;
+  storyboard: boolean;
+  branching: boolean;
+  pacingAtlas: boolean;
+}
+
+export interface VisualCutoffInfo {
+  visibility: VisualVisibility;
+  chapterId: string | null;
+  chapterNo: number;
+  sectionId: string | null;
+  sectionNo: number | null;
+  narrativeOrder: number;
+  totalChapters: number;
+}
+
+export interface VisualChapterAxisItem {
+  id: string;
+  volumeId: string | null;
+  volumeNo: number;
+  volumeTitle: string;
+  chapterNo: number;
+  title: string;
+  wordCount: number;
+  status: string;
+  sectionCount: number;
+  firstSectionId: string | null;
+}
+
+export interface VisualGraphNode {
+  id: string;
+  characterId: string | null;
+  name: string;
+  roleType: "PROTAGONIST" | "SUPPORTING" | "ANTAGONIST" | "UNRESOLVED" | string;
+  lifecycleStatus: "CORE_PINNED" | "ACTIVE" | "DORMANT" | "DEAD" | "UNKNOWN" | string;
+  faction: string;
+  realmOrLevel: string;
+  currentLocation: string;
+  statusSummary: string;
+  appearanceCount: number;
+  relationCount: number;
+  firstSeenChapterNo: number | null;
+  lastSeenChapterNo: number | null;
+  unresolved: boolean;
+}
+
+export interface VisualGraphEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  sourceName: string;
+  targetName: string;
+  relationType: string;
+  description: string;
+  sinceChapterNo: number | null;
+  sourceSectionId: string | null;
+  narrativeOrder: number;
+  source: "AUTHOR" | "AI_EXTRACTED" | string;
+  knownBy: string;
+  confidence: number;
+  undated: boolean;
+  updatedAt: string | null;
+}
+
+export interface VisualTimelineLaneEvent {
+  id: string;
+  chapterNo: number;
+  chapterId: string | null;
+  sourceSectionId: string | null;
+  narrativeOrder: number;
+  eventTitle: string;
+  summary: string;
+  involvedCharacters: string[];
+  location: string;
+  source: string;
+  knownBy: string;
+}
+
+export interface VisualForeshadowingArc {
+  id: string;
+  code: string;
+  title: string;
+  surfaceClue: string;
+  hiddenTruth: string | null;
+  importance: "MAIN_ARC" | "SUBPLOT" | "DETAIL" | string;
+  status: string;
+  alertState: "RESOLVED" | "OVERDUE" | "DUE" | "OPEN" | "PLANNED" | string;
+  plantedChapterNo: number | null;
+  plantedSectionId: string | null;
+  targetChapterMin: number | null;
+  targetChapterMax: number | null;
+  resolvedChapterNo: number | null;
+  resolvedSectionId: string | null;
+  hintChapters: number[];
+  involvedCharacters: string[];
+  continuesLeft: boolean;
+  continuesRight: boolean;
+  openEnded: boolean;
+  allowedDirectorModes: ("PLANT" | "HINT" | "PAYOFF")[];
+}
+
+export interface VisualEntityLane {
+  id: string;
+  kind: "CHARACTER" | "LOCATION" | "FACTION" | string;
+  label: string;
+  roleOrTag: string;
+  activeChapters: number[];
+  eventIdsByChapter: Record<string, string[]>;
+  gapFromCutoff: number;
+}
+
+export interface VisualProjectionResponse {
+  bookId: string;
+  view: "graph" | "lanes" | string;
+  capabilities: VisualCapabilities;
+  cutoff: VisualCutoffInfo;
+  etag: string;
+  chapters: VisualChapterAxisItem[];
+  nodes: VisualGraphNode[];
+  edges: VisualGraphEdge[];
+  factions: string[];
+  events: VisualTimelineLaneEvent[];
+  arcs: VisualForeshadowingArc[];
+  entityLanes: VisualEntityLane[];
+  totalCharacters: number;
+  visibleCharacters: number;
+  undatedRelationCount: number;
+  evidenceCoverageRatio: number;
+}
+
+export interface VisualHeatCell {
+  chapterNo: number;
+  chapterId: string | null;
+  firstSectionId: string | null;
+  chapterTitle: string;
+  evidenceCount: number;
+}
+
+export interface VisualEvidenceItem {
+  kind: "SNAPSHOT" | "RELATION" | "EVENT" | "FORESHADOWING" | "SUMMARY" | string;
+  chapterNo: number | null;
+  chapterId: string | null;
+  sectionId: string | null;
+  title: string;
+  snippet: string;
+}
+
+export interface VisualEntityDetailResponse {
+  kind: string;
+  id: string;
+  title: string;
+  subtitle: string;
+  visibility: VisualVisibility;
+  visibleFields: Record<string, string | number | boolean | null>;
+  heatByChapter: VisualHeatCell[];
+  evidence: VisualEvidenceItem[];
+  relatedEdges: VisualGraphEdge[];
+  relatedArcs: VisualForeshadowingArc[];
+  editable: boolean;
+}
+
+export interface VisualDirectorOptionsResponse {
+  visibility: VisualVisibility;
+  cutoffChapterNo: number;
+  characters: { id: string; name: string; roleType: string }[];
+  foreshadowings: VisualForeshadowingArc[];
+}
+
+export interface UpdateVisualRelationRequest {
+  sourceCharacter?: string;
+  targetCharacter?: string;
+  relationType?: string;
+  description?: string;
+  sinceChapterNo?: number | null;
+  sourceSectionId?: string | null;
+  knownBy?: string;
+  expectedUpdatedAt?: string | null;
+}
+
+export interface UpdateVisualEventRequest {
+  chapterNo?: number | null;
+  eventTitle?: string;
+  summary?: string;
+  involvedCharacters?: string;
+  location?: string;
+  sourceSectionId?: string | null;
+  knownBy?: string;
+}
+
+export const visualApi = {
+  getProjection(
+    bookId: string,
+    params: {
+      view?: "graph" | "lanes";
+      visibility?: VisualVisibility;
+      asOfChapterId?: string | null;
+      asOfSectionId?: string | null;
+      volumeId?: string | null;
+      fromChapter?: number | null;
+      toChapter?: number | null;
+      povId?: string | null;
+      focusId?: string | null;
+    } = {},
+    options?: { signal?: AbortSignal },
+  ): Promise<VisualProjectionResponse> {
+    const qs = new URLSearchParams();
+    if (params.view) qs.set("view", params.view);
+    if (params.visibility) qs.set("visibility", params.visibility);
+    if (params.asOfChapterId) qs.set("asOfChapterId", params.asOfChapterId);
+    if (params.asOfSectionId) qs.set("asOfSectionId", params.asOfSectionId);
+    if (params.volumeId) qs.set("volumeId", params.volumeId);
+    if (params.fromChapter != null) qs.set("fromChapter", String(params.fromChapter));
+    if (params.toChapter != null) qs.set("toChapter", String(params.toChapter));
+    if (params.povId) qs.set("povId", params.povId);
+    if (params.focusId) qs.set("focusId", params.focusId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<VisualProjectionResponse>(
+      `/api/v1/books/${bookId}/visual/projection${suffix}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  },
+  getEntityDetail(
+    bookId: string,
+    kind: "character" | "foreshadowing" | "event" | "relation",
+    entityId: string,
+    params: {
+      visibility?: VisualVisibility;
+      asOfChapterId?: string | null;
+      asOfSectionId?: string | null;
+      povId?: string | null;
+    } = {},
+    options?: { signal?: AbortSignal },
+  ): Promise<VisualEntityDetailResponse> {
+    const qs = new URLSearchParams();
+    if (params.visibility) qs.set("visibility", params.visibility);
+    if (params.asOfChapterId) qs.set("asOfChapterId", params.asOfChapterId);
+    if (params.asOfSectionId) qs.set("asOfSectionId", params.asOfSectionId);
+    if (params.povId) qs.set("povId", params.povId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<VisualEntityDetailResponse>(
+      `/api/v1/books/${bookId}/visual/entities/${kind}/${entityId}${suffix}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  },
+  getDirectorOptions(
+    bookId: string,
+    params: {
+      visibility?: VisualVisibility;
+      asOfChapterId?: string | null;
+      asOfSectionId?: string | null;
+    } = {},
+    options?: { signal?: AbortSignal },
+  ): Promise<VisualDirectorOptionsResponse> {
+    const qs = new URLSearchParams();
+    if (params.visibility) qs.set("visibility", params.visibility);
+    if (params.asOfChapterId) qs.set("asOfChapterId", params.asOfChapterId);
+    if (params.asOfSectionId) qs.set("asOfSectionId", params.asOfSectionId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<VisualDirectorOptionsResponse>(
+      `/api/v1/books/${bookId}/visual/director-options${suffix}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  },
+  updateRelation(
+    bookId: string,
+    relationId: string,
+    payload: UpdateVisualRelationRequest,
+  ): Promise<CharacterRelationItem> {
+    return request<CharacterRelationItem>(
+      `/api/v1/books/${bookId}/visual/relations/${relationId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+  confirmRelation(
+    bookId: string,
+    relationId: string,
+  ): Promise<CharacterRelationItem> {
+    return request<CharacterRelationItem>(
+      `/api/v1/books/${bookId}/visual/relations/${relationId}/confirm`,
+      {
+        method: "POST",
+      },
+    );
+  },
+  updateEvent(
+    bookId: string,
+    eventId: string,
+    payload: UpdateVisualEventRequest,
+  ): Promise<TimelineEventItem> {
+    return request<TimelineEventItem>(
+      `/api/v1/books/${bookId}/visual/events/${eventId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   },
 };

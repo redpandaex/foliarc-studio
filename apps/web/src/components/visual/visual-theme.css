@@ -1,0 +1,52 @@
+/* Scoped React Flow theme integration for FoliarcStudio 「清风素纸」 OKLCH tokens */
+.foliarc-flow {
+  --xy-background-color-default: var(--surface-subtle);
+  --xy-background-pattern-dots-color-default: var(--border);
+  --xy-node-color-default: var(--foreground);
+  --xy-node-border-default: 1px solid var(--border);
+  --xy-node-background-color-default: var(--card);
+  --xy-node-boxshadow-hover-default: 0 4px 16px oklch(0.2 0.02 200 / 0.08);
+  --xy-node-boxshadow-selected-default: 0 0 0 2px var(--ring);
+  --xy-edge-stroke-default: var(--muted-foreground);
+  --xy-edge-stroke-selected-default: var(--primary);
+  --xy-connectionline-stroke-default: var(--primary);
+  --xy-connectionline-stroke-width-default: 2;
+  --xy-handle-background-color-default: var(--primary);
+  --xy-handle-border-color-default: var(--card);
+  --xy-controls-button-background-color-default: var(--card);
+  --xy-controls-button-background-color-hover-default: var(--muted);
+  --xy-controls-button-color-default: var(--foreground);
+  --xy-controls-button-border-color-default: var(--border);
+  --xy-minimap-background-color-default: var(--card);
+  --xy-minimap-mask-background-color-default: oklch(0.5 0.01 200 / 0.08);
+  --xy-attribution-background-color-default: transparent;
+}
+
+.foliarc-flow .react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 2px 10px oklch(0.2 0.02 200 / 0.06);
+}
+
+.foliarc-flow .react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 2px 10px oklch(0.2 0.02 200 / 0.06);
+}
+
+.foliarc-flow .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  border-width: 2px;
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+
+.foliarc-flow .react-flow__handle:hover {
+  transform: scale(1.35);
+}
+
+.foliarc-flow .react-flow__edge-path {
+  transition: stroke 150ms ease, stroke-width 150ms ease;
+}

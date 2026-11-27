@@ -96,9 +96,17 @@ interface LorePanelProps {
   bookId: string;
   bookGenreCode?: string;
   anchorRefreshKey?: number;
+  refreshSignal?: number;
+  onDataMutated?: () => void;
 }
 
-export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LorePanelProps) {
+export function LorePanel({
+  bookId,
+  bookGenreCode,
+  anchorRefreshKey = 0,
+  refreshSignal = 0,
+  onDataMutated,
+}: LorePanelProps) {
   const [subTab, setSubTab] = useState<"charter" | "characters" | "world" | "foreshadowing">(
     "characters",
   );
@@ -181,7 +189,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
     return () => {
       active = false;
     };
-  }, [bookId, effectiveGenreCode, anchorRefreshKey]);
+  }, [bookId, effectiveGenreCode, anchorRefreshKey, refreshSignal]);
 
   const charFields =
     genreProfile && genreProfile.characterFieldSchema.length > 0
@@ -209,6 +217,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
         ]);
         setCharacters(chars);
         setForeshadowings(clues);
+        onDataMutated?.();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "处理设定变更确认失败");
@@ -325,6 +334,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
       setCNotes("");
       setCInventory("");
       setCCustomAttrs({});
+      onDataMutated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存人物失败");
     }
@@ -335,6 +345,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
     try {
       const updated = await loreApi.wakeCharacter(bookId, ch.id);
       setCharacters((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      onDataMutated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "唤醒人物失败");
     }
@@ -347,6 +358,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
     try {
       const updated = await loreApi.updateCharacterLocks(bookId, ch.id, nextLocks);
       setCharacters((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      onDataMutated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新人物锁定失败");
     }
@@ -365,6 +377,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
       setWorldEntries((prev) => [saved, ...prev]);
       setWTitle("");
       setWContent("");
+      onDataMutated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存世界观失败");
     }
@@ -402,6 +415,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
       setFTargetMax("");
       setFSurfaceClue("");
       setFHiddenTruth("");
+      onDataMutated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存伏笔失败");
     }
@@ -414,6 +428,7 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
         targetStatus,
       });
       setForeshadowings((prev) => prev.map((f) => (f.id === saved.id ? saved : f)));
+      onDataMutated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新伏笔状态失败");
     }
@@ -827,9 +842,10 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                           onClick={() =>
                             void loreApi
                               .deleteCharacter(bookId, ch.id)
-                              .then(() =>
-                                setCharacters((prev) => prev.filter((x) => x.id !== ch.id)),
-                              )
+                              .then(() => {
+                                setCharacters((prev) => prev.filter((x) => x.id !== ch.id));
+                                onDataMutated?.();
+                              })
                           }
                           className="text-destructive hover:underline"
                         >
@@ -935,9 +951,10 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                         onClick={() =>
                           void loreApi
                             .deleteWorldEntry(bookId, w.id)
-                            .then(() =>
-                              setWorldEntries((prev) => prev.filter((x) => x.id !== w.id)),
-                            )
+                            .then(() => {
+                              setWorldEntries((prev) => prev.filter((x) => x.id !== w.id));
+                              onDataMutated?.();
+                            })
                         }
                         className="text-destructive hover:underline"
                       >
@@ -1095,9 +1112,10 @@ export function LorePanel({ bookId, bookGenreCode, anchorRefreshKey = 0 }: LoreP
                           onClick={() =>
                             void loreApi
                               .deleteForeshadowing(bookId, f.id)
-                              .then(() =>
-                                setForeshadowings((prev) => prev.filter((x) => x.id !== f.id)),
-                              )
+                              .then(() => {
+                                setForeshadowings((prev) => prev.filter((x) => x.id !== f.id));
+                                onDataMutated?.();
+                              })
                           }
                           className="text-destructive hover:underline"
                         >

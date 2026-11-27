@@ -1,7 +1,8 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
   useCallback,
@@ -12,12 +13,18 @@ import {
   useSyncExternalStore,
   type CSSProperties,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   Check,
+  ChevronsLeft,
+  ChevronsRight,
   Download,
+  FileText,
+  GitCommitHorizontal,
   History,
   Maximize2,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -51,11 +58,45 @@ import {
   type ChapterDetail,
   type ChapterTreeItem,
   type ChapterVersion,
+  type ForeshadowingDirective,
   type FullChapterPreview,
   type SectionDetail,
   type SectionSummaryItem,
+  type VisualVisibility,
 } from "@/lib/api";
 import type { StreamConnectionState } from "@/lib/sse-client";
+
+type WorkbenchView = "editor" | "graph" | "lanes";
+
+const CharacterRelationGraph = dynamic(
+  () =>
+    import("@/components/visual/character-relation-graph").then(
+      (mod) => mod.CharacterRelationGraph,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-1 items-center justify-center bg-surface-subtle text-xs text-muted-foreground">
+        正在加载人物关系动态图谱...
+      </div>
+    ),
+  },
+);
+
+const PlotlineSwimlanes = dynamic(
+  () =>
+    import("@/components/visual/plotline-swimlanes").then(
+      (mod) => mod.PlotlineSwimlanes,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-1 items-center justify-center bg-background text-xs text-muted-foreground">
+        正在加载剧情支线与伏笔弧线泳道...
+      </div>
+    ),
+  },
+);
 
 const CHAPTER_STATUS_LABELS: Record<string, string> = {
   DRAFT: "草稿",
@@ -136,6 +177,155 @@ function subscribeDensity(onStoreChange: () => void): () => void {
   };
 }
 
+type EditorFontPreset = "serif" | "kai" | "sans";
+
+interface EditorTypographyPrefs {
+  font: EditorFontPreset;
+  fontSizePx: number | null;
+  lineHeight: number | null;
+}
+
+const TYPO_STORAGE_KEY = "foliarc:editor_typography:v1";
+const TYPO_CHANGE_EVENT = "foliarc-typography-change";
+const DEFAULT_TYPO_PREFS: EditorTypographyPrefs = {
+  font: "serif",
+  fontSizePx: null,
+  lineHeight: null,
+};
+let cachedTypoRaw: string | null = null;
+let cachedTypoVal: EditorTypographyPrefs = DEFAULT_TYPO_PREFS;
+
+const FONT_PRESETS: Record<EditorFontPreset, { label: string; sample: string; stack: string }> = {
+  serif: {
+    label: "思源宋体",
+    sample: "典雅书卷",
+    stack: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", SimSun, serif',
+  },
+  kai: {
+    label: "霞鹜文楷",
+    sample: "温润纸感",
+    stack: '"LXGW WenKai", "LXGW WenKai Screen", "Kaiti SC", "STKaiti", KaiTi, serif',
+  },
+  sans: {
+    label: "清爽无衬线",
+    sample: "现代利落",
+    stack: 'system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif',
+  },
+};
+
+function readStoredTypography(): EditorTypographyPrefs {
+  if (typeof window === "undefined") return DEFAULT_TYPO_PREFS;
+  try {
+    const raw = window.localStorage.getItem(TYPO_STORAGE_KEY);
+    if (raw === cachedTypoRaw) return cachedTypoVal;
+    cachedTypoRaw = raw;
+    if (!raw) {
+      cachedTypoVal = DEFAULT_TYPO_PREFS;
+      return cachedTypoVal;
+    }
+    const parsed = JSON.parse(raw) as Partial<EditorTypographyPrefs>;
+    const font: EditorFontPreset =
+      parsed.font === "kai" || parsed.font === "sans" || parsed.font === "serif"
+        ? parsed.font
+        : "serif";
+    const fontSizePx =
+      typeof parsed.fontSizePx === "number" && parsed.fontSizePx >= 14 && parsed.fontSizePx <= 22
+        ? Math.round(parsed.fontSizePx)
+        : null;
+    const lineHeight =
+      typeof parsed.lineHeight === "number" && parsed.lineHeight >= 1.5 && parsed.lineHeight <= 2.3
+        ? Number(parsed.lineHeight.toFixed(2))
+        : null;
+    cachedTypoVal = { font, fontSizePx, lineHeight };
+    return cachedTypoVal;
+  } catch {
+    return DEFAULT_TYPO_PREFS;
+  }
+}
+
+function saveTypography(next: EditorTypographyPrefs) {
+  try {
+    const serialized = JSON.stringify(next);
+    window.localStorage.setItem(TYPO_STORAGE_KEY, serialized);
+    cachedTypoRaw = serialized;
+    cachedTypoVal = next;
+  } catch {
+    // ignore storage restrictions
+  }
+  window.dispatchEvent(new Event(TYPO_CHANGE_EVENT));
+}
+
+function subscribeTypography(onStoreChange: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === TYPO_STORAGE_KEY) onStoreChange();
+  };
+  window.addEventListener(TYPO_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(TYPO_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+const RIGHT_WIDTH_STORAGE_KEY = "foliarc:right_panel_width";
+const RIGHT_WIDTH_CHANGE_EVENT = "foliarc-right-width-change";
+const RIGHT_PANEL_DEFAULT_WIDTH = 440;
+const RIGHT_PANEL_WIDE_WIDTH = 580;
+const RIGHT_PANEL_MIN_WIDTH = 360;
+const RIGHT_PANEL_MAX_WIDTH = 680;
+const MIN_CENTER_WIDTH = 440;
+
+function clampRightWidth(value: number): number {
+  return Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(RIGHT_PANEL_MAX_WIDTH, Math.round(value)));
+}
+
+function readStoredRightWidth(): number {
+  if (typeof window === "undefined") return RIGHT_PANEL_DEFAULT_WIDTH;
+  try {
+    const raw = window.localStorage.getItem(RIGHT_WIDTH_STORAGE_KEY);
+    if (raw) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed >= RIGHT_PANEL_MIN_WIDTH && parsed <= RIGHT_PANEL_MAX_WIDTH) {
+        return Math.round(parsed);
+      }
+    }
+  } catch {
+    // ignore storage restrictions
+  }
+  return RIGHT_PANEL_DEFAULT_WIDTH;
+}
+
+function saveRightWidth(next: number) {
+  const clamped = clampRightWidth(next);
+  try {
+    window.localStorage.setItem(RIGHT_WIDTH_STORAGE_KEY, String(clamped));
+  } catch {
+    // ignore storage restrictions
+  }
+  window.dispatchEvent(new Event(RIGHT_WIDTH_CHANGE_EVENT));
+}
+
+function subscribeRightWidth(onStoreChange: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === RIGHT_WIDTH_STORAGE_KEY) onStoreChange();
+  };
+  window.addEventListener(RIGHT_WIDTH_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(RIGHT_WIDTH_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+function readViewportWidth(): number | null {
+  return typeof window === "undefined" ? null : window.innerWidth;
+}
+
+function subscribeViewportWidth(onStoreChange: () => void): () => void {
+  window.addEventListener("resize", onStoreChange);
+  return () => window.removeEventListener("resize", onStoreChange);
+}
+
 function countWords(text: string): number {
   return text.replace(/\s+/g, "").length;
 }
@@ -178,10 +368,55 @@ function BookWorkbenchContent() {
   const params = useParams<{ bookId: string }>();
   const bookId = params.bookId;
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
+
+  const [activeView, setActiveView] = useState<WorkbenchView>(() => {
+    const v = searchParams.get("view");
+    return v === "graph" || v === "lanes" ? v : "editor";
+  });
+  const [visualVisibility, setVisualVisibility] = useState<VisualVisibility>("AS_OF");
+  const [asOfChapterId, setAsOfChapterId] = useState<string | null>(null);
+  const [visualRefreshSignal, setVisualRefreshSignal] = useState(0);
+  const [highlightedRelationIds, setHighlightedRelationIds] = useState<string[]>([]);
+  const [injectedDirective, setInjectedDirective] = useState<{
+    nonce: number;
+    directive: ForeshadowingDirective;
+    label?: string;
+  } | null>(null);
+  const [injectedInstruction, setInjectedInstruction] = useState<{
+    nonce: number;
+    text: string;
+  } | null>(null);
+
+  const bumpCrossPanelRefresh = useCallback(() => {
+    setVisualRefreshSignal((n) => n + 1);
+  }, []);
+
+  const switchWorkbenchView = useCallback((nextView: WorkbenchView) => {
+    setActiveView(nextView);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (nextView === "editor") {
+        url.searchParams.delete("view");
+      } else {
+        url.searchParams.set("view", nextView);
+      }
+      window.history.replaceState(null, "", url.pathname + url.search);
+    }
+  }, []);
+
+  const handleHighlightRelationsInGraph = useCallback(
+    (relationIds: string[]) => {
+      setHighlightedRelationIds(relationIds);
+      switchWorkbenchView("graph");
+      toast.info(`已在关系图谱高亮本次 AI 引用的 ${relationIds.length} 条人物关系`);
+    },
+    [switchWorkbenchView, toast],
+  );
 
   const [book, setBook] = useState<BookItem | null>(null);
   const [tree, setTree] = useState<BookTreeResponse | null>(null);
@@ -212,10 +447,96 @@ function BookWorkbenchContent() {
     readStoredDensity,
     () => "compact",
   );
+  const typoPrefs = useSyncExternalStore<EditorTypographyPrefs>(
+    subscribeTypography,
+    readStoredTypography,
+    () => DEFAULT_TYPO_PREFS,
+  );
   const isCompact = density === "compact";
   const densityMeta = DENSITY_META[density];
   const densityMenuRef = useRef<HTMLDivElement | null>(null);
   const manuscriptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const storedRightWidth = useSyncExternalStore<number>(
+    subscribeRightWidth,
+    readStoredRightWidth,
+    () => RIGHT_PANEL_DEFAULT_WIDTH,
+  );
+  const viewportWidth = useSyncExternalStore<number | null>(
+    subscribeViewportWidth,
+    readViewportWidth,
+    () => null,
+  );
+  const [dragRightWidth, setDragRightWidth] = useState<number | null>(null);
+  const [isDraggingRight, setIsDraggingRight] = useState(false);
+
+  const leftSidebarWidth = leftPanelOpen ? (isCompact ? 224 : 240) : 0;
+  const maxAllowedRightWidth =
+    viewportWidth != null
+      ? Math.max(
+          RIGHT_PANEL_MIN_WIDTH,
+          Math.min(RIGHT_PANEL_MAX_WIDTH, viewportWidth - leftSidebarWidth - MIN_CENTER_WIDTH),
+        )
+      : RIGHT_PANEL_MAX_WIDTH;
+  const effectiveRightWidth = Math.max(
+    RIGHT_PANEL_MIN_WIDTH,
+    Math.min(maxAllowedRightWidth, dragRightWidth ?? storedRightWidth),
+  );
+  const isRightWide = effectiveRightWidth >= 530;
+
+  const handleRightResizePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = effectiveRightWidth;
+      let latestWidth = startWidth;
+
+      setIsDraggingRight(true);
+      setDragRightWidth(startWidth);
+
+      const prevUserSelect = document.body.style.userSelect;
+      const prevCursor = document.body.style.cursor;
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+
+      const onPointerMove = (ev: PointerEvent) => {
+        const delta = startX - ev.clientX;
+        latestWidth = Math.max(
+          RIGHT_PANEL_MIN_WIDTH,
+          Math.min(maxAllowedRightWidth, Math.round(startWidth + delta)),
+        );
+        setDragRightWidth(latestWidth);
+      };
+
+      const finish = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        document.body.style.userSelect = prevUserSelect;
+        document.body.style.cursor = prevCursor;
+        setIsDraggingRight(false);
+        setDragRightWidth(null);
+        saveRightWidth(latestWidth);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    },
+    [effectiveRightWidth, maxAllowedRightWidth],
+  );
+
+  const handleToggleWideRight = useCallback(() => {
+    if (isRightWide) {
+      saveRightWidth(RIGHT_PANEL_DEFAULT_WIDTH);
+      return;
+    }
+    if (typeof window !== "undefined" && window.innerWidth < 1380 && leftPanelOpen) {
+      setLeftPanelOpen(false);
+    }
+    saveRightWidth(RIGHT_PANEL_WIDE_WIDTH);
+  }, [isRightWide, leftPanelOpen]);
 
   useEffect(() => {
     if (!densityMenuOpen) return;
@@ -272,10 +593,14 @@ function BookWorkbenchContent() {
   const editorTypographyStyle = useMemo(
     () =>
       ({
-        "--editor-font-size": densityMeta.fontSize,
-        "--editor-line-height": densityMeta.lineHeight,
+        "--editor-font-size":
+          typoPrefs.fontSizePx != null ? `${typoPrefs.fontSizePx}px` : densityMeta.fontSize,
+        "--editor-line-height":
+          typoPrefs.lineHeight != null ? String(typoPrefs.lineHeight) : densityMeta.lineHeight,
+        "--type-literary": FONT_PRESETS[typoPrefs.font].stack,
+        "--font-editor": FONT_PRESETS[typoPrefs.font].stack,
       }) as CSSProperties,
-    [densityMeta.fontSize, densityMeta.lineHeight],
+    [densityMeta.fontSize, densityMeta.lineHeight, typoPrefs],
   );
 
   const activeTreeChapter = useMemo(() => {
@@ -429,8 +754,11 @@ function BookWorkbenchContent() {
   }, [authLoading, user, router, bookId, loadChapterDetail]);
 
   const saveCurrentUnit = useCallback(
-    async (options?: { createSnapshot?: boolean; changeSummary?: string }) => {
-      if (!activeChapter) return;
+    async (options?: {
+      createSnapshot?: boolean;
+      changeSummary?: string;
+    }): Promise<"saved" | "conflict" | "failed"> => {
+      if (!activeChapter) return "saved";
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
         autoSaveTimerRef.current = null;
@@ -457,7 +785,8 @@ function BookWorkbenchContent() {
           setDraftContent(updatedSec.content);
           await refreshTree();
           setSaveState("saved");
-          return;
+          setVisualRefreshSignal((n) => n + 1);
+          return "saved";
         }
 
         const updated = await chaptersApi.update(bookId, activeChapter.id, {
@@ -480,19 +809,24 @@ function BookWorkbenchContent() {
           toast.success("已保存当前正文为历史快照");
         }
         setSaveState("saved");
+        setVisualRefreshSignal((n) => n + 1);
+        return "saved";
       } catch (err) {
         if (err instanceof ApiClientError && err.code === "VIP_QUOTA_EXCEEDED") {
           setSaveState("error");
           setVipLimitError(err.message);
+          return "failed";
         } else if (
           err instanceof ApiClientError &&
           (err.status === 409 || err.code === "VERSION_CONFLICT")
         ) {
           setSaveState("conflict");
           setErrorMsg(err.message);
+          return "conflict";
         } else {
           setSaveState("error");
           setErrorMsg(err instanceof Error ? err.message : "保存失败");
+          return "failed";
         }
       }
     },
@@ -507,6 +841,52 @@ function BookWorkbenchContent() {
       refreshTree,
       toast,
     ],
+  );
+
+  const handleJumpFromVisual = useCallback(
+    async (targetChapterId: string, targetSectionId?: string | null) => {
+      if (activeChapter && saveState === "dirty") {
+        const res = await saveCurrentUnit();
+        if (res !== "saved") {
+          toast.error("当前章节尚未保存成功，请先处理保存或版本冲突后再跳转");
+          switchWorkbenchView("editor");
+          return;
+        }
+      }
+      await loadChapterDetail(targetChapterId, targetSectionId ?? null);
+      switchWorkbenchView("editor");
+    },
+    [activeChapter, saveState, saveCurrentUnit, loadChapterDetail, switchWorkbenchView, toast],
+  );
+
+  const handleSendDirectiveFromVisual = useCallback(
+    (directive: ForeshadowingDirective, label: string) => {
+      setInjectedDirective({ nonce: Date.now(), directive, label });
+      setRightTab("ai");
+      setRightPanelOpen(true);
+    },
+    [],
+  );
+
+  const handleSendPromptFromVisual = useCallback(
+    async (promptText: string, targetChapterId?: string | null) => {
+      if (targetChapterId && targetChapterId !== activeId) {
+        if (activeChapter && saveState === "dirty") {
+          const res = await saveCurrentUnit();
+          if (res !== "saved") {
+            toast.error("当前章节保存失败，已留在正文视图");
+            switchWorkbenchView("editor");
+            return;
+          }
+        }
+        await loadChapterDetail(targetChapterId);
+      }
+      setInjectedInstruction({ nonce: Date.now(), text: promptText });
+      setRightTab("ai");
+      setRightPanelOpen(true);
+      switchWorkbenchView("editor");
+    },
+    [activeId, activeChapter, saveState, saveCurrentUnit, loadChapterDetail, switchWorkbenchView, toast],
   );
 
   // Debounced auto-save after 2.5s idle when dirty
@@ -524,7 +904,7 @@ function BookWorkbenchContent() {
     };
   }, [saveState, activeChapter, saveCurrentUnit]);
 
-  // Ctrl/Cmd + S manual save shortcut
+  // Global Workbench Shortcuts: Ctrl/Cmd+S save, Alt+1/2/3 view switch, Ctrl/Cmd+\ left pane, Ctrl/Cmd+. right pane, Esc close overlays
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -532,11 +912,52 @@ function BookWorkbenchContent() {
         if (activeChapter && saveState !== "conflict") {
           void saveCurrentUnit();
         }
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        setLeftPanelOpen((v) => !v);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+        e.preventDefault();
+        setRightPanelOpen((v) => !v);
+        return;
+      }
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === "1") {
+          e.preventDefault();
+          switchWorkbenchView("editor");
+          return;
+        }
+        if (e.key === "2") {
+          e.preventDefault();
+          switchWorkbenchView("graph");
+          return;
+        }
+        if (e.key === "3") {
+          e.preventDefault();
+          switchWorkbenchView("lanes");
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        if (exportMenuOpen) setExportMenuOpen(false);
+        if (versionsOpen) setVersionsOpen(false);
+        if (fullPreview) setFullPreview(null);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeChapter, saveState, saveCurrentUnit]);
+  }, [
+    activeChapter,
+    saveState,
+    saveCurrentUnit,
+    switchWorkbenchView,
+    exportMenuOpen,
+    versionsOpen,
+    fullPreview,
+  ]);
 
   const handleRunStateChange = useCallback(
     (targetChapterId: string | null, state: StreamConnectionState) => {
@@ -785,9 +1206,43 @@ function BookWorkbenchContent() {
             ← 书架
           </Link>
           <span className="text-border">/</span>
-          <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+          <h1 className="max-w-44 truncate text-sm font-semibold tracking-tight text-foreground">
             {book?.title ?? "未命名小说"}
           </h1>
+
+          {/* Phase 7A View Switcher Pill: 正文 / 关系图谱 / 剧情泳道 */}
+          <div
+            role="tablist"
+            aria-label="工作台视图切换"
+            className="ml-2 inline-flex shrink-0 items-center rounded-lg bg-muted p-0.5"
+          >
+            {(
+              [
+                ["editor", "正文", FileText],
+                ["graph", "关系图谱", Network],
+                ["lanes", "剧情泳道", GitCommitHorizontal],
+              ] as const
+            ).map(([viewId, label, Icon]) => {
+              const active = activeView === viewId;
+              return (
+                <button
+                  key={viewId}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => switchWorkbenchView(viewId)}
+                  className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-all ${
+                    active
+                      ? "bg-card text-foreground shadow-2xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Icon className={`size-3.5 ${active ? "text-primary" : ""}`} />
+                  <span className="hidden sm:inline">{label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="flex items-center gap-1">
@@ -892,14 +1347,14 @@ function BookWorkbenchContent() {
             </div>
           )}
 
-          {/* Density / Canvas Width Switcher */}
+          {/* Density & Typography Switcher */}
           <div ref={densityMenuRef} className="relative">
             <Button
               size="sm"
               variant="ghost"
               aria-haspopup="menu"
               aria-expanded={densityMenuOpen}
-              title="切换版心与界面密度"
+              title="切换版心密度与正文排版"
               onClick={() => setDensityMenuOpen((v) => !v)}
             >
               <Maximize2 className="size-3.5 text-primary" />
@@ -908,36 +1363,138 @@ function BookWorkbenchContent() {
             {densityMenuOpen && (
               <div
                 role="menu"
-                aria-label="切换版心与界面密度"
-                className="absolute right-0 top-9 z-50 w-56 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                aria-label="切换版心密度与正文排版"
+                className="absolute right-0 top-9 z-50 w-64 space-y-2 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg"
               >
-                {DENSITY_ORDER.map((mode) => {
-                  const meta = DENSITY_META[mode];
-                  const active = density === mode;
-                  return (
+                <div className="space-y-0.5">
+                  <div className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    版心与密度
+                  </div>
+                  {DENSITY_ORDER.map((mode) => {
+                    const meta = DENSITY_META[mode];
+                    const active = density === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        onClick={() => saveDensity(mode)}
+                        className={`flex w-full items-start justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                          active
+                            ? "bg-primary-soft text-primary-soft-foreground"
+                            : "text-foreground hover:bg-muted"
+                        }`}
+                      >
+                        <div>
+                          <div className="text-xs font-medium">{meta.label}</div>
+                          <div className="mt-0.5 text-[10px] opacity-75">{meta.desc}</div>
+                        </div>
+                        {active && <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-1.5 border-t border-border pt-2">
+                  <div className="px-2 text-[10px] font-medium text-muted-foreground">
+                    正文字体（免费商用字体栈）
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 px-1">
+                    {(["serif", "kai", "sans"] as const).map((preset) => {
+                      const active = typoPrefs.font === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => saveTypography({ ...typoPrefs, font: preset })}
+                          className={`rounded-lg border px-1.5 py-1 text-center text-[11px] font-medium transition-colors ${
+                            active
+                              ? "border-primary bg-primary-soft text-primary-soft-foreground"
+                              : "border-border bg-background text-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {FONT_PRESETS[preset].label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 border-t border-border pt-2 px-1">
+                  <div className="flex items-center justify-between text-[10.5px]">
+                    <span className="text-muted-foreground">字号</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          saveTypography({
+                            ...typoPrefs,
+                            fontSizePx: Math.max(14, (typoPrefs.fontSizePx ?? 16) - 1),
+                          })
+                        }
+                        className="flex size-6 items-center justify-center rounded border border-border bg-background text-xs hover:bg-muted"
+                      >
+                        −
+                      </button>
+                      <span className="w-10 text-center font-mono text-[11px] text-foreground">
+                        {typoPrefs.fontSizePx != null ? `${typoPrefs.fontSizePx}px` : "默认"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          saveTypography({
+                            ...typoPrefs,
+                            fontSizePx: Math.min(22, (typoPrefs.fontSizePx ?? 16) + 1),
+                          })
+                        }
+                        className="flex size-6 items-center justify-center rounded border border-border bg-background text-xs hover:bg-muted"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[10.5px]">
+                    <span className="text-muted-foreground">行距</span>
+                    <div className="flex items-center gap-1">
+                      {(
+                        [
+                          [null, "默认"],
+                          [1.75, "紧"],
+                          [1.92, "适"],
+                          [2.1, "宽"],
+                        ] as const
+                      ).map(([val, lbl]) => {
+                        const active = typoPrefs.lineHeight === val;
+                        return (
+                          <button
+                            key={lbl}
+                            type="button"
+                            onClick={() => saveTypography({ ...typoPrefs, lineHeight: val })}
+                            className={`rounded px-1.5 py-0.5 text-[10.5px] ${
+                              active
+                                ? "bg-primary-soft font-semibold text-primary-soft-foreground"
+                                : "border border-border bg-background text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {lbl}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {(typoPrefs.font !== "serif" ||
+                    typoPrefs.fontSizePx != null ||
+                    typoPrefs.lineHeight != null) && (
                     <button
-                      key={mode}
                       type="button"
-                      role="menuitemradio"
-                      aria-checked={active}
-                      onClick={() => {
-                        saveDensity(mode);
-                        setDensityMenuOpen(false);
-                      }}
-                      className={`flex w-full items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                        active
-                          ? "bg-primary-soft text-primary-soft-foreground"
-                          : "text-foreground hover:bg-muted"
-                      }`}
+                      onClick={() => saveTypography(DEFAULT_TYPO_PREFS)}
+                      className="w-full rounded-md py-1 text-center text-[10.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
-                      <div>
-                        <div className="text-xs font-medium">{meta.label}</div>
-                        <div className="mt-0.5 text-[10.5px] opacity-75">{meta.desc}</div>
-                      </div>
-                      {active && <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />}
+                      恢复默认排版
                     </button>
-                  );
-                })}
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -997,12 +1554,51 @@ function BookWorkbenchContent() {
           />
         )}
 
-        {/* Center Pane: Adaptive Paper Manuscript Editor + Docked Status Bar */}
+        {/* Center Pane: Editor / Character Relation Graph / Plotline Swimlanes */}
         <section
           className={`flex min-w-0 flex-1 flex-col overflow-hidden ${
-            isCompact ? "bg-background" : "bg-surface-subtle/55"
+            activeView !== "editor" || isCompact ? "bg-background" : "bg-surface-subtle/55"
           }`}
         >
+          {activeView === "graph" ? (
+            <CharacterRelationGraph
+              bookId={bookId}
+              tree={tree}
+              activeChapterId={activeId}
+              activeSectionId={effectiveSectionId}
+              visibility={visualVisibility}
+              onVisibilityChange={setVisualVisibility}
+              asOfChapterId={asOfChapterId}
+              onAsOfChapterIdChange={setAsOfChapterId}
+              refreshSignal={visualRefreshSignal}
+              highlightedRelationIds={highlightedRelationIds}
+              onClearHighlightedRelations={() => setHighlightedRelationIds([])}
+              onDataMutated={bumpCrossPanelRefresh}
+              onJumpToChapter={(chId, secId) => void handleJumpFromVisual(chId, secId)}
+              onSendToDirector={handleSendDirectiveFromVisual}
+              onOpenLorePanel={() => {
+                setRightTab("lore");
+                setRightPanelOpen(true);
+              }}
+            />
+          ) : activeView === "lanes" ? (
+            <PlotlineSwimlanes
+              bookId={bookId}
+              tree={tree}
+              activeChapterId={activeId}
+              activeSectionId={effectiveSectionId}
+              visibility={visualVisibility}
+              onVisibilityChange={setVisualVisibility}
+              asOfChapterId={asOfChapterId}
+              onAsOfChapterIdChange={setAsOfChapterId}
+              refreshSignal={visualRefreshSignal}
+              onDataMutated={bumpCrossPanelRefresh}
+              onJumpToChapter={(chId, secId) => void handleJumpFromVisual(chId, secId)}
+              onSendToDirector={handleSendDirectiveFromVisual}
+              onSendPromptToAi={(text, chId) => void handleSendPromptFromVisual(text, chId)}
+            />
+          ) : (
+            <>
           {vipLimitError && (
             <Alert
               status="vip"
@@ -1229,7 +1825,11 @@ function BookWorkbenchContent() {
                       setDraftContent(e.target.value);
                       if (saveState !== "conflict") setSaveState("dirty");
                     }}
-                    placeholder="在此开始撰写正文…（整页无缝滚动，支持自动保存、Ctrl+S 与划词 AI 改写）"
+                    placeholder={
+                      isMultiSectionEditing
+                        ? "从这里写下本节的场景与对白……"
+                        : "从这里落笔本章正文，划选任意段落可唤起 AI 润色与扩写……"
+                    }
                   />
                 </div>
               </div>
@@ -1292,7 +1892,9 @@ function BookWorkbenchContent() {
                     {densityMeta.label}
                   </button>
                   <span className="hidden text-border sm:inline">·</span>
-                  <span className="hidden font-mono text-[10.5px] sm:inline">Ctrl+S 保存</span>
+                  <span className="hidden font-mono text-[10.5px] sm:inline">
+                    Ctrl+S 保存 · Alt+1/2/3 切视图
+                  </span>
                 </div>
               </div>
             </>
@@ -1301,40 +1903,79 @@ function BookWorkbenchContent() {
               <p>选择左侧章节开始创作，或新建第一章</p>
             </div>
           )}
+            </>
+          )}
         </section>
+
+        {/* Right Pane Resize Handle */}
+        {rightPanelOpen && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="拖拽调节右侧助手宽度（双击恢复默认）"
+            title="拖拽调节宽度 · 双击恢复默认"
+            onPointerDown={handleRightResizePointerDown}
+            onDoubleClick={() => saveRightWidth(RIGHT_PANEL_DEFAULT_WIDTH)}
+            className="group relative z-20 -ml-[3px] flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center select-none"
+          >
+            <span
+              className={`w-px transition-colors ${
+                isDraggingRight
+                  ? "bg-primary"
+                  : "bg-transparent group-hover:bg-primary/60"
+              }`}
+            />
+          </div>
+        )}
 
         {/* Right Pane */}
         <aside
+          style={rightPanelOpen ? { width: `${effectiveRightWidth}px` } : undefined}
           className={
             rightPanelOpen
-              ? `flex shrink-0 flex-col border-l border-border bg-surface-subtle transition-[width] duration-150 ${
-                  isCompact ? "w-[356px]" : "w-[376px]"
+              ? `flex shrink-0 flex-col border-l border-border bg-surface-subtle ${
+                  isDraggingRight ? "" : "transition-[width] duration-150"
                 }`
               : "hidden"
           }
         >
-          <div className="grid grid-cols-2 border-b border-border bg-card px-3 text-xs font-medium">
+          <div className="flex items-center border-b border-border bg-card pl-3 pr-2 text-xs font-medium">
+            <div className="grid flex-1 grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setRightTab("ai")}
+                className={`relative transition-colors ${isCompact ? "py-2.5" : "py-3"} ${
+                  rightTab === "ai"
+                    ? "font-semibold text-foreground after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                AI 写作
+              </button>
+              <button
+                type="button"
+                onClick={() => setRightTab("lore")}
+                className={`relative transition-colors ${isCompact ? "py-2.5" : "py-3"} ${
+                  rightTab === "lore"
+                    ? "font-semibold text-foreground after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                故事设定
+              </button>
+            </div>
             <button
               type="button"
-              onClick={() => setRightTab("ai")}
-              className={`relative transition-colors ${isCompact ? "py-2.5" : "py-3"} ${
-                rightTab === "ai"
-                  ? "font-semibold text-foreground after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
+              onClick={handleToggleWideRight}
+              title={isRightWide ? "还原标准宽度 (440px)" : "加宽右侧面板 (580px)"}
+              aria-label={isRightWide ? "还原标准宽度" : "加宽右侧面板"}
+              className="ml-1 flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              AI 写作
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("lore")}
-              className={`relative transition-colors ${isCompact ? "py-2.5" : "py-3"} ${
-                rightTab === "lore"
-                  ? "font-semibold text-foreground after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              故事设定
+              {isRightWide ? (
+                <ChevronsRight className="size-3.5" />
+              ) : (
+                <ChevronsLeft className="size-3.5" />
+              )}
             </button>
           </div>
 
@@ -1346,8 +1987,13 @@ function BookWorkbenchContent() {
               chapterNo={activeChapter?.chapterNo ?? null}
               chapterContent={draftContent}
               compact={isCompact}
+              visibility={visualVisibility}
+              visualRefreshSignal={visualRefreshSignal}
               selectionTask={selectionTask}
               onClearSelectionTask={() => setSelectionTask(null)}
+              onHighlightRelationsInGraph={handleHighlightRelationsInGraph}
+              injectedDirective={injectedDirective}
+              injectedInstruction={injectedInstruction}
               onReviewDiff={(payload) => setDiffModalState(payload)}
               onRunStateChange={handleRunStateChange}
               onAppendText={(text) => {
@@ -1368,6 +2014,8 @@ function BookWorkbenchContent() {
               bookId={bookId}
               bookGenreCode={book?.genreCode}
               anchorRefreshKey={anchorRefreshKey}
+              refreshSignal={visualRefreshSignal}
+              onDataMutated={bumpCrossPanelRefresh}
             />
           )}
         </aside>
@@ -1449,6 +2097,7 @@ function BookWorkbenchContent() {
           onClose={() => setRippleOpen(false)}
           onAppliedSections={(appliedIds) => {
             void refreshTree();
+            bumpCrossPanelRefresh();
             if (effectiveSectionId && appliedIds.includes(effectiveSectionId)) {
               void loadChapterDetail(activeChapter.id, activeSection?.id);
             }

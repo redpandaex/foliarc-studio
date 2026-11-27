@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ForeshadowingDirectorSlot } from "@/components/foreshadowing-director-slot";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import {
   getRunStreamUrl,
   runsApi,
@@ -10,6 +11,7 @@ import {
   type ForeshadowingDirective,
   type RunAction,
   type RunMode,
+  type VisualVisibility,
 } from "@/lib/api";
 import {
   connectResumableSse,
@@ -32,8 +34,20 @@ interface AiCopilotPanelProps {
   chapterNo?: number | null;
   chapterContent: string;
   compact?: boolean;
+  visibility?: VisualVisibility;
+  visualRefreshSignal?: number;
   selectionTask?: SelectionEditTask | null;
   onClearSelectionTask?: () => void;
+  onHighlightRelationsInGraph?: (relationIds: string[]) => void;
+  injectedDirective?: {
+    nonce: number;
+    directive: ForeshadowingDirective;
+    label?: string;
+  } | null;
+  injectedInstruction?: {
+    nonce: number;
+    text: string;
+  } | null;
   onReviewDiff?: (payload: {
     originalText: string;
     proposedText: string;
@@ -69,11 +83,13 @@ interface PersistedRunSnapshot {
   lastSeq: number;
   text: string;
   thought: string;
+  liveOutline?: string;
   state: StreamConnectionState;
   activeAgent?: string | null;
   completedStages?: string[];
   criticInfo?: CriticInfo | null;
   outlineApproval?: OutlineApprovalState | null;
+  hitRelationIds?: string[];
 }
 
 const ACTION_OPTIONS: { value: RunAction; label: string }[] = [
@@ -136,6 +152,71 @@ function isActiveStreamState(state: StreamConnectionState): boolean {
   return state === "connecting" || state === "streaming" || state === "reconnecting";
 }
 
+function useSmoothTypewriter(targetText: string, active: boolean): string {
+  const [shownLen, setShownLen] = useState(targetText.length);
+  const shownLenRef = useRef(targetText.length);
+  const targetLenRef = useRef(targetText.length);
+
+  useEffect(() => {
+    targetLenRef.current = targetText.length;
+    if (!active) {
+      shownLenRef.current = targetText.length;
+      return;
+    }
+    if (targetText.length < shownLenRef.current) {
+      shownLenRef.current = targetText.length;
+    }
+
+    let rafId = 0;
+    let lastTick = 0;
+
+    const tick = (now: number) => {
+      const targetLen = targetLenRef.current;
+      const cur = shownLenRef.current;
+      if (cur > targetLen) {
+        shownLenRef.current = targetLen;
+        setShownLen(targetLen);
+        return;
+      }
+      if (cur === targetLen) {
+        setShownLen(cur);
+        return;
+      }
+
+      const backlog = targetLen - cur;
+      const intervalMs = backlog > 60 ? 16 : backlog > 16 ? 20 : 26;
+      if (now - lastTick >= intervalMs) {
+        lastTick = now;
+        const step =
+          backlog > 300
+            ? 20
+            : backlog > 150
+              ? 10
+              : backlog > 60
+                ? 4
+                : backlog > 16
+                  ? 2
+                  : 1;
+        const next = Math.min(targetLen, cur + step);
+        shownLenRef.current = next;
+        setShownLen(next);
+      }
+
+      if (shownLenRef.current < targetLen) {
+        rafId = window.requestAnimationFrame(tick);
+      }
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [targetText, active]);
+
+  if (!active) {
+    return targetText;
+  }
+  return targetText.slice(0, Math.min(shownLen, targetText.length));
+}
+
 function parseOutlineApprovalFromRun(run: AgentRunItem): OutlineApprovalState | null {
   if (run.interruptType !== "OUTLINE_APPROVAL" || !run.interruptPayloadJson) {
     return null;
@@ -160,13 +241,19 @@ export function AiCopilotPanel({
   chapterNo,
   chapterContent,
   compact = false,
+  visibility = "AS_OF",
+  visualRefreshSignal = 0,
   selectionTask,
   onClearSelectionTask,
+  onHighlightRelationsInGraph,
+  injectedDirective,
+  injectedInstruction,
   onReviewDiff,
   onAppendText,
   onReplaceText,
   onRunStateChange,
 }: AiCopilotPanelProps) {
+  const toast = useToast();
   const [mode, setMode] = useState<RunMode>("MULTI_AGENT");
   const [action, setAction] = useState<RunAction>("CONTINUE");
   const [modelAlias, setModelAlias] = useState("writer-main");
@@ -181,31 +268,90 @@ export function AiCopilotPanel({
   const [revisedInstruction, setRevisedInstruction] = useState("");
 
   const [runId, setRunId] = useState<string | null>(null);
-  const [lastEventId, setLastEventId] = useState<string | null>(null);
-  const [lastSeq, setLastSeq] = useState(0);
   const [connState, setConnState] = useState<StreamConnectionState>("idle");
   const [statusDetail, setStatusDetail] = useState<string | null>(null);
+  const [controlsExpanded, setControlsExpanded] = useState(false);
 
   const [generatedText, setGeneratedText] = useState("");
   const [thoughtText, setThoughtText] = useState("");
+  const [liveOutlineText, setLiveOutlineText] = useState("");
   const [showThought, setShowThought] = useState(false);
   const [busyControl, setBusyControl] = useState(false);
 
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [completedStages, setCompletedStages] = useState<string[]>([]);
   const [criticInfo, setCriticInfo] = useState<CriticInfo | null>(null);
+  const [hitRelationIds, setHitRelationIds] = useState<string[]>([]);
   const [outlineApproval, setOutlineApproval] = useState<OutlineApprovalState | null>(null);
   const [editedOutline, setEditedOutline] = useState("");
   const [approvalFeedback, setApprovalFeedback] = useState("");
   const [diffReviewOpen, setDiffReviewOpen] = useState(false);
   const [acceptedParagraphs, setAcceptedParagraphs] = useState<Record<number, boolean>>({});
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   const sseHandleRef = useRef<ResumableSseHandle | null>(null);
+  const lastEventIdRef = useRef<string | null>(null);
+  const lastSeqRef = useRef(0);
   const seenSeqRef = useRef(0);
   const latestSnapshotRef = useRef<PersistedRunSnapshot | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appliedDirectiveNonceRef = useRef(0);
+  const appliedInstructionNonceRef = useRef(0);
+
+  useEffect(() => {
+    if (!injectedDirective || injectedDirective.nonce === appliedDirectiveNonceRef.current) {
+      return;
+    }
+    const targetNonce = injectedDirective.nonce;
+    const incoming = injectedDirective.directive;
+    const label = injectedDirective.label;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active || appliedDirectiveNonceRef.current === targetNonce) return;
+      appliedDirectiveNonceRef.current = targetNonce;
+      setForeshadowingDirectives((prev) => {
+        const without = prev.filter((d) => d.foreshadowingId !== incoming.foreshadowingId);
+        if (without.length >= 3) {
+          toast.warning("导演槽已满 3 条伏笔指令", {
+            description: "请先在「伏笔导演与视角」中移除 1 条后再添加",
+          });
+          return prev;
+        }
+        const modeText =
+          incoming.mode === "PLANT" ? "埋入" : incoming.mode === "HINT" ? "照应" : "回收";
+        toast.success(`已送入导演槽：${modeText}「${label ?? "伏笔"}」`);
+        return [...without, incoming];
+      });
+      setControlsExpanded(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [injectedDirective, toast]);
+
+  useEffect(() => {
+    if (!injectedInstruction || injectedInstruction.nonce === appliedInstructionNonceRef.current) {
+      return;
+    }
+    const targetNonce = injectedInstruction.nonce;
+    const addition = injectedInstruction.text.trim();
+    if (!addition) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active || appliedInstructionNonceRef.current === targetNonce) return;
+      appliedInstructionNonceRef.current = targetNonce;
+      setInstruction((prev) => (prev.trim() ? `${prev.trim()}\n${addition}` : addition));
+      setControlsExpanded(true);
+      toast.success("已填入 AI 写作指令草稿");
+    });
+    return () => {
+      active = false;
+    };
+  }, [injectedInstruction, toast]);
   const userToggledThoughtRef = useRef(false);
   const onRunStateChangeRef = useRef(onRunStateChange);
+  const outputScrollRef = useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = useRef(true);
 
   useEffect(() => {
     onRunStateChangeRef.current = onRunStateChange;
@@ -297,25 +443,32 @@ export function AiCopilotPanel({
         instruction: string;
         text: string;
         thought: string;
+        liveOutline?: string;
         seq: number;
         activeAgent?: string | null;
         completedStages?: string[];
         criticInfo?: CriticInfo | null;
         outlineApproval?: OutlineApprovalState | null;
+        hitRelationIds?: string[];
       },
     ) => {
       sseHandleRef.current?.disconnect();
       seenSeqRef.current = seed.seq;
+      lastEventIdRef.current = cursor;
+      lastSeqRef.current = seed.seq;
 
       let accText = seed.text;
       let accThought = seed.thought;
+      let accLiveOutline = seed.liveOutline ?? "";
       let lastThoughtAgent: string | null = null;
+      let lastHintAgent: string | null = seed.activeAgent ?? null;
       let accLastEventId = cursor;
       let accSeq = seed.seq;
       let accAgent = seed.activeAgent ?? null;
       let accCompletedStages = [...(seed.completedStages ?? [])];
       let accCritic = seed.criticInfo ?? null;
       let accOutline = seed.outlineApproval ?? null;
+      let accHitRelations = [...(seed.hitRelationIds ?? [])];
       let accState: StreamConnectionState = "connecting";
 
       const buildSnap = (nextState: StreamConnectionState): PersistedRunSnapshot => ({
@@ -328,11 +481,13 @@ export function AiCopilotPanel({
         lastSeq: accSeq,
         text: accText,
         thought: accThought,
+        liveOutline: accLiveOutline,
         state: nextState,
         activeAgent: accAgent,
         completedStages: accCompletedStages,
         criticInfo: accCritic,
         outlineApproval: accOutline,
+        hitRelationIds: accHitRelations,
       });
 
       const markStageCompleted = (stageId: string) => {
@@ -346,7 +501,7 @@ export function AiCopilotPanel({
         initialLastEventId: cursor,
         onLastEventId(id) {
           accLastEventId = id;
-          setLastEventId(id);
+          lastEventIdRef.current = id;
           scheduleSnapshotPersist(buildSnap(accState));
         },
         onStateChange(nextState, meta) {
@@ -371,15 +526,16 @@ export function AiCopilotPanel({
           if (envelope.seq > 0) {
             seenSeqRef.current = envelope.seq;
             accSeq = envelope.seq;
-            setLastSeq(envelope.seq);
+            lastSeqRef.current = envelope.seq;
           }
-          if (envelope.agent) {
+          if (envelope.agent && envelope.agent !== lastHintAgent) {
             const prevIdx = accAgent ? STAGE_ORDER.indexOf(accAgent) : -1;
             const nextIdx = STAGE_ORDER.indexOf(envelope.agent);
             if (prevIdx >= 0 && nextIdx > prevIdx && accAgent) {
               markStageCompleted(accAgent);
             }
             accAgent = envelope.agent;
+            lastHintAgent = envelope.agent;
             setActiveAgent(envelope.agent);
             if (AGENT_HINT[envelope.agent]) {
               setStatusDetail(AGENT_HINT[envelope.agent]);
@@ -394,6 +550,7 @@ export function AiCopilotPanel({
             }
             if (toA) {
               accAgent = toA;
+              lastHintAgent = toA;
               setActiveAgent(toA);
               if (AGENT_HINT[toA]) {
                 setStatusDetail(AGENT_HINT[toA]);
@@ -403,6 +560,12 @@ export function AiCopilotPanel({
           } else if (envelope.type === "thought_delta") {
             const delta = String(envelope.payload.content ?? "");
             const thoughtAgent = envelope.agent ?? null;
+            if (seed.mode === "MULTI_AGENT" && thoughtAgent === "director") {
+              accLiveOutline += delta;
+              setLiveOutlineText(accLiveOutline);
+              scheduleSnapshotPersist(buildSnap("streaming"));
+              return;
+            }
             if (thoughtAgent && thoughtAgent !== lastThoughtAgent) {
               const label = THOUGHT_AGENT_LABEL[thoughtAgent];
               if (label && accThought.trim().length > 0) {
@@ -429,6 +592,15 @@ export function AiCopilotPanel({
             accText += delta;
             setGeneratedText(accText);
             scheduleSnapshotPersist(buildSnap("streaming"));
+          } else if (envelope.type === "tool_result") {
+            const rawIds = envelope.payload.hit_relation_ids;
+            if (Array.isArray(rawIds) && rawIds.length > 0) {
+              accHitRelations = Array.from(
+                new Set(rawIds.map((id) => String(id).trim()).filter(Boolean)),
+              );
+              setHitRelationIds(accHitRelations);
+              scheduleSnapshotPersist(buildSnap("streaming"));
+            }
           } else if (envelope.type === "critic_review") {
             markStageCompleted("writer");
             if (Boolean(envelope.payload.passed)) {
@@ -461,6 +633,8 @@ export function AiCopilotPanel({
                 beats,
                 message: String(proposed.message ?? "请确认或微调本章剧情大纲"),
               };
+              accLiveOutline = "";
+              setLiveOutlineText("");
               setOutlineApproval(accOutline);
               setEditedOutline(outlineText);
               setShowThought(false);
@@ -478,6 +652,8 @@ export function AiCopilotPanel({
             flushSnapshotNow(buildSnap("error"));
           } else if (envelope.type === "done") {
             accOutline = null;
+            accLiveOutline = "";
+            setLiveOutlineText("");
             setOutlineApproval(null);
             const doneStatus =
               envelope.payload.status === "cancelled" ? "cancelled" : "completed";
@@ -513,14 +689,17 @@ export function AiCopilotPanel({
 
     const resetIdle = () => {
       setRunId(null);
-      setLastEventId(null);
-      setLastSeq(0);
+      lastEventIdRef.current = null;
+      lastSeqRef.current = 0;
       setGeneratedText("");
       setThoughtText("");
+      setLiveOutlineText("");
       setShowThought(false);
+      setControlsExpanded(false);
       setActiveAgent(null);
       setCompletedStages([]);
       setCriticInfo(null);
+      setHitRelationIds([]);
       setOutlineApproval(null);
       setEditedOutline("");
       setApprovalFeedback("");
@@ -565,6 +744,7 @@ export function AiCopilotPanel({
         const seedInstruction = liveRun.instruction || sameSaved?.instruction || "";
         const seedText = canIncrementalResume ? (sameSaved?.text ?? "") : "";
         const seedThought = canIncrementalResume ? (sameSaved?.thought ?? "") : "";
+        const seedLiveOutline = canIncrementalResume ? (sameSaved?.liveOutline ?? "") : "";
         const seedSeq = canIncrementalResume ? (sameSaved?.lastSeq ?? 0) : 0;
         const seedAgent =
           (canIncrementalResume ? sameSaved?.activeAgent : null) ??
@@ -578,10 +758,12 @@ export function AiCopilotPanel({
         setAction(seedAction);
         setModelAlias(seedModel);
         setInstruction(seedInstruction);
-        setLastEventId(canIncrementalResume ? (sameSaved?.lastEventId ?? null) : null);
-        setLastSeq(seedSeq);
+        lastEventIdRef.current = canIncrementalResume ? (sameSaved?.lastEventId ?? null) : null;
+        lastSeqRef.current = seedSeq;
         setGeneratedText(seedText);
         setThoughtText(seedThought);
+        setLiveOutlineText(seedLiveOutline);
+        setControlsExpanded(false);
         setActiveAgent(seedAgent);
         setCompletedStages(seedStages);
         setCriticInfo(seedCritic);
@@ -595,6 +777,7 @@ export function AiCopilotPanel({
           instruction: seedInstruction,
           text: seedText,
           thought: seedThought,
+          liveOutline: seedLiveOutline,
           seq: seedSeq,
           activeAgent: seedAgent,
           completedStages: seedStages,
@@ -621,10 +804,12 @@ export function AiCopilotPanel({
         setAction(pausedRun.action);
         setModelAlias(pausedRun.modelAlias);
         setInstruction(pausedRun.instruction);
-        setLastEventId(pausedRun.lastEventId ?? sameSaved?.lastEventId ?? null);
-        setLastSeq(Math.max(pausedRun.lastSeq, sameSaved?.lastSeq ?? 0));
+        lastEventIdRef.current = pausedRun.lastEventId ?? sameSaved?.lastEventId ?? null;
+        lastSeqRef.current = Math.max(pausedRun.lastSeq, sameSaved?.lastSeq ?? 0);
         setGeneratedText(nextText);
         setThoughtText(nextThought);
+        setLiveOutlineText("");
+        setControlsExpanded(false);
         setActiveAgent(pausedRun.currentNode?.toLowerCase() ?? sameSaved?.activeAgent ?? "director");
         setCompletedStages(nextStages);
         setCriticInfo(sameSaved?.criticInfo ?? null);
@@ -648,6 +833,7 @@ export function AiCopilotPanel({
           lastSeq: Math.max(pausedRun.lastSeq, sameSaved?.lastSeq ?? 0),
           text: nextText,
           thought: nextThought,
+          liveOutline: "",
           state: "paused",
           activeAgent: pausedRun.currentNode?.toLowerCase() ?? sameSaved?.activeAgent ?? "director",
           completedStages: nextStages,
@@ -676,10 +862,12 @@ export function AiCopilotPanel({
           setAction(saved.action);
           setModelAlias(saved.modelAlias);
           setInstruction(saved.instruction);
-          setLastEventId(saved.lastEventId);
-          setLastSeq(saved.lastSeq);
+          lastEventIdRef.current = saved.lastEventId;
+          lastSeqRef.current = saved.lastSeq;
           setGeneratedText(saved.text);
           setThoughtText(saved.thought);
+          setLiveOutlineText(saved.liveOutline ?? "");
+          setControlsExpanded(false);
           setActiveAgent(saved.activeAgent ?? null);
           setCompletedStages(saved.completedStages ?? []);
           setCriticInfo(saved.criticInfo ?? null);
@@ -692,6 +880,7 @@ export function AiCopilotPanel({
             instruction: saved.instruction,
             text: saved.text,
             thought: saved.thought,
+            liveOutline: saved.liveOutline ?? "",
             seq: saved.lastSeq,
             activeAgent: saved.activeAgent,
             completedStages: saved.completedStages,
@@ -712,10 +901,12 @@ export function AiCopilotPanel({
           setAction(matchedRun.action);
           setModelAlias(matchedRun.modelAlias);
           setInstruction(matchedRun.instruction);
-          setLastEventId(matchedRun.lastEventId ?? saved.lastEventId);
-          setLastSeq(Math.max(matchedRun.lastSeq, saved.lastSeq));
+          lastEventIdRef.current = matchedRun.lastEventId ?? saved.lastEventId;
+          lastSeqRef.current = Math.max(matchedRun.lastSeq, saved.lastSeq);
           setGeneratedText(finalText);
           setThoughtText(saved.thought);
+          setLiveOutlineText("");
+          setControlsExpanded(false);
           setShowThought(false);
           setCriticInfo(saved.criticInfo ?? null);
           setOutlineApproval(null);
@@ -730,6 +921,7 @@ export function AiCopilotPanel({
               lastEventId: matchedRun.lastEventId ?? saved.lastEventId,
               lastSeq: Math.max(matchedRun.lastSeq, saved.lastSeq),
               text: finalText,
+              liveOutline: "",
               state: "completed",
               completedStages: doneStages,
               outlineApproval: null,
@@ -742,6 +934,7 @@ export function AiCopilotPanel({
             flushSnapshotNow({
               ...saved,
               text: finalText,
+              liveOutline: "",
               state: "error",
               outlineApproval: null,
             });
@@ -753,6 +946,7 @@ export function AiCopilotPanel({
             flushSnapshotNow({
               ...saved,
               text: finalText,
+              liveOutline: "",
               state: "cancelled",
               outlineApproval: null,
             });
@@ -767,14 +961,17 @@ export function AiCopilotPanel({
           setAction(saved.action);
           setModelAlias(saved.modelAlias);
           setInstruction(saved.instruction);
-          setLastEventId(saved.lastEventId);
-          setLastSeq(saved.lastSeq);
+          lastEventIdRef.current = saved.lastEventId;
+          lastSeqRef.current = saved.lastSeq;
           setGeneratedText(saved.text);
           setThoughtText(saved.thought);
+          setLiveOutlineText("");
+          setControlsExpanded(false);
           setShowThought(false);
           setActiveAgent(saved.activeAgent ?? null);
           setCompletedStages(saved.completedStages ?? ["director", "lorekeeper", "writer", "critic"]);
           setCriticInfo(saved.criticInfo ?? null);
+          setHitRelationIds(saved.hitRelationIds ?? []);
           setOutlineApproval(null);
           updateConnState("completed");
           setStatusDetail(null);
@@ -805,14 +1002,19 @@ export function AiCopilotPanel({
   async function handleStart() {
     setBusyControl(true);
     setStatusDetail("正在启动创作...");
+    setControlsExpanded(false);
     setGeneratedText("");
     setThoughtText("");
+    setLiveOutlineText("");
     setShowThought(false);
     userToggledThoughtRef.current = false;
-    setLastEventId(null);
-    setLastSeq(0);
+    lastEventIdRef.current = null;
+    lastSeqRef.current = 0;
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
     setRevisedInstruction("");
     setCriticInfo(null);
+    setHitRelationIds([]);
     setOutlineApproval(null);
     setEditedOutline("");
     setApprovalFeedback("");
@@ -872,6 +1074,7 @@ export function AiCopilotPanel({
         lastSeq: 0,
         text: "",
         thought: "",
+        liveOutline: "",
         state: "connecting",
         activeAgent: initialAgent,
         completedStages: [],
@@ -885,6 +1088,7 @@ export function AiCopilotPanel({
         instruction: effectiveInstruction,
         text: "",
         thought: "",
+        liveOutline: "",
         seq: 0,
         activeAgent: initialAgent,
         completedStages: [],
@@ -919,30 +1123,34 @@ export function AiCopilotPanel({
       const resumed = await runsApi.resume(runId, revisedInstruction.trim() || undefined);
       setInstruction(resumed.instruction);
       setRevisedInstruction("");
+      const cursor = lastEventIdRef.current;
+      const curSeq = lastSeqRef.current;
       flushSnapshotNow({
         runId,
         mode,
         action,
         modelAlias,
         instruction: nextInstruction,
-        lastEventId,
-        lastSeq,
+        lastEventId: cursor,
+        lastSeq: curSeq,
         text: generatedText,
         thought: thoughtText,
+        liveOutline: liveOutlineText,
         state: "connecting",
         activeAgent,
         completedStages,
         criticInfo,
         outlineApproval: null,
       });
-      attachStream(runId, lastEventId, {
+      attachStream(runId, cursor, {
         mode,
         action,
         modelAlias,
         instruction: nextInstruction,
         text: generatedText,
         thought: thoughtText,
-        seq: lastSeq,
+        liveOutline: liveOutlineText,
+        seq: curSeq,
         activeAgent,
         completedStages,
         criticInfo,
@@ -958,6 +1166,7 @@ export function AiCopilotPanel({
   async function handleApproveOutline(approved: boolean) {
     if (!runId) return;
     setBusyControl(true);
+    setControlsExpanded(false);
     const nextAgent = approved ? "lorekeeper" : "director";
     setStatusDetail(
       approved
@@ -971,32 +1180,39 @@ export function AiCopilotPanel({
         feedback: approvalFeedback.trim() || undefined,
       });
       setOutlineApproval(null);
+      setLiveOutlineText("");
       setApprovalFeedback("");
       setActiveAgent(nextAgent);
+      isAtBottomRef.current = true;
+      setIsAtBottom(true);
+      const cursor = lastEventIdRef.current;
+      const curSeq = lastSeqRef.current;
       flushSnapshotNow({
         runId,
         mode,
         action,
         modelAlias,
         instruction,
-        lastEventId,
-        lastSeq,
+        lastEventId: cursor,
+        lastSeq: curSeq,
         text: generatedText,
         thought: thoughtText,
+        liveOutline: "",
         state: "connecting",
         activeAgent: nextAgent,
         completedStages,
         criticInfo,
         outlineApproval: null,
       });
-      attachStream(runId, lastEventId, {
+      attachStream(runId, cursor, {
         mode,
         action,
         modelAlias,
         instruction,
         text: generatedText,
         thought: thoughtText,
-        seq: lastSeq,
+        liveOutline: "",
+        seq: curSeq,
         activeAgent: nextAgent,
         completedStages,
         criticInfo,
@@ -1018,6 +1234,7 @@ export function AiCopilotPanel({
       if (connState === "paused") {
         updateConnState("cancelled");
         setOutlineApproval(null);
+        setLiveOutlineText("");
         setStatusDetail("已取消本次创作");
         flushSnapshotNow(null);
       }
@@ -1032,15 +1249,18 @@ export function AiCopilotPanel({
     sseHandleRef.current?.disconnect();
     flushSnapshotNow(null);
     setRunId(null);
-    setLastEventId(null);
-    setLastSeq(0);
+    lastEventIdRef.current = null;
+    lastSeqRef.current = 0;
     setGeneratedText("");
     setThoughtText("");
+    setLiveOutlineText("");
     setShowThought(false);
+    setControlsExpanded(false);
     userToggledThoughtRef.current = false;
     setActiveAgent(null);
     setCompletedStages([]);
     setCriticInfo(null);
+    setHitRelationIds([]);
     setOutlineApproval(null);
     setDiffReviewOpen(false);
     updateConnState("idle");
@@ -1064,154 +1284,83 @@ export function AiCopilotPanel({
   }
 
   const isRunning = isActiveStreamState(connState);
+  const isOutlineApprovalMode = connState === "paused" && Boolean(outlineApproval);
+  const isCompactCompleted =
+    connState === "completed" && Boolean(generatedText) && !controlsExpanded;
   const badge = STATE_BADGE[connState];
   const showProgressStrip =
     mode === "MULTI_AGENT" &&
     action !== "OUTLINE" &&
     (isRunning || connState === "paused" || connState === "completed");
 
+  const displayedOutline = useSmoothTypewriter(
+    liveOutlineText,
+    isRunning && activeAgent === "director" && !generatedText,
+  );
+  const displayedText = useSmoothTypewriter(
+    generatedText,
+    isRunning && Boolean(generatedText),
+  );
+  const displayedThought = useSmoothTypewriter(
+    thoughtText,
+    isRunning && showThought && !generatedText,
+  );
+
+  const handleOutputScroll = useCallback(() => {
+    const el = outputScrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distance <= 48;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom((prev) => (prev === atBottom ? prev : atBottom));
+  }, []);
+
+  useEffect(() => {
+    if (!isRunning || !isAtBottomRef.current) return;
+    const el = outputScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [isRunning, displayedOutline, displayedText, displayedThought]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = outputScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
+  }, []);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-xs">
-      {/* Control Area */}
+      {/* Control Area (Auto-compacts during streaming, outline approval, and completed states) */}
       <div
-        className={`border-b border-border/70 ${
-          compact ? "space-y-2 p-2.5" : "space-y-3 p-3.5"
+        className={`shrink-0 border-b border-border/70 ${
+          compact ? "space-y-2 p-2.5" : "space-y-2.5 p-3"
         }`}
       >
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className={`inline-block size-2 rounded-full ${badge.dot}`} />
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={`inline-block size-2 shrink-0 rounded-full ${badge.dot}`} />
             <span className="font-medium text-foreground">{badge.label}</span>
-          </div>
-          {chapterNo != null && chapterNo > 1 && (
-            <span className="rounded-full border border-status-success-border bg-status-success-bg px-2.5 py-0.5 text-[10.5px] font-medium text-status-success">
-              自动衔接第 {chapterNo - 1} 章
-            </span>
-          )}
-        </div>
-
-        {/* Inline Selection Task Banner */}
-        {selectionTask && (
-          <div className="space-y-1.5 rounded-xl border border-status-ai-border bg-card p-3 shadow-2xs">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-status-ai">
-                {selectionTask.mode === "EXPAND"
-                  ? `划词扩写模式（已选 ${selectionTask.text.length} 字）`
-                  : `划词改写模式（已选 ${selectionTask.text.length} 字）`}
+            {chapterNo != null && chapterNo > 1 && (
+              <span className="truncate rounded-full border border-status-success-border bg-status-success-bg px-2 py-0.5 text-[10px] font-medium text-status-success">
+                衔接第 {chapterNo - 1} 章
               </span>
-              {onClearSelectionTask && (
-                <button
-                  type="button"
-                  onClick={onClearSelectionTask}
-                  className="text-[11px] text-muted-foreground hover:text-foreground"
-                >
-                  取消划词
-                </button>
-              )}
-            </div>
-            <p className="line-clamp-2 whitespace-pre-wrap rounded-lg bg-surface-subtle px-2.5 py-1.5 text-[11px] text-muted-foreground">
-              {selectionTask.text}
-            </p>
+            )}
           </div>
-        )}
 
-        {/* Segmented Action Pills */}
-        <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">
-          {ACTION_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              disabled={isRunning || connState === "paused"}
-              onClick={() => setAction(opt.value)}
-              className={`rounded-lg px-2 py-1.5 text-[11.5px] font-medium transition-all ${
-                action === opt.value
-                  ? "bg-card font-semibold text-foreground shadow-2xs"
-                  : "text-muted-foreground hover:text-foreground"
-              } disabled:opacity-50`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* HITL Outline Confirmation Card vs Normal Pause vs Instruction Input */}
-        {connState === "paused" && outlineApproval ? (
-          <div
-            className={`rounded-2xl border border-border bg-card shadow-[0_1px_2px_oklch(0.2_0.02_200/0.04),0_8px_24px_oklch(0.2_0.02_200/0.05)] ${
-              compact ? "space-y-2 p-2.5" : "space-y-2.5 p-3.5"
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-[13px] font-semibold text-foreground">
-                确认本章大纲
-              </div>
-              <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-medium text-primary-soft-foreground">
-                大纲确认
-              </span>
-            </div>
-            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-              可直接微调下方剧情大纲，确认后将紧接前文展开正文写作：
-            </p>
-            <textarea
-              rows={compact ? 6 : 7}
-              value={editedOutline}
-              onChange={(e) => setEditedOutline(e.target.value)}
-              className="w-full resize-none rounded-xl border border-border bg-surface-subtle px-3 py-2 text-xs leading-6 text-foreground outline-none transition-colors focus:border-ring"
-            />
-            <input
-              value={approvalFeedback}
-              onChange={(e) => setApprovalFeedback(e.target.value)}
-              placeholder="如不满意，可写下调整方向后点击「重新构思」..."
-              className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-[11.5px] text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring"
-            />
-            <div className="flex items-center gap-1.5 pt-0.5">
+          {isRunning && (
+            <div className="flex shrink-0 items-center gap-1">
               <Button
-                size="sm"
-                className="flex-1"
-                disabled={busyControl}
-                onClick={() => void handleApproveOutline(true)}
-              >
-                确认并开始写作
-              </Button>
-              <Button
-                size="sm"
+                size="xs"
                 variant="secondary"
                 disabled={busyControl}
-                onClick={() => void handleApproveOutline(false)}
+                onClick={() => void handlePause()}
               >
-                重新构思
+                暂停
               </Button>
               <Button
-                size="sm"
-                variant="ghost"
-                disabled={busyControl}
-                onClick={() => void handleCancel()}
-                className="px-2 text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
-              >
-                取消
-              </Button>
-            </div>
-          </div>
-        ) : connState === "paused" ? (
-          <div className="space-y-2.5 rounded-2xl border border-border bg-card p-3.5 shadow-2xs">
-            <textarea
-              rows={2}
-              value={revisedInstruction}
-              onChange={(e) => setRevisedInstruction(e.target.value)}
-              placeholder="可选：补充或微调接下来的剧情走向..."
-              className="w-full resize-none rounded-xl border border-border bg-surface-subtle px-3 py-2 text-xs leading-relaxed outline-none focus:border-ring"
-            />
-            <div className="flex gap-1.5">
-              <Button
-                size="sm"
-                className="flex-1"
-                disabled={busyControl}
-                onClick={() => void handleResume()}
-              >
-                继续生成
-              </Button>
-              <Button
-                size="sm"
+                size="xs"
                 variant="ghost"
                 disabled={busyControl}
                 onClick={() => void handleCancel()}
@@ -1220,135 +1369,234 @@ export function AiCopilotPanel({
                 取消
               </Button>
             </div>
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            <textarea
-              rows={3}
-              value={instruction}
-              disabled={isRunning}
-              onChange={(e) => setInstruction(e.target.value)}
-              placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写）..."
-              className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring disabled:opacity-60"
-            />
+          )}
 
-            <ForeshadowingDirectorSlot
-              bookId={bookId}
-              chapterNo={chapterNo ?? null}
-              disabled={isRunning}
-              povCharacter={povCharacter}
-              onPovCharacterChange={setPovCharacter}
-              directives={foreshadowingDirectives}
-              onDirectivesChange={setForeshadowingDirectives}
-            />
-
-            <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-muted-foreground">
-              {mode === "MULTI_AGENT" && action !== "OUTLINE" ? (
-                <label className="flex cursor-pointer items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    disabled={isRunning}
-                    checked={requireOutlineApproval}
-                    onChange={(e) => setRequireOutlineApproval(e.target.checked)}
-                    className="accent-primary"
-                  />
-                  先确认大纲再动笔
-                </label>
-              ) : (
-                <span />
-              )}
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((v) => !v)}
-                className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+          {isCompactCompleted && (
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setControlsExpanded(true)}
               >
-                {showAdvanced ? "收起设置 ▴" : "写作设置 ▾"}
-              </button>
+                调整指令
+              </Button>
+              <Button size="xs" variant="ghost" onClick={handleClear}>
+                清空
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Full Form vs Compact Running/Completed/Approval Header */}
+        {isRunning ? (
+          instruction.trim() ? (
+            <p
+              title={instruction}
+              className="truncate rounded-lg bg-surface-subtle px-2.5 py-1.5 text-[11px] text-muted-foreground"
+            >
+              指令：{instruction.trim()}
+            </p>
+          ) : null
+        ) : isOutlineApprovalMode ? null : isCompactCompleted ? (
+          instruction.trim() ? (
+            <p
+              title={instruction}
+              className="truncate rounded-lg bg-surface-subtle px-2.5 py-1.5 text-[11px] text-muted-foreground"
+            >
+              本次指令：{instruction.trim()}
+            </p>
+          ) : null
+        ) : (
+          <>
+            {/* Inline Selection Task Banner */}
+            {selectionTask && (
+              <div className="space-y-1.5 rounded-xl border border-status-ai-border bg-card p-3 shadow-2xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-status-ai">
+                    {selectionTask.mode === "EXPAND"
+                      ? `划词扩写模式（已选 ${selectionTask.text.length} 字）`
+                      : `划词改写模式（已选 ${selectionTask.text.length} 字）`}
+                  </span>
+                  {onClearSelectionTask && (
+                    <button
+                      type="button"
+                      onClick={onClearSelectionTask}
+                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      取消划词
+                    </button>
+                  )}
+                </div>
+                <p className="line-clamp-2 whitespace-pre-wrap rounded-lg bg-surface-subtle px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  {selectionTask.text}
+                </p>
+              </div>
+            )}
+
+            {/* Segmented Action Pills */}
+            <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">
+              {ACTION_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={connState === "paused"}
+                  onClick={() => setAction(opt.value)}
+                  className={`rounded-lg px-2 py-1.5 text-[11.5px] font-medium transition-all ${
+                    action === opt.value
+                      ? "bg-card font-semibold text-foreground shadow-2xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  } disabled:opacity-50`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
 
-            {showAdvanced && (
-              <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-2.5">
-                <div className="space-y-1">
-                  <div className="text-[10px] text-muted-foreground">创作模式</div>
-                  <select
-                    value={mode}
-                    disabled={isRunning}
-                    onChange={(e) => setMode(e.target.value as RunMode)}
-                    className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring disabled:opacity-60"
+            {connState === "paused" ? (
+              <div className="space-y-2.5 rounded-2xl border border-border bg-card p-3.5 shadow-2xs">
+                <textarea
+                  rows={2}
+                  value={revisedInstruction}
+                  onChange={(e) => setRevisedInstruction(e.target.value)}
+                  placeholder="可选：补充或微调接下来的剧情走向..."
+                  className="w-full resize-none rounded-xl border border-border bg-surface-subtle px-3 py-2 text-xs leading-relaxed outline-none focus:border-ring"
+                />
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    disabled={busyControl}
+                    onClick={() => void handleResume()}
                   >
-                    {MODE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-muted-foreground">写作模型</div>
-                  <select
-                    value={modelAlias}
-                    disabled={isRunning}
-                    onChange={(e) => setModelAlias(e.target.value)}
-                    className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring disabled:opacity-60"
+                    继续生成
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busyControl}
+                    onClick={() => void handleCancel()}
+                    className="text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
                   >
-                    {MODEL_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    取消
+                  </Button>
                 </div>
-              </div>
-            )}
-
-            {isRunning ? (
-              <div className="flex gap-1.5">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="flex-1"
-                  disabled={busyControl}
-                  onClick={() => void handlePause()}
-                >
-                  暂停
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busyControl}
-                  onClick={() => void handleCancel()}
-                  className="text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
-                >
-                  取消
-                </Button>
               </div>
             ) : (
-              <div className="flex gap-1.5">
-                <Button
-                  size="sm"
-                  className="flex-1"
-                  disabled={busyControl}
-                  onClick={() => void handleStart()}
-                >
-                  {action === "OUTLINE"
-                    ? "生成本章大纲"
-                    : action === "REWRITE"
-                      ? "开始润色扩写"
-                      : "开始 AI 创作"}
-                </Button>
-                {(generatedText || thoughtText || connState !== "idle") && (
-                  <Button size="sm" variant="ghost" onClick={handleClear}>
-                    清空
-                  </Button>
+              <div className="space-y-2.5">
+                <textarea
+                  rows={3}
+                  value={instruction}
+                  onChange={(e) => setInstruction(e.target.value)}
+                  placeholder="写下本章想推进的剧情、人物冲突或场景氛围（留空也会自动紧接上一章续写）..."
+                  className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring"
+                />
+
+                <ForeshadowingDirectorSlot
+                  bookId={bookId}
+                  chapterId={chapterId}
+                  sectionId={sectionId ?? null}
+                  chapterNo={chapterNo ?? null}
+                  visibility={visibility}
+                  refreshSignal={visualRefreshSignal}
+                  disabled={false}
+                  povCharacter={povCharacter}
+                  onPovCharacterChange={setPovCharacter}
+                  directives={foreshadowingDirectives}
+                  onDirectivesChange={setForeshadowingDirectives}
+                />
+
+                <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-muted-foreground">
+                  {mode === "MULTI_AGENT" && action !== "OUTLINE" ? (
+                    <label className="flex cursor-pointer items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={requireOutlineApproval}
+                        onChange={(e) => setRequireOutlineApproval(e.target.checked)}
+                        className="accent-primary"
+                      />
+                      先确认大纲再动笔
+                    </label>
+                  ) : (
+                    <span />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced((v) => !v)}
+                    className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {showAdvanced ? "收起设置 ▴" : "写作设置 ▾"}
+                  </button>
+                </div>
+
+                {showAdvanced && (
+                  <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-2.5">
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-muted-foreground">创作模式</div>
+                      <select
+                        value={mode}
+                        onChange={(e) => setMode(e.target.value as RunMode)}
+                        className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring"
+                      >
+                        {MODE_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-muted-foreground">写作模型</div>
+                      <select
+                        value={modelAlias}
+                        onChange={(e) => setModelAlias(e.target.value)}
+                        className="h-7 w-full rounded-lg border border-border bg-surface-subtle px-2 text-[11px] outline-none focus:border-ring"
+                      >
+                        {MODEL_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 )}
+
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    disabled={busyControl}
+                    onClick={() => void handleStart()}
+                  >
+                    {action === "OUTLINE"
+                      ? "生成本章大纲"
+                      : action === "REWRITE"
+                        ? "开始润色扩写"
+                        : "开始 AI 创作"}
+                  </Button>
+                  {connState === "completed" && generatedText && controlsExpanded && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setControlsExpanded(false)}
+                    >
+                      收起
+                    </Button>
+                  )}
+                  {(generatedText || thoughtText || liveOutlineText || connState !== "idle") && (
+                    <Button size="sm" variant="ghost" onClick={handleClear}>
+                      清空
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
-          </div>
+          </>
         )}
 
-        {/* Minimal Connected Stepper + Status Note */}
+        {/* Minimal Connected Stepper + Fixed-Height Status Note (prevents layout jitter) */}
         {(showProgressStrip || statusDetail) && (
-          <div className="space-y-2.5 rounded-xl border border-border bg-card p-3">
+          <div className="space-y-2 rounded-xl border border-border bg-card p-2.5">
             {showProgressStrip && (
               <div className="relative grid grid-cols-4 items-start text-center">
                 <span
@@ -1363,7 +1611,7 @@ export function AiCopilotPanel({
                   return (
                     <div
                       key={stage.id}
-                      className="relative z-10 flex flex-col items-center gap-1.5"
+                      className="relative z-10 flex flex-col items-center gap-1"
                     >
                       <span
                         className={`size-[11px] rounded-full border-2 transition-all ${
@@ -1391,149 +1639,260 @@ export function AiCopilotPanel({
 
             {statusDetail && (
               <div
-                className={`rounded-lg px-2.5 py-2 text-[11px] leading-relaxed ${
+                title={statusDetail}
+                className={`flex h-8 items-center rounded-lg px-2.5 text-[11px] ${
                   connState === "error"
                     ? "border border-status-danger-border bg-status-danger-bg text-status-danger"
                     : "bg-surface-subtle text-muted-foreground"
                 }`}
               >
-                {statusDetail}
+                <span className="truncate">{statusDetail}</span>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Output Area */}
-      <div
-        className={`flex min-h-0 flex-1 flex-col overflow-y-auto ${
-          compact ? "space-y-2 p-2.5" : "space-y-3 p-3.5"
-        }`}
-      >
-        {criticInfo && (
+      {/* Main Output / Outline Approval Area */}
+      {isOutlineApprovalMode && outlineApproval ? (
+        <div
+          className={`flex min-h-0 flex-1 flex-col ${
+            compact ? "p-2.5" : "p-3.5"
+          }`}
+        >
+          <div className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-2xl border border-border bg-card p-3.5 shadow-[0_1px_2px_oklch(0.2_0.02_200/0.04),0_8px_24px_oklch(0.2_0.02_200/0.05)]">
+            <div className="flex shrink-0 items-center justify-between gap-2">
+              <div className="text-[13px] font-semibold text-foreground">
+                确认本章大纲
+              </div>
+              <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-medium text-primary-soft-foreground">
+                大纲确认
+              </span>
+            </div>
+            <p className="shrink-0 text-[11.5px] leading-relaxed text-muted-foreground">
+              可直接微调下方剧情大纲，确认后将紧接前文展开正文写作：
+            </p>
+            <textarea
+              value={editedOutline}
+              onChange={(e) => setEditedOutline(e.target.value)}
+              className="min-h-[220px] w-full flex-1 resize-none rounded-xl border border-border bg-surface-subtle px-3 py-2.5 text-xs leading-6 text-foreground outline-none transition-colors focus:border-ring [scrollbar-gutter:stable]"
+            />
+            <input
+              value={approvalFeedback}
+              onChange={(e) => setApprovalFeedback(e.target.value)}
+              placeholder="如不满意，可写下调整方向后点击「重新构思」..."
+              className="h-8 w-full shrink-0 rounded-lg border border-border bg-background px-2.5 text-[11.5px] text-foreground placeholder:text-muted-foreground/75 outline-none transition-colors focus:border-ring"
+            />
+            <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+              <Button
+                size="sm"
+                className="flex-1"
+                disabled={busyControl}
+                onClick={() => void handleApproveOutline(true)}
+              >
+                确认并开始写作
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busyControl}
+                onClick={() => void handleApproveOutline(false)}
+              >
+                重新构思
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busyControl}
+                onClick={() => void handleCancel()}
+                className="px-2 text-status-danger hover:bg-status-danger-bg hover:text-status-danger"
+              >
+                取消
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="relative flex min-h-0 flex-1 flex-col">
           <div
-            className={`rounded-xl border px-3 py-2.5 text-[11px] ${
-              criticInfo.passed
-                ? "border-status-success-border bg-status-success-bg text-status-success"
-                : "border-status-warning-border bg-status-warning-bg text-status-warning"
+            ref={outputScrollRef}
+            onScroll={handleOutputScroll}
+            className={`flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable] [overflow-anchor:none] ${
+              compact ? "space-y-2 p-2.5" : "space-y-3 p-3.5"
             }`}
           >
-            <div className="font-medium">
-              {criticInfo.passed
-                ? "剧情连贯性与设定核查通过"
-                : "检测到衔接或设定问题，已自动调整重写"}
-            </div>
-            {criticInfo.issues.length > 0 && (
-              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[10px] text-foreground/85">
-                {criticInfo.issues.map((iss, idx) => (
-                  <li key={idx}>{iss}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {thoughtText && (
-          <div className="rounded-xl border border-border bg-card p-3">
-            <button
-              type="button"
-              onClick={() => {
-                userToggledThoughtRef.current = true;
-                setShowThought((v) => !v);
-              }}
-              className="flex w-full items-center justify-between text-[11px] font-medium text-muted-foreground hover:text-foreground"
-            >
-              <span>构思大纲与校对记录</span>
-              <span>{showThought ? "收起" : "展开"}</span>
-            </button>
-            {showThought && (
-              <div className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
-                {thoughtText}
+            {criticInfo && (
+              <div
+                className={`rounded-xl border px-3 py-2.5 text-[11px] ${
+                  criticInfo.passed
+                    ? "border-status-success-border bg-status-success-bg text-status-success"
+                    : "border-status-warning-border bg-status-warning-bg text-status-warning"
+                }`}
+              >
+                <div className="font-medium">
+                  {criticInfo.passed
+                    ? "剧情连贯性与设定核查通过"
+                    : "检测到衔接或设定问题，已自动调整重写"}
+                </div>
+                {criticInfo.issues.length > 0 && (
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[10px] text-foreground/85">
+                    {criticInfo.issues.map((iss, idx) => (
+                      <li key={idx}>{iss}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
-          </div>
-        )}
 
-        {generatedText ? (
-          diffReviewOpen && !isRunning ? (
-            <div className="space-y-2 rounded-xl border border-status-success-border bg-card p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-status-success">
-                  逐段挑选采纳
+            {hitRelationIds.length > 0 && onHighlightRelationsInGraph && (
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-status-ai-border bg-status-ai-bg px-3 py-2 text-[11px] text-status-ai">
+                <span className="truncate font-medium">
+                  已参考 {hitRelationIds.length} 条人物关系长记忆
                 </span>
                 <button
                   type="button"
-                  onClick={() => setDiffReviewOpen(false)}
-                  className="text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => onHighlightRelationsInGraph(hitRelationIds)}
+                  className="shrink-0 rounded-md border border-status-ai-border bg-card px-2 py-0.5 text-[10.5px] font-semibold text-status-ai transition-colors hover:bg-primary hover:text-primary-foreground"
                 >
-                  返回全文
+                  在图谱高亮 →
                 </button>
               </div>
-              <div className="space-y-1.5">
-                {generatedParagraphs.map((para, idx) => {
-                  const accepted = acceptedParagraphs[idx] !== false;
-                  return (
-                    <div
-                      key={idx}
-                      className={`rounded-lg border p-2.5 text-[11px] leading-relaxed ${
-                        accepted
-                          ? "border-status-success-border bg-status-success-bg"
-                          : "border-border bg-muted/50 opacity-55 line-through"
-                      }`}
-                    >
-                      <div className="mb-1 flex items-center justify-between text-[10px]">
-                        <span>{accepted ? `采纳第 ${idx + 1} 段` : `跳过第 ${idx + 1} 段`}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAcceptedParagraphs((prev) => ({
-                              ...prev,
-                              [idx]: !accepted,
-                            }))
-                          }
-                          className="text-primary hover:underline"
-                        >
-                          {accepted ? "跳过" : "恢复"}
-                        </button>
-                      </div>
-                      <p className="whitespace-pre-wrap">{para}</p>
-                    </div>
-                  );
-                })}
+            )}
+
+            {!generatedText && liveOutlineText && (
+              <div className="rounded-xl border border-border bg-card p-3.5 shadow-2xs">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-[11.5px] font-semibold text-foreground">
+                    正在构思本章大纲
+                  </span>
+                  {isRunning && activeAgent === "director" && (
+                    <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-medium text-primary-soft-foreground">
+                      生成中
+                    </span>
+                  )}
+                </div>
+                <div className="whitespace-pre-wrap text-xs leading-6 text-foreground">
+                  {displayedOutline}
+                  {isRunning && activeAgent === "director" && (
+                    <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-xs bg-primary align-middle" />
+                  )}
+                </div>
               </div>
-              <Button size="sm" className="w-full" onClick={handleApplySelectedDiff}>
-                将已选段落追加到正文
-              </Button>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-border bg-card p-3.5 leading-relaxed shadow-2xs">
-              <div className="whitespace-pre-wrap font-editor text-[13.5px] leading-7 text-foreground">
-                {generatedText}
-                {connState === "streaming" && (
-                  <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-primary align-middle" />
+            )}
+
+            {thoughtText && (
+              <div className="rounded-xl border border-border bg-card p-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    userToggledThoughtRef.current = true;
+                    setShowThought((v) => !v);
+                  }}
+                  className="flex w-full items-center justify-between text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <span>构思大纲与校对记录</span>
+                  <span>{showThought ? "收起" : "展开"}</span>
+                </button>
+                {showThought && (
+                  <div className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
+                    {displayedThought}
+                  </div>
                 )}
               </div>
-            </div>
-          )
-        ) : connState === "completed" && !outlineApproval ? (
-          <div className="rounded-xl border border-status-warning-border bg-status-warning-bg p-4 text-[11.5px] leading-relaxed text-status-warning">
-            <p className="font-semibold">本次未返回正文内容</p>
-            <p className="mt-1 text-foreground/85">
-              可能因推理模型思考过程耗时或耗尽输出配额导致正文为空。建议在「写作设置」中切换为「默认主力模型」后重试。
-            </p>
+            )}
+
+            {generatedText ? (
+              diffReviewOpen && !isRunning ? (
+                <div className="space-y-2 rounded-xl border border-status-success-border bg-card p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-status-success">
+                      逐段挑选采纳
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setDiffReviewOpen(false)}
+                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      返回全文
+                    </button>
+                  </div>
+                  <div className="space-y-1.5">
+                    {generatedParagraphs.map((para, idx) => {
+                      const accepted = acceptedParagraphs[idx] !== false;
+                      return (
+                        <div
+                          key={idx}
+                          className={`rounded-lg border p-2.5 text-[11px] leading-relaxed ${
+                            accepted
+                              ? "border-status-success-border bg-status-success-bg"
+                              : "border-border bg-muted/50 opacity-55 line-through"
+                          }`}
+                        >
+                          <div className="mb-1 flex items-center justify-between text-[10px]">
+                            <span>{accepted ? `采纳第 ${idx + 1} 段` : `跳过第 ${idx + 1} 段`}</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAcceptedParagraphs((prev) => ({
+                                  ...prev,
+                                  [idx]: !accepted,
+                                }))
+                              }
+                              className="text-primary hover:underline"
+                            >
+                              {accepted ? "跳过" : "恢复"}
+                            </button>
+                          </div>
+                          <p className="whitespace-pre-wrap">{para}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <Button size="sm" className="w-full" onClick={handleApplySelectedDiff}>
+                    将已选段落追加到正文
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border bg-card p-3.5 leading-relaxed shadow-2xs">
+                  <div className="whitespace-pre-wrap font-editor text-[13.5px] leading-7 text-foreground">
+                    {displayedText}
+                    {isRunning && (
+                      <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-xs bg-primary align-middle" />
+                    )}
+                  </div>
+                </div>
+              )
+            ) : connState === "completed" && !outlineApproval ? (
+              <div className="rounded-xl border border-status-warning-border bg-status-warning-bg p-4 text-[11.5px] leading-relaxed text-status-warning">
+                <p className="font-semibold">本次未返回正文内容</p>
+                <p className="mt-1 text-foreground/85">
+                  可能因推理模型思考过程耗时或耗尽输出配额导致正文为空。建议在「写作设置」中切换为「默认主力模型」后重试。
+                </p>
+              </div>
+            ) : (
+              !thoughtText &&
+              !liveOutlineText && (
+                <div className="rounded-xl border border-dashed border-border bg-card/60 p-5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
+                  <p className="font-medium text-foreground">AI 写作助手</p>
+                  <p className="mt-1.5">
+                    输入本章剧情方向即可开始生成。系统会自动承接上一章剧情与「故事设定」中的人物和伏笔，刷新页面也不会中断生成进度。
+                  </p>
+                </div>
+              )
+            )}
           </div>
-        ) : (
-          !thoughtText &&
-          !outlineApproval && (
-            <div className="rounded-xl border border-dashed border-border bg-card/60 p-5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
-              <p className="font-medium text-foreground">AI 写作助手</p>
-              <p className="mt-1.5">
-                输入本章剧情方向即可开始生成。系统会自动承接上一章剧情与「故事设定」中的人物和伏笔，刷新页面也不会中断生成进度。
-              </p>
-            </div>
-          )
-        )}
-      </div>
+
+          {!isAtBottom && isRunning && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="absolute right-4 bottom-3 z-10 rounded-full border border-border bg-card/95 px-2.5 py-1 text-[10.5px] font-medium text-foreground shadow-md backdrop-blur-xs transition-colors hover:bg-primary-soft hover:text-primary-soft-foreground"
+            >
+              回到底部 ↓
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Adopt Output Actions */}
       {generatedText && !isRunning && (

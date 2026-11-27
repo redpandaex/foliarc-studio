@@ -8,6 +8,7 @@ from foliarc_agent.agent.multi_agent import (
     EditorialBlackboard,
     EditorialTeamOrchestrator,
     InMemoryCheckpointStore,
+    _parse_critic_json,
 )
 from foliarc_agent.agent.router import FallbackStreamClient, IntentAndModelRouter
 from foliarc_agent.agent.skills import SkillRegistry
@@ -18,7 +19,7 @@ from foliarc_agent.streaming.llm_client import LlmStreamChunk, LlmUpstreamError
 class _FakeStreamClient:
     """Scripted streaming LLM client for deterministic Multi-Agent & Fallback tests."""
 
-    def __init__(self, script: list[str | Exception]) -> None:
+    def __init__(self, script: list[str | list[LlmStreamChunk] | Exception]) -> None:
         self._script = list(script)
         self.calls: list[dict[str, Any]] = []
 
@@ -31,10 +32,14 @@ class _FakeStreamClient:
         temperature: float = 0.8,
         max_tokens: int = 2048,
     ) -> AsyncIterator[LlmStreamChunk]:
-        self.calls.append({"model_alias": model_alias, "messages": messages})
+        self.calls.append({"model_alias": model_alias, "messages": messages, "max_tokens": max_tokens})
         item = self._script.pop(0)
         if isinstance(item, Exception):
             raise item
+        if isinstance(item, list):
+            for chunk in item:
+                yield chunk
+            return
         yield LlmStreamChunk(content_delta=item, input_tokens=100, cached_tokens=40, output_tokens=50)
 
 
@@ -233,3 +238,182 @@ async def test_previous_chapters_context_flows_to_director_writer_and_critic() -
         combined = "\n".join(str(m.get("content") or "") for m in call["messages"])
         assert "残缺青铜令" in combined
         assert "铁甲铿锵逼近" in combined
+
+
+@pytest.mark.asyncio
+async def test_writer_empty_reasoning_truncation_auto_falls_back_to_writer_main() -> None:
+    settings = Settings(llm_api_key="", embedding_api_key="")
+    fake = _FakeStreamClient(
+        [
+            # 1. DIRECTOR outline
+            "1. 藏经阁密室：林玄初次淬体\n2. 丹房后巷：暗伤经脉探查",
+            # 2. WRITER on critic-reasoner exhausts tokens in reasoning_content -> empty content
+            [
+                LlmStreamChunk(
+                    reasoning_delta="构思四个场景细节...",
+                    content_delta="",
+                    finish_reason="length",
+                    input_tokens=180,
+                    output_tokens=3200,
+                )
+            ],
+            # 3. WRITER auto-fallback to writer-main produces real prose
+            "夜雨敲打着丹房后巷的青瓦，林玄指尖微颤，顺着残图经脉节点稳住体内灵力。",
+            # 4. CRITIC receives non-empty prose and approves
+            '{"passed": true, "score": 90, "issues": [], "revision_guidance": ""}',
+        ]
+    )
+    orchestrator = EditorialTeamOrchestrator(
+        settings=settings,
+        llm_client=FallbackStreamClient(fake),  # type: ignore[arg-type]
+        router=IntentAndModelRouter(settings=settings),
+        checkpoint_store=InMemoryCheckpointStore(),
+        skill_registry=SkillRegistry(),
+        rag_retriever=None,
+        enable_mcp=False,
+    )
+
+    events: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def emit(ev_type: str, payload: dict[str, Any], agent: str = "writer") -> str:
+        events.append((ev_type, agent, payload))
+        return f"ev-{len(events)}"
+
+    async def check_ctrl() -> None:
+        return None
+
+    res = await orchestrator.run(
+        initial_state=EditorialBlackboard(
+            run_id="run-writer-fallback",
+            book_title="丹道长生",
+            chapter_no=2,
+            chapter_title="雨夜探巷",
+            requested_model_alias="critic-reasoner",
+            require_outline_approval=False,
+        ),
+        emit=emit,
+        control_event=asyncio.Event(),
+        check_control=check_ctrl,
+    )
+
+    assert res.status == "COMPLETED"
+    assert "夜雨敲打着丹房后巷的青瓦" in res.accumulated_text
+    assert [c["model_alias"] for c in fake.calls] == [
+        "fast-router",
+        "critic-reasoner",
+        "writer-main",
+        "critic-reasoner",
+    ]
+    critic_user_msg = str(fake.calls[3]["messages"][1]["content"])
+    assert "夜雨敲打着丹房后巷的青瓦" in critic_user_msg
+    assert any(t == "thought_delta" and "正文空稿保护" in str(p.get("content", "")) for t, _, p in events)
+
+
+@pytest.mark.asyncio
+async def test_critic_truncated_reasoning_falls_back_and_never_false_passes() -> None:
+    assert _parse_critic_json("", draft_text="有正文", finish_reason="length")["passed"] is False
+    assert _parse_critic_json('{"passed": true, "score": 95}', draft_text="")["passed"] is False
+
+    settings = Settings(llm_api_key="", embedding_api_key="")
+    fake = _FakeStreamClient(
+        [
+            "1. 古寺避雨：林青查探青铜令",
+            "林青吹灭油灯，将残缺青铜令收入袖中。",
+            # CRITIC on critic-reasoner truncates inside reasoning_content with empty content
+            [
+                LlmStreamChunk(
+                    reasoning_delta="在【待审稿正文】之后检查...",
+                    content_delta="",
+                    finish_reason="length",
+                    input_tokens=150,
+                    output_tokens=1200,
+                )
+            ],
+            # CRITIC auto-fallback to writer-main outputs valid JSON
+            '{"passed": true, "score": 88, "issues": [], "revision_guidance": ""}',
+        ]
+    )
+    orchestrator = EditorialTeamOrchestrator(
+        settings=settings,
+        llm_client=FallbackStreamClient(fake),  # type: ignore[arg-type]
+        router=IntentAndModelRouter(settings=settings),
+        checkpoint_store=InMemoryCheckpointStore(),
+        skill_registry=SkillRegistry(),
+        rag_retriever=None,
+        enable_mcp=False,
+    )
+
+    events: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def emit(ev_type: str, payload: dict[str, Any], agent: str = "writer") -> str:
+        events.append((ev_type, agent, payload))
+        return f"ev-{len(events)}"
+
+    async def check_ctrl() -> None:
+        return None
+
+    res = await orchestrator.run(
+        initial_state=EditorialBlackboard(
+            run_id="run-critic-fallback",
+            book_title="星辰剑录",
+            chapter_no=2,
+            chapter_title="古寺避雨",
+            require_outline_approval=False,
+        ),
+        emit=emit,
+        control_event=asyncio.Event(),
+        check_control=check_ctrl,
+    )
+
+    assert res.status == "COMPLETED"
+    assert [c["model_alias"] for c in fake.calls] == [
+        "fast-router",
+        "writer-main",
+        "critic-reasoner",
+        "writer-main",
+    ]
+    assert any(t == "critic_review" and p["score"] == 88 and p["passed"] is True for t, _, p in events)
+
+
+@pytest.mark.asyncio
+async def test_writer_empty_after_fallback_raises_llm_empty_draft() -> None:
+    settings = Settings(llm_api_key="", embedding_api_key="")
+    fake = _FakeStreamClient(
+        [
+            "1. 藏经阁密室：林玄初次淬体",
+            [LlmStreamChunk(reasoning_delta="thinking...", content_delta="", finish_reason="length")],
+            [LlmStreamChunk(content_delta="   ", finish_reason="stop")],
+        ]
+    )
+    orchestrator = EditorialTeamOrchestrator(
+        settings=settings,
+        llm_client=FallbackStreamClient(fake),  # type: ignore[arg-type]
+        router=IntentAndModelRouter(settings=settings),
+        checkpoint_store=InMemoryCheckpointStore(),
+        skill_registry=SkillRegistry(),
+        rag_retriever=None,
+        enable_mcp=False,
+    )
+
+    async def emit(_ev_type: str, _payload: dict[str, Any], _agent: str = "writer") -> str:
+        return "ev-1"
+
+    async def check_ctrl() -> None:
+        return None
+
+    with pytest.raises(LlmUpstreamError) as exc_info:
+        await orchestrator.run(
+            initial_state=EditorialBlackboard(
+                run_id="run-writer-both-empty",
+                book_title="丹道长生",
+                chapter_no=2,
+                requested_model_alias="critic-reasoner",
+                require_outline_approval=False,
+            ),
+            emit=emit,
+            control_event=asyncio.Event(),
+            check_control=check_ctrl,
+        )
+
+    assert exc_info.value.code == "LLM_EMPTY_DRAFT"
+    assert len(fake.calls) == 3  # DIRECTOR + WRITER + WRITER fallback; CRITIC never called!

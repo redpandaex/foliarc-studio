@@ -51,6 +51,26 @@ def resolve_model_name(settings: Settings, model_alias: str) -> str:
     return mapping.get(model_alias, settings.llm_model_writer_main)
 
 
+def is_reasoning_model(model_name: str, model_alias: str = "") -> bool:
+    """Detects reasoning/thinking models whose max_tokens covers both reasoning_content and content."""
+    if model_alias == "critic-reasoner":
+        return True
+    low = model_name.strip().lower()
+    if not low:
+        return False
+    if any(tok in low for tok in ("reasoner", "thinking", "qwq", "deepseek-r1")):
+        return True
+    return low.startswith(("o1", "o3", "o4"))
+
+
+def effective_max_tokens(settings: Settings, model_alias: str, requested_max_tokens: int) -> int:
+    """Expands output token cap for reasoning models so thinking chains do not starve final content."""
+    model = resolve_model_name(settings, model_alias)
+    if not is_reasoning_model(model, model_alias):
+        return requested_max_tokens
+    return min(16384, max(requested_max_tokens + 4096, requested_max_tokens * 3, 6144))
+
+
 def build_novel_messages(
     *,
     action: RunAction,
@@ -178,15 +198,17 @@ class OpenAICompatibleStreamClient:
         base_url = self._settings.llm_base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
         model = resolve_model_name(self._settings, model_alias)
+        resolved_max_tokens = effective_max_tokens(self._settings, model_alias, max_tokens)
 
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": resolved_max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if not is_reasoning_model(model, model_alias):
+            payload["temperature"] = temperature
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

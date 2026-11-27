@@ -788,6 +788,21 @@ class RunManager:
                 )
                 return
 
+            if not full_text.strip():
+                await self._handle_failure(
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    seq=seq,
+                    accumulated_text="",
+                    code="LLM_EMPTY_OUTPUT",
+                    message="模型本次未生成任何正文内容（可能因推理思考链耗尽输出配额或触发上游内容限制），请重试或切换写作模型。",
+                    retryable=True,
+                    in_tok=total_in,
+                    cached_tok=total_cached,
+                    out_tok=total_out,
+                )
+                return
+
             # Phase 5 Output Guardrail: detect secret / system-prompt leak or compliance breach
             out_verdict = self._guardrails.check_output(full_text)
             if not out_verdict.allowed:

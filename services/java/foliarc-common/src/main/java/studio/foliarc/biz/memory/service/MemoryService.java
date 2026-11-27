@@ -119,8 +119,16 @@ public class MemoryService {
     ) {
         bookService.requireOwnedBook(ownerId, bookId);
         bookService.lockStructure(bookId);
-        return toRelation(saveRelation(ownerId, bookId, req, req.sinceChapterNo(),
-                authorOrigin(bookId, req.sourceSectionId(), req.narrativeOrder()), Map.of()));
+        Map<String, CharacterEntity> characters = loreService.characterIndex(bookId);
+        Map<String, CharacterEntity> safeCharacters = characters == null ? Map.of() : characters;
+        String src = canonicalName(req.sourceCharacter(), safeCharacters);
+        String dst = canonicalName(req.targetCharacter(), safeCharacters);
+        if (src.equals(dst)) {
+            throw BizException.badRequest("SELF_RELATION_FORBIDDEN", "人物关系的起点与终点不能指向同一角色");
+        }
+        FactOrigin origin = authorOrigin(bookId, req.sourceSectionId(), req.narrativeOrder());
+        Integer sinceChapterNo = req.sinceChapterNo() != null ? req.sinceChapterNo() : origin.chapterNo();
+        return toRelation(saveRelation(ownerId, bookId, req, sinceChapterNo, origin, safeCharacters));
     }
 
     private CharacterRelationEntity saveRelation(
@@ -183,8 +191,10 @@ public class MemoryService {
     ) {
         bookService.requireOwnedBook(ownerId, bookId);
         bookService.lockStructure(bookId);
+        Map<String, CharacterEntity> characters = loreService.characterIndex(bookId);
+        Map<String, CharacterEntity> safeCharacters = characters == null ? Map.of() : characters;
         return toTimeline(saveTimelineEvent(ownerId, bookId, req, req.chapterNo(),
-                authorOrigin(bookId, req.sourceSectionId(), req.narrativeOrder()), Map.of()));
+                authorOrigin(bookId, req.sourceSectionId(), req.narrativeOrder()), safeCharacters));
     }
 
     private TimelineEventEntity saveTimelineEvent(
@@ -285,8 +295,8 @@ public class MemoryService {
             UUID ownerId, UUID bookId, RagDtos.ApplyExtractedMemoryRequest req, ChapterSectionEntity section, String genreCode
     ) {
         Integer chapterNo = section == null ? req.chapterNo() : section.getChapterNo();
-        FactOrigin origin = section == null ? new FactOrigin(null, 0L, AI_EXTRACTED)
-                : new FactOrigin(section.getId(), section.getNarrativeOrder(), AI_EXTRACTED);
+        FactOrigin origin = section == null ? new FactOrigin(null, 0L, AI_EXTRACTED, chapterNo)
+                : new FactOrigin(section.getId(), section.getNarrativeOrder(), AI_EXTRACTED, section.getChapterNo());
         Map<String, CharacterEntity> characterIndex = loreService.characterIndex(bookId);
         int characters = applyCharacterUpdates(ownerId, bookId, req.characterUpdates(), section, characterIndex, genreCode);
         int clues = 0;
@@ -367,15 +377,15 @@ public class MemoryService {
     }
 
     private FactOrigin authorOrigin(UUID bookId, UUID sectionId, Long order) {
-        if (sectionId == null) return new FactOrigin(null, order, AUTHOR);
+        if (sectionId == null) return new FactOrigin(null, order, AUTHOR, null);
         ChapterSectionEntity section = sectionMapper == null ? null : sectionMapper.selectById(sectionId);
         if (section == null || !bookId.equals(section.getBookId())) {
             throw BizException.notFound("SECTION_NOT_FOUND", "小节不存在");
         }
-        return new FactOrigin(sectionId, section.getNarrativeOrder(), AUTHOR);
+        return new FactOrigin(sectionId, section.getNarrativeOrder(), AUTHOR, section.getChapterNo());
     }
 
-    private record FactOrigin(UUID sectionId, Long order, String source) {
+    private record FactOrigin(UUID sectionId, Long order, String source, Integer chapterNo) {
         boolean isSectionExtraction() {
             return AI_EXTRACTED.equals(source) && sectionId != null;
         }

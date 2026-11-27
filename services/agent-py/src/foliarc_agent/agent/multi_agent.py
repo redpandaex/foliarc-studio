@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -17,7 +18,7 @@ from foliarc_agent.agent.router import FallbackStreamClient, IntentAndModelRoute
 from foliarc_agent.agent.skills import SkillRegistry
 from foliarc_agent.config import Settings
 from foliarc_agent.rag.retriever import HybridRagRetriever
-from foliarc_agent.streaming.llm_client import LlmStreamChunk
+from foliarc_agent.streaming.llm_client import LlmStreamChunk, LlmUpstreamError
 from foliarc_agent.streaming.protocol import ControlSignal
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,14 @@ class InMemoryCheckpointStore:
 
 
 @dataclass(slots=True)
+class _StreamCollectResult:
+    text: str
+    reasoning_text: str
+    ctrl: ControlSignal | None
+    finish_reason: str | None = None
+
+
+@dataclass(slots=True)
 class MultiAgentResult:
     status: Literal["COMPLETED", "PAUSED", "CANCELLED", "INTERRUPTED"]
     accumulated_text: str
@@ -297,9 +306,11 @@ class EditorialTeamOrchestrator:
             temperature: float = 0.7,
             max_tokens: int = 1800,
             stream_as: Literal["text_delta", "thought_delta", "outline_delta"] = "thought_delta",
-        ) -> tuple[str, ControlSignal | None]:
+        ) -> _StreamCollectResult:
             nonlocal total_in, total_cached, total_out
             parts: list[str] = []
+            reasoning_parts: list[str] = []
+            finish_reason: str | None = None
             seg_in = 0
             seg_cached = 0
             seg_out = 0
@@ -314,7 +325,12 @@ class EditorialTeamOrchestrator:
                 while True:
                     ctrl = await check_control()
                     if ctrl is not None:
-                        return "".join(parts), ctrl
+                        return _StreamCollectResult(
+                            text="".join(parts),
+                            reasoning_text="".join(reasoning_parts),
+                            ctrl=ctrl,
+                            finish_reason=finish_reason,
+                        )
 
                     next_task = asyncio.create_task(anext(stream_iter))
                     ctrl_task = asyncio.create_task(control_event.wait())
@@ -328,7 +344,12 @@ class EditorialTeamOrchestrator:
                             await t
 
                     if ctrl_task in done and control_event.is_set():
-                        return "".join(parts), await check_control()
+                        return _StreamCollectResult(
+                            text="".join(parts),
+                            reasoning_text="".join(reasoning_parts),
+                            ctrl=await check_control(),
+                            finish_reason=finish_reason,
+                        )
 
                     try:
                         chunk: LlmStreamChunk = next_task.result()
@@ -336,6 +357,7 @@ class EditorialTeamOrchestrator:
                         break
 
                     if chunk.reasoning_delta:
+                        reasoning_parts.append(chunk.reasoning_delta)
                         await emit("thought_delta", {"content": chunk.reasoning_delta}, agent)
                     if chunk.content_delta:
                         parts.append(chunk.content_delta)
@@ -347,6 +369,8 @@ class EditorialTeamOrchestrator:
                                 {"content": chunk.content_delta},
                                 agent,
                             )
+                    if chunk.finish_reason is not None:
+                        finish_reason = chunk.finish_reason
                     if chunk.input_tokens is not None:
                         seg_in = chunk.input_tokens
                     if chunk.cached_tokens is not None:
@@ -360,7 +384,12 @@ class EditorialTeamOrchestrator:
             total_in += seg_in
             total_cached += seg_cached
             total_out += seg_out
-            return "".join(parts), await check_control()
+            return _StreamCollectResult(
+                text="".join(parts),
+                reasoning_text="".join(reasoning_parts),
+                ctrl=await check_control(),
+                finish_reason=finish_reason,
+            )
 
         # =====================================================================
         # NODE 0: ROUTER (Multi-layer Intent + Model Routing)
@@ -416,24 +445,54 @@ class EditorialTeamOrchestrator:
         if state.current_node == "DIRECTOR":
             await self._hydrate_director_continuity(state)
             director_msgs = self._build_director_messages(state)
-            outline_text, ctrl = await _collect_stream(
+            director_model = state.model_plan.get("director", "fast-router")
+            collected = await _collect_stream(
                 agent="director",
-                model_alias=state.model_plan.get("director", "fast-router"),
+                model_alias=director_model,
                 messages=director_msgs,
                 temperature=0.6,
-                max_tokens=900,
+                max_tokens=1200,
                 stream_as="outline_delta",
             )
-            if ctrl in ("PAUSE", "CANCEL"):
+            if collected.ctrl in ("PAUSE", "CANCEL"):
                 return self._make_result(
-                    "PAUSED" if ctrl == "PAUSE" else "CANCELLED",
+                    "PAUSED" if collected.ctrl == "PAUSE" else "CANCELLED",
                     state,
                     total_in,
                     total_cached,
                     total_out,
                 )
+            if not collected.text.strip():
+                if director_model != "writer-main":
+                    await emit(
+                        "thought_delta",
+                        {"content": f"\n[大纲空输出保护] {director_model} 未输出有效大纲，自动切换至 writer-main 重拟\n"},
+                        "director",
+                    )
+                    collected = await _collect_stream(
+                        agent="director",
+                        model_alias="writer-main",
+                        messages=director_msgs,
+                        temperature=0.6,
+                        max_tokens=1200,
+                        stream_as="outline_delta",
+                    )
+                    if collected.ctrl in ("PAUSE", "CANCEL"):
+                        return self._make_result(
+                            "PAUSED" if collected.ctrl == "PAUSE" else "CANCELLED",
+                            state,
+                            total_in,
+                            total_cached,
+                            total_out,
+                        )
+                if not collected.text.strip():
+                    raise LlmUpstreamError(
+                        "总编模型未生成有效大纲内容（可能因推理思考链耗尽输出配额或触发上游过滤），请重试或切换写作模型。",
+                        retryable=True,
+                        code="LLM_EMPTY_OUTLINE",
+                    )
 
-            state.outline_text = outline_text.strip()
+            state.outline_text = collected.text.strip()
             state.outline_beats = _extract_beats(state.outline_text)
             state.step_no += 1
 
@@ -560,23 +619,63 @@ class EditorialTeamOrchestrator:
                         )
 
                 writer_msgs = self._build_writer_messages(state, skill_body)
-                draft_text, ctrl = await _collect_stream(
+                writer_model = state.model_plan.get("writer", "writer-main")
+                collected = await _collect_stream(
                     agent="writer",
-                    model_alias=state.model_plan.get("writer", "writer-main"),
+                    model_alias=writer_model,
                     messages=writer_msgs,
                     temperature=0.8 if state.revision_count == 0 else 0.65,
-                    max_tokens=2400,
+                    max_tokens=3200,
                     stream_as="text_delta",
                 )
-                state.draft_text = draft_text
-                if ctrl in ("PAUSE", "CANCEL"):
+                if collected.ctrl in ("PAUSE", "CANCEL"):
+                    state.draft_text = collected.text
                     return self._make_result(
-                        "PAUSED" if ctrl == "PAUSE" else "CANCELLED",
+                        "PAUSED" if collected.ctrl == "PAUSE" else "CANCELLED",
                         state,
                         total_in,
                         total_cached,
                         total_out,
                     )
+                if not collected.text.strip():
+                    fallback_alias = "writer-main" if writer_model != "writer-main" else "fast-router"
+                    await emit(
+                        "thought_delta",
+                        {
+                            "content": (
+                                f"\n[正文空稿保护] {writer_model} 未生成正文"
+                                f"（finish_reason={collected.finish_reason or 'unknown'}），"
+                                f"自动切换至 {fallback_alias} 重新执笔\n"
+                            )
+                        },
+                        "writer",
+                    )
+                    collected = await _collect_stream(
+                        agent="writer",
+                        model_alias=fallback_alias,
+                        messages=writer_msgs,
+                        temperature=0.75,
+                        max_tokens=3200,
+                        stream_as="text_delta",
+                    )
+                    if collected.ctrl in ("PAUSE", "CANCEL"):
+                        state.draft_text = collected.text
+                        return self._make_result(
+                            "PAUSED" if collected.ctrl == "PAUSE" else "CANCELLED",
+                            state,
+                            total_in,
+                            total_cached,
+                            total_out,
+                        )
+                    if not collected.text.strip():
+                        raise LlmUpstreamError(
+                            "执笔模型未生成任何正文内容（可能因推理思考链耗尽输出配额或触发上游内容限制），"
+                            "请重试或在「写作设置」切换为「默认主力模型」。",
+                            retryable=True,
+                            code="LLM_EMPTY_DRAFT",
+                        )
+
+                state.draft_text = collected.text
 
                 state.step_no += 1
                 await self._checkpoints.save(
@@ -599,24 +698,57 @@ class EditorialTeamOrchestrator:
 
             if state.current_node == "CRITIC":
                 critic_msgs = self._build_critic_messages(state)
-                raw_review, ctrl = await _collect_stream(
+                critic_model = state.model_plan.get("critic", "critic-reasoner")
+                collected = await _collect_stream(
                     agent="critic",
-                    model_alias=state.model_plan.get("critic", "critic-reasoner"),
+                    model_alias=critic_model,
                     messages=critic_msgs,
                     temperature=0.1,
-                    max_tokens=700,
+                    max_tokens=1200,
                     stream_as="thought_delta",
                 )
-                if ctrl in ("PAUSE", "CANCEL"):
+                if collected.ctrl in ("PAUSE", "CANCEL"):
                     return self._make_result(
-                        "PAUSED" if ctrl == "PAUSE" else "CANCELLED",
+                        "PAUSED" if collected.ctrl == "PAUSE" else "CANCELLED",
                         state,
                         total_in,
                         total_cached,
                         total_out,
                     )
+                if _extract_critic_json_obj(collected.text) is None and critic_model != "writer-main":
+                    await emit(
+                        "thought_delta",
+                        {
+                            "content": (
+                                f"\n[审稿输出保护] {critic_model} 未返回完整审稿 JSON"
+                                f"（finish_reason={collected.finish_reason or 'unknown'}），"
+                                "自动切换至 writer-main 完成审稿\n"
+                            )
+                        },
+                        "critic",
+                    )
+                    collected = await _collect_stream(
+                        agent="critic",
+                        model_alias="writer-main",
+                        messages=critic_msgs,
+                        temperature=0.1,
+                        max_tokens=1200,
+                        stream_as="thought_delta",
+                    )
+                    if collected.ctrl in ("PAUSE", "CANCEL"):
+                        return self._make_result(
+                            "PAUSED" if collected.ctrl == "PAUSE" else "CANCELLED",
+                            state,
+                            total_in,
+                            total_cached,
+                            total_out,
+                        )
 
-                parsed_review = _parse_critic_json(raw_review)
+                parsed_review = _parse_critic_json(
+                    collected.text,
+                    draft_text=state.draft_text,
+                    finish_reason=collected.finish_reason,
+                )
                 state.critic_score = int(parsed_review["score"])
                 state.critic_passed = bool(parsed_review["passed"])
                 state.critic_issues = list(parsed_review["issues"])
@@ -890,9 +1022,10 @@ class EditorialTeamOrchestrator:
                     )
                     if resp.status_code == 200:
                         mem = resp.json()
+                        selected_relations = self._prioritize_relations(state, mem, limit=12)
                         rel_lines = [
                             f"- {r['sourceCharacter']} -[{r['relationType']}]-> {r['targetCharacter']}: {r.get('description', '')}"
-                            for r in mem.get("relations", [])[:8]
+                            for r in selected_relations
                         ]
                         tl_lines = [
                             f"- 第{t['chapterNo']}章 {t['eventTitle']}: {t.get('summary', '')}"
@@ -911,6 +1044,7 @@ class EditorialTeamOrchestrator:
                                 "success": True,
                                 "latency_ms": 20,
                                 "summary": f"已加载 {len(rel_lines)} 条关系、{len(tl_lines)} 条时间线记忆",
+                                "hit_relation_ids": [str(r["id"]) for r in selected_relations if r.get("id")],
                             },
                             "lorekeeper",
                         )
@@ -929,6 +1063,147 @@ class EditorialTeamOrchestrator:
                 )
 
         return "\n\n".join(brief_parts) if brief_parts else "（本书暂未录入额外设定或历史记忆）", citations
+
+    @staticmethod
+    def _split_names(raw: Any) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            items = [str(x) for x in raw]
+        else:
+            items = re.split(r"[,，、;；]+", str(raw))
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            cleaned = item.strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                result.append(cleaned)
+        return result
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        if value is None or isinstance(value, bool):
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _prioritize_relations(
+        cls,
+        state: EditorialBlackboard,
+        mem: dict[str, Any],
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """
+        Rank structured relations for Lorekeeper injection:
+          1. Focus-character endpoint hits (POV + foreshadowing cast + previous chapter cast) DESC
+          2. Recency (`narrativeOrder` / `sinceChapterNo`) DESC
+          3. Source authority (`AUTHOR` > `AI_EXTRACTED`) DESC
+          4. Original order ASC
+        """
+        relations = [r for r in (mem.get("relations") or []) if isinstance(r, dict)]
+        if not relations or limit <= 0:
+            return []
+
+        alias_to_canonical: dict[str, str] = {}
+        known_names: list[str] = []
+        for ch in mem.get("characters") or []:
+            if not isinstance(ch, dict):
+                continue
+            name = str(ch.get("name") or "").strip()
+            if not name:
+                continue
+            alias_to_canonical[name] = name
+            known_names.append(name)
+            for alias in cls._split_names(ch.get("aliases")):
+                alias_to_canonical.setdefault(alias, name)
+                known_names.append(alias)
+
+        for rel in relations:
+            for field in ("sourceCharacter", "targetCharacter"):
+                endpoint = str(rel.get(field) or "").strip()
+                if endpoint and endpoint not in alias_to_canonical:
+                    alias_to_canonical[endpoint] = endpoint
+                    known_names.append(endpoint)
+
+        def canonical(name: str) -> str:
+            cleaned = name.strip()
+            return alias_to_canonical.get(cleaned, cleaned)
+
+        focus_canonical: set[str] = set()
+
+        # 1. POV character
+        for name in cls._split_names(state.pov_character):
+            focus_canonical.add(canonical(name))
+
+        # 2. Foreshadowing involved characters (active/open clues + clues referenced in writer pack)
+        active_clue_statuses = {"OPEN", "PLANTED", "HINTED", "TRIGGERED", "PLANNED"}
+        writer_pack = state.foreshadowing_writer_pack or ""
+        for clue in mem.get("foreshadowings") or []:
+            if not isinstance(clue, dict):
+                continue
+            status = str(clue.get("status") or "OPEN").strip().upper()
+            code = str(clue.get("code") or "").strip()
+            title = str(clue.get("title") or "").strip()
+            referenced_in_pack = bool(
+                writer_pack
+                and ((code and code in writer_pack) or (title and title in writer_pack))
+            )
+            if status in active_clue_statuses or referenced_in_pack:
+                for name in cls._split_names(clue.get("involvedCharacters")):
+                    focus_canonical.add(canonical(name))
+
+        # 3. Previous chapter involved characters (from recent timeline events + text contexts)
+        timeline_events = [t for t in (mem.get("timelineEvents") or []) if isinstance(t, dict)]
+        if timeline_events:
+            target_prev_ch = (state.chapter_no - 1) if (state.chapter_no and state.chapter_no > 1) else None
+            prev_events = (
+                [t for t in timeline_events if cls._safe_int(t.get("chapterNo")) == target_prev_ch]
+                if target_prev_ch is not None
+                else []
+            )
+            if not prev_events:
+                latest_ch = max(cls._safe_int(t.get("chapterNo")) for t in timeline_events)
+                if latest_ch > 0:
+                    prev_events = [t for t in timeline_events if cls._safe_int(t.get("chapterNo")) == latest_ch]
+            for ev in prev_events:
+                for name in cls._split_names(ev.get("involvedCharacters")):
+                    focus_canonical.add(canonical(name))
+
+        probe_text = "\n".join(
+            part
+            for part in (
+                state.pov_character,
+                state.foreshadowing_writer_pack,
+                state.previous_chapters_context[-1600:] if state.previous_chapters_context else "",
+                state.active_state_brief,
+                state.outline_text,
+                state.instruction,
+            )
+            if part
+        )
+        if probe_text:
+            for candidate in set(known_names):
+                if len(candidate) >= 2 and candidate in probe_text:
+                    focus_canonical.add(canonical(candidate))
+
+        def sort_key(item: tuple[int, dict[str, Any]]) -> tuple[int, int, int, int, int]:
+            idx, rel = item
+            src = canonical(str(rel.get("sourceCharacter") or ""))
+            dst = canonical(str(rel.get("targetCharacter") or ""))
+            focus_hits = int(src in focus_canonical) + int(dst in focus_canonical)
+            raw_order = cls._safe_int(rel.get("narrativeOrder"))
+            since_ch = cls._safe_int(rel.get("sinceChapterNo"))
+            effective_order = raw_order if raw_order > 0 else since_ch * 1000
+            source = str(rel.get("source") or "AUTHOR").strip().upper()
+            source_priority = 1 if source == "AUTHOR" else 0
+            return (-focus_hits, -effective_order, -since_ch, -source_priority, idx)
+
+        ranked = [rel for _, rel in sorted(enumerate(relations), key=sort_key)]
+        return ranked[:limit]
 
     @staticmethod
     def _build_director_messages(state: EditorialBlackboard) -> list[dict[str, str]]:
@@ -1070,6 +1345,7 @@ class EditorialTeamOrchestrator:
             + genre_rubric
             + '请仅输出严格 JSON 对象：{"passed": true/false, "score": 0-100, "issues": ["问题1"], "revision_guidance": "具体修改指令"}'
             + "\n评分 >= 78 且无硬伤时 passed 为 true；否则 passed 为 false 并给出可执行修改意见。"
+            + "\n思考过程请简明扼要，不要在思考中重复大段抄写大纲，务必输出完整合法 JSON。"
         )
         user_sections = [
             f"【批准大纲】\n{state.outline_text[:1500]}",
@@ -1126,27 +1402,57 @@ def _extract_beats(outline_text: str) -> list[str]:
     return beats[:8] if beats else ([outline_text[:200]] if outline_text.strip() else [])
 
 
-def _parse_critic_json(raw: str) -> dict[str, Any]:
+def _extract_critic_json_obj(raw: str) -> dict[str, Any] | None:
     start = raw.find("{")
     end = raw.rfind("}")
     if start >= 0 and end > start:
         try:
             obj = json.loads(raw[start : end + 1])
-            score = max(0, min(100, int(obj.get("score", 82))))
-            passed = bool(obj.get("passed", score >= 78))
-            issues = [str(x).strip() for x in (obj.get("issues") or []) if str(x).strip()]
-            guidance = str(obj.get("revision_guidance") or "").strip()
-            return {
-                "passed": passed,
-                "score": score,
-                "issues": issues[:6],
-                "revision_guidance": guidance,
-            }
+            if isinstance(obj, dict):
+                return obj
         except (ValueError, TypeError, json.JSONDecodeError):
-            pass
+            return None
+    return None
+
+
+def _parse_critic_json(
+    raw: str,
+    *,
+    draft_text: str | None = None,
+    finish_reason: str | None = None,
+) -> dict[str, Any]:
+    if draft_text is not None and not draft_text.strip():
+        return {
+            "passed": False,
+            "score": 0,
+            "issues": ["待审稿正文为空，无法通过连贯性审查"],
+            "revision_guidance": "请严格按照批准大纲撰写完整的小说正文内容。",
+        }
+
+    obj = _extract_critic_json_obj(raw)
+    if obj is not None:
+        score = max(0, min(100, int(obj.get("score", 82))))
+        passed = bool(obj.get("passed", score >= 78))
+        issues = [str(x).strip() for x in (obj.get("issues") or []) if str(x).strip()]
+        guidance = str(obj.get("revision_guidance") or "").strip()
+        return {
+            "passed": passed,
+            "score": score,
+            "issues": issues[:6],
+            "revision_guidance": guidance,
+        }
+
+    if not raw.strip() or finish_reason == "length":
+        return {
+            "passed": False,
+            "score": 50,
+            "issues": ["审稿输出被截断或为空，未完成有效连贯性核查"],
+            "revision_guidance": "请对照批准大纲与前文设定重新核查并完善正文。",
+        }
+
     return {
         "passed": True,
-        "score": 82,
+        "score": 80,
         "issues": [],
         "revision_guidance": "",
     }

@@ -225,3 +225,90 @@ def test_direct_build_novel_messages_injects_previous_chapter_continuity() -> No
     user_content = msgs[1]["content"]
     assert "前文章节承接" in user_content
     assert "三名黑衣死士" in user_content
+
+
+@pytest.mark.asyncio
+async def test_reasoning_model_scales_max_tokens_and_omits_temperature() -> None:
+    captured_payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_payloads.append(json.loads(request.content.decode("utf-8")))
+        sse = (
+            'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(200, content=sse.encode("utf-8"))
+
+    settings = Settings(llm_api_key="sk-test-valid-key", llm_base_url="https://mock.llm/v1")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = OpenAICompatibleStreamClient(settings, http_client=http_client)
+        _ = [
+            c
+            async for c in client.stream_chat(
+                model_alias="critic-reasoner",
+                messages=[{"role": "user", "content": "review"}],
+                temperature=0.1,
+                max_tokens=1200,
+            )
+        ]
+        _ = [
+            c
+            async for c in client.stream_chat(
+                model_alias="writer-main",
+                messages=[{"role": "user", "content": "write"}],
+                temperature=0.8,
+                max_tokens=2400,
+            )
+        ]
+
+    assert len(captured_payloads) == 2
+    reasoner_req, writer_req = captured_payloads
+    assert reasoner_req["model"] == "deepseek-reasoner"
+    assert reasoner_req["max_tokens"] >= 6144
+    assert "temperature" not in reasoner_req
+
+    assert writer_req["model"] == "deepseek-chat"
+    assert writer_req["max_tokens"] == 2400
+    assert writer_req["temperature"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_empty_direct_output_marks_run_failed_instead_of_completed() -> None:
+    fake_redis = FakeRedis()
+    reporter = RecordingReporter()
+    llm = ScriptedLlmClient(
+        segments=[
+            [
+                LlmStreamChunk(reasoning_delta="思考了一大段但没输出正文", finish_reason="length"),
+                LlmStreamChunk(input_tokens=120, cached_tokens=0, output_tokens=2400),
+            ]
+        ]
+    )
+    manager = RunManager(
+        settings=Settings(llm_api_key="sk-test"),
+        redis=fake_redis,  # type: ignore[arg-type]
+        llm_client=llm,  # type: ignore[arg-type]
+        state_reporter=reporter,
+    )
+
+    run_id = "run-empty-direct-1"
+    await manager.start_run(
+        RunStartRequest(
+            run_id=run_id,
+            mode="DIRECT",
+            action="CONTINUE",
+            book_title="星渊剑录",
+            chapter_title="第一章",
+            instruction="继续写",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    final_state = reporter.reports[-1][1]
+    assert final_state.status == "FAILED"
+    assert final_state.accumulated_text == ""
+    events = fake_redis.streams[stream_key(run_id)]
+    assert events[-1][1]["type"] == "error"
+    err_payload = json.loads(events[-1][1]["payload"])
+    assert err_payload["code"] == "LLM_EMPTY_OUTPUT"
