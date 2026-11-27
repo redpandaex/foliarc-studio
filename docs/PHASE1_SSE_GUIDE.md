@@ -68,6 +68,29 @@ sequenceDiagram
   - **高可用重连**：指数退避 + 随机抖动（Exponential Backoff + Jitter）防雪崩、监听 `window` `online/offline` 离线挂起与恢复、35s 心跳看门狗（服务端每 15s 下发 `ping`）。
   - **页面刷新无缝续连**：将 `{ runId, lastEventId, lastSeq, text }` 写入 `sessionStorage`；刷新页面（F5）后自动携带 `Last-Event-ID` 续接，且按 `seq` 去重保证不重复渲染。
 
+#### 流式渲染工程：SSE 蓄水池解耦打字机、零 CLS 防抖动与智能粘底滚动
+- **问题背景**：Java 网关的 `RedisStreamSseBridge` 采用 `80ms` 非阻塞批量 `XREAD`，且上游大模型本身也会突发式吐词；若前端直接把每个 chunk 同步写入渲染状态，会出现“卡一下、突然蹦出半行”的顿挫感，同时伴随滚动条弹出折行、状态条换高度等布局抖动。
+- **蓄水池解耦模型（`useSmoothTypewriter`，位于 `apps/web/src/components/ai-copilot-panel.tsx`）**：
+  - **真实数据层（蓄水池）**：SSE 每收到分片立即追加到 `targetText` 并写入 `sessionStorage` 快照，保证 F5 刷新、断线续连与暂停恢复 **100% 不丢字**。
+  - **视觉展示层（水龙头）**：维护已展示长度 `shownLen`，通过浏览器原生 `requestAnimationFrame`（对齐 60Hz 刷新周期）逐帧追赶 `targetText.length`，界面仅渲染 `targetText.slice(0, shownLen)`；严格遵守 React 19 规范（仅在 RAF 回调中更新 `shownLen`，不在 `useEffect` 同步调用 `setState`）。
+- **按积压量自适应变速表与零拖尾结束**：
+
+  | 积压字数（`backlog = targetLen - cur`） | 帧调度间隔 | 每步推进字数 | 设计意图 |
+  | :--- | ---: | ---: | :--- |
+  | `<= 16` | `26ms` | `1` 字 | 保留细腻的逐字打字机颗粒感 |
+  | `17 – 60` | `20ms` | `2` 字 | 略微提速，避免滞后感累积 |
+  | `61 – 150` | `16ms` | `4` 字 | 应对上游大模型高速吐字 |
+  | `151 – 300` | `16ms` | `10` 字 | 平滑消化突发长片段 |
+  | `> 300` | `16ms` | `20` 字 | 断线重连批量补帧时快速追平 |
+
+  - 当流式任务结束或进入暂停/审批态（`active === false`）时，直接返回全量 `targetText` 实现零拖尾瞬间对齐。
+- **高频状态降频**：仅用于游标续连的 `lastEventIdRef` 与 `lastSeqRef` 改为 Ref 维护（不再每帧触发 `setState`）；`lastHintAgent` 仅在 Agent 阶段切换时才更新 `activeAgent` 与 `statusDetail`。
+- **零布局跳动（Zero CLS）与智能粘底滚动**：
+  - `statusDetail` 提示条锁定单行高度 `h-8 truncate`，避免 1/2 行折行反复顶动下方输出区；
+  - 输出滚动容器固定 `[scrollbar-gutter:stable]` 与 `[overflow-anchor:none]`，预留滚动条轨道以防止首次溢出时横向重排折行；
+  - `MULTI_AGENT` 下 `DIRECTOR` 构思大纲直接渲染在主输出区「正在构思本章大纲」打字机卡片中，结束后原地切换为可编辑的「确认本章大纲」卡片，消除折叠区收起引发的整屏跳闪；
+  - 监听输出区滚动距底距离：距底 `<= 48px` 时自动贴底跟随；一旦用户向上滚动回看前文，立即停止强拉并在右下角浮现「回到底部 ↓」快捷按钮。
+
 ### 2. Java 网关：WebFlux 响应式流代理 + Redis Streams 避坑
 - **核心文件**：
   - `services/biz-java/src/main/java/studio/foliarc/biz/run/service/RedisStreamSseBridge.java`

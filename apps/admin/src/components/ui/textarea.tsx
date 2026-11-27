@@ -78,7 +78,7 @@ export function Textarea({
         value={value}
         defaultValue={defaultValue}
         className={cn(
-          "block min-h-[280px] w-full resize-none overflow-hidden bg-transparent font-editor text-editor tracking-[0.012em] text-foreground placeholder:text-muted-foreground/45 outline-none focus-visible:outline-none",
+          "block min-h-[280px] w-full resize-none overflow-hidden bg-transparent font-editor text-[length:var(--editor-font-size)] leading-[var(--editor-line-height)] tracking-[0.012em] text-foreground placeholder:text-muted-foreground/45 outline-none focus-visible:outline-none",
           className,
         )}
         {...props}

@@ -59,7 +59,7 @@
 
 | 令牌 / 载体 | 当前声明值 | 主要应用场景 |
 | :--- | :--- | :--- |
-| `--font-editor` (`--type-literary`) | `"Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif` | `Textarea`（`manuscript` 模式）、章节标题与正文预览、AI Copilot 输出（配合 `--editor-font-size: 1.09375rem`、`--editor-line-height: 1.98`、`--editor-measure: 38ic`） |
+| `--font-editor` (`--type-literary`) | `"Noto Serif CJK", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "STSong", SimSun, serif` | `Textarea`（`manuscript` 模式）、章节标题与正文预览、AI Copilot 输出（配合 `--editor-font-size: 1.09375rem`、`--editor-line-height: 1.98`、`--editor-measure: 38ic`） |
 | `--font-sans` / `--font-heading` (`--type-ui`) | `system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif` | 界面导航、按钮、表格、弹窗与表单控件 |
 | `--font-mono` (`--type-code`) | `ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace` | Trace ID、状态码、字数统计与等宽数值 |
 | `BookExportService.java`（导出层） | `MD` / `TXT` 纯文本；`EPUB` 仅声明通用 `font-family: serif;` | 小说整书导出（**未打包或嵌入任何字体文件**，由阅读器端决定渲染字体） |
@@ -88,10 +88,49 @@
 ### 4.4 后续 Webfont 与写作台字体切换演进规范
 
 1. **禁止整包直链加载**：完整中文字库单包体积通常为 `8–20 MB`，严禁在页面中直接全量加载整包 `.ttf` / `.woff2` 阻塞首屏渲染。
-2. **写作台正文字体切换规划**：在 `apps/web` 与主题切换（`paper` / `sepia` / `ink`）同构，提供并持久化至 `localStorage` 的四档字体选项：
-   - **系统默认**（零网络流量，保持现行本地字体栈）
-   - **出版宋体**（思源宋体）
-   - **书卷文楷**（霞鹜文楷）
-   - **现代黑体**（思源黑体）
-3. **按需分片加载策略**：统一采用 `unicode-range` 静态分片按需加载（如离线通过 `cn-font-split` 切分后自托管于静态资源目录，或合规切片源）并配置 `font-display: swap`，保证首屏仅按需请求几百 KB 常用字片。
+2. **写作台正文字体切换（已落地）**：在 `apps/web` 与版心密度/字号/行高设置统一持久化至 `localStorage`（`foliarc:editor_typography:v1`），按以下顺序提供五档免费商用 / 系统字体选项，并支持兼容历史 `"serif" | "kai" | "sans"` 键名：
+   - **思源宋体**（`noto-serif`，默认）—— 出版宋体
+   - **霞鹜文楷**（`lxgw-wenkai`）—— 温润书卷楷体
+   - **朱雀仿宋**（`zhuque-fangsong`）—— 民国古籍仿宋
+   - **思源黑体**（`noto-sans`）—— 清晰现代无衬线
+   - **系统默认**（`system`）—— 零网络流量本地字体栈
+3. **按需分片加载策略（已落地）**：前四款开源字体通过 `apps/web/src/lib/editor-font-config.ts` 的 `ensureEditorFontLoaded` 按需向 `<head>` 注入一次 `cn-font-split` `unicode-range` 静态分片样式表（ZeoSeven CDN，配合 `layout.tsx` 的 `preconnect` 预连接），仅下载页面实际用到的字符子集；`系统默认` 不注入外部样式表。后续如需完全内网/离线部署，可切换为自托管静态分片资源目录。
 4. **服务端出图与导出白名单**：后续如新增服务端 PDF 样书排版、EPUB 字体嵌入或封面/金句图片生成，字库仅允许从 4.3 节 SIL OFL 1.1 白名单中选取。
+
+---
+
+## 5. 写作台交互布局、流式打字机与零抖动渲染规范
+
+### 5.1 三栏横向响应式布局与拖拽分栏（`apps/web/src/app/books/[bookId]/page.tsx`）
+
+为兼顾 `1280px` / `1440px` / `1920px` 屏幕下同时预览大纲、逐段 Diff 与故事设定库，工作台右侧 `<aside>` 采用自适应约束 + 持久化宽度方案：
+
+- **默认宽度与安全边界**：右侧栏默认宽度提升至 **`440px`**，拖拽允许范围 **`360px – 680px`**，同时结合当前视口宽度与左侧目录展开状态（`w-56` / `w-60`）动态收口上限，**始终保障中间正文编辑区最小宽度 `>= 440px`**。
+- **拖拽分栏手柄与双击复位**：在中间编辑区与右侧栏之间挂载 `6px` 隐形拖拽热区（`role="separator"`，`cursor-col-resize`，悬停高亮 `1px` 主题细线）；宽度通过 `useSyncExternalStore` 同步至 `localStorage`（`foliarc:right_panel_width`）实现零水合抖动，**双击分隔线一键复位 `440px`**。
+- **一键加宽 / 还原**：右侧顶部 Tab 栏右侧提供紧凑切换按钮，在标准宽（`440px`）与宽阅模式（`580px`）间一键切换；当视口 `< 1380px` 且开启宽阅模式时自动收起左侧目录树，避免挤压正文画布。
+
+### 5.2 AI 写作面板纵向空间让渡（`apps/web/src/components/ai-copilot-panel.tsx`）
+
+按任务生命周期动态压缩顶部控制表单，确保流式创作与大纲审阅时 **75%–80% 以上纵向空间** 归属大纲与正文内容区：
+
+| 面板状态 | 顶部控制区形态 | 主内容区职责 |
+| :--- | :--- | :--- |
+| **空闲 / 调整参数态** | 完整表单（动作切换、指令输入、伏笔导演、大纲勾选、写作设置） | 空白引导卡或历史输出预览 |
+| **流式生成中（`isRunning`）** | 收拢为紧凑运行条（状态点 + 暂停/取消 + 单行截断指令 + 4 步进度条 + 单行状态） | 独占剩余视口呈现大纲 / 正文打字机卡片 |
+| **大纲确认态（`OUTLINE_APPROVAL`）** | 仅保留状态徽章与 4 步进度条 | 主内容区原地切换为 `flex-1` 伸展的「确认本章大纲」编辑卡片与底部动作条 |
+| **创作完成态（`completed`）** | 自动折叠为单行摘要栏（提供「调整指令」与「清空」按钮随时展开） | 全视口留给正文阅读、逐段挑选及底部采纳操作条 |
+
+### 5.3 丝滑打字机与零抖动渲染规范
+
+流式工程细节详见 [`PHASE1_SSE_GUIDE.md`](./PHASE1_SSE_GUIDE.md#流式渲染工程sse-蓄水池解耦打字机零-cls-防抖动与智能粘底滚动)，前端界面层统一遵守以下排版约束：
+- **流式统一打字机**：`DIRECTOR` 构思大纲、`WRITER` 正文输出与思考校对统一接入 `useSmoothTypewriter`（RAF 按积压字数自适应追赶 + 结束瞬间对齐）并附带主题色脉冲光标。
+- **零 CLS 布局约束**：状态条固定单行 `h-8 truncate`；滚动区配置 `[scrollbar-gutter:stable]` 与 `[overflow-anchor:none]` 避免滚动条出现触发文本重折行；粘底跟随阈值 `48px`，用户上滚即释放并浮现「回到底部 ↓」。
+
+### 5.4 正文画布 `placeholder` 文案与视觉克制规范
+
+为剥离与底部状态栏重复的技术说明文字、保持「清风素纸」文学感，正文 `<Textarea variant="manuscript">` 采用分场景提示文案并柔化占位字色：
+
+- **视觉字色**：双端镜像原语 `components/ui/textarea.tsx` 的 `manuscript` 变体统一设定 `placeholder:text-muted-foreground/45`。
+- **分场景文案（`apps/web/src/app/books/[bookId]/page.tsx`）**：
+  - **普通章节**：`"从这里落笔本章正文，划选任意段落可唤起 AI 润色与扩写……"`
+  - **多小节模式**：`"从这里写下本节的场景与对白……"`

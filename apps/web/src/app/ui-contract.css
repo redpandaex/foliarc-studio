@@ -22,7 +22,7 @@
   --status-vip-border: oklch(var(--status-border-l) 0.046 82);
 
   --type-ui: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  --type-literary: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif;
+  --type-literary: "Noto Serif CJK", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "STSong", SimSun, serif;
   --type-code: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --space-unit: 0.25rem;
   --radius: 0.625rem;
