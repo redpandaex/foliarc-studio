@@ -1,5 +1,8 @@
+import json
 import os
+import re
 
+import httpx
 import pytest
 
 from foliarc_agent.agent.guardrails import GuardrailEngine
@@ -32,6 +35,64 @@ def test_input_and_output_guardrails_block_injection_and_secret_leaks() -> None:
     # Output secret leak blocked
     leak = engine.check_output("不小心打印了密钥 sk-1234567890abcdefghijklmnop 出来")
     assert leak.allowed is False and leak.rule_code == "OUTPUT_SECRET_OR_PROMPT_LEAK"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_create_names_and_compose_group(monkeypatch) -> None:
+    provider = DockerSandboxProvider(Settings(_env_file=None))
+    names = []
+    runs = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        if request.url.path == "/containers/create":
+            name = request.url.params["name"]
+            assert re.fullmatch(r"foliarc-sandbox-[0-9a-f]{8}", name)
+            names.append(name)
+            labels = json.loads(request.content)["Labels"]
+            assert labels["com.docker.compose.project"] == "foliarc-studio"
+            assert labels["com.docker.compose.service"] == "sandbox-pool"
+            assert labels["foliarc.managed"] == "true"
+            assert labels["foliarc.role"] == "sandbox"
+            runs.append(labels["foliarc.run_id"])
+            return httpx.Response(201, json={"Id": name})
+        assert request.url.path == f"/containers/{names[-1]}/start"
+        return httpx.Response(204)
+
+    monkeypatch.setattr(provider, "_new_client", lambda _: httpx.AsyncClient(
+        base_url="http://docker", transport=httpx.MockTransport(handler)
+    ))
+    for run_id in ("warm-pool", "chapter-run"):
+        await provider._spawn_hardened_container(run_id=run_id)
+    assert len(set(names)) == 2
+    assert runs == ["warm-pool", "chapter-run"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_reaper_requires_both_ownership_labels(monkeypatch) -> None:
+    provider = DockerSandboxProvider(Settings(_env_file=None))
+    deleted = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.path == "/containers/json"
+            filters = json.loads(request.url.params["filters"])
+            assert set(filters["label"]) == {"foliarc.managed=true", "foliarc.role=sandbox"}
+            return httpx.Response(200, json=[
+                {"Id": "owned", "Labels": {"foliarc.managed": "true", "foliarc.role": "sandbox"}},
+                {"Id": "agent", "Labels": {"foliarc.managed": "true", "foliarc.role": "agent"}},
+                {"Id": "unmanaged", "Labels": {"foliarc.role": "sandbox"}},
+                {"Id": "old", "Labels": {"foliarc.sandbox": "true"}},
+            ])
+        assert request.method == "DELETE"
+        deleted.append(request.url.path)
+        return httpx.Response(204)
+
+    monkeypatch.setattr(provider, "_new_client", lambda _: httpx.AsyncClient(
+        base_url="http://docker", transport=httpx.MockTransport(handler)
+    ))
+    assert await provider.reap_zombies(force_all=True) == 1
+    assert deleted == ["/containers/owned"]
 
 
 @pytest.mark.asyncio

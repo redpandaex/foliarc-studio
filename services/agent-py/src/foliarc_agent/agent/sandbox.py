@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import struct
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
 
 from foliarc_agent.config import Settings
 
 logger = logging.getLogger(__name__)
+_MANAGED_SANDBOX_LABELS = {"foliarc.managed": "true", "foliarc.role": "sandbox"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,11 +144,9 @@ class DockerSandboxProvider:
 
     Lifecycle Governance:
     - Warm Pool (`pool_size` pre-warmed idle hardened containers, NEVER reused across executions!)
-    - Background Zombie Reaper patrolling label `foliarc.sandbox=true`
+    - Background Zombie Reaper scoped to managed sandbox containers
     - Optional gVisor kernel runtime via `SANDBOX_DOCKER_RUNTIME=runsc`
     """
-
-    SANDBOX_LABEL = "foliarc.sandbox=true"
 
     def __init__(self, settings: Settings) -> None:
         self._socket_path = settings.sandbox_docker_socket
@@ -225,8 +226,7 @@ class DockerSandboxProvider:
             self._reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reaper_task
-        for t in list(self._refill_tasks):
-            t.cancel()
+        # Let in-flight creates record their container IDs before draining the pool.
         if self._refill_tasks:
             await asyncio.gather(*self._refill_tasks, return_exceptions=True)
         # Destroy any remaining pooled idle containers cleanly
@@ -321,6 +321,9 @@ class DockerSandboxProvider:
                 "TMPDIR=/tmp",
             ],
             "Labels": {
+                **_MANAGED_SANDBOX_LABELS,
+                "com.docker.compose.project": "foliarc-studio",
+                "com.docker.compose.service": "sandbox-pool",
                 "foliarc.sandbox": "true",
                 "foliarc.run_id": run_id[:64],
                 "foliarc.created_at": str(int(time.time())),
@@ -329,7 +332,9 @@ class DockerSandboxProvider:
         }
 
         async with self._new_client(15.0) as client:
-            create_resp = await client.post("/containers/create", json=payload)
+            create_resp = await client.post(
+                "/containers/create", params={"name": f"foliarc-sandbox-{uuid4().hex[:8]}"}, json=payload
+            )
             if create_resp.status_code >= 400:
                 raise RuntimeError(f"create container HTTP {create_resp.status_code}: {create_resp.text[:300]}")
             container_id = str(create_resp.json()["Id"])
@@ -411,7 +416,9 @@ class DockerSandboxProvider:
                     "/containers/json",
                     params={
                         "all": "true",
-                        "filters": '{"label":["foliarc.sandbox=true"]}',
+                        "filters": json.dumps({
+                            "label": [f"{k}={v}" for k, v in _MANAGED_SANDBOX_LABELS.items()]
+                        }),
                     },
                 )
                 if resp.status_code != 200:
@@ -419,6 +426,8 @@ class DockerSandboxProvider:
                 for item in resp.json():
                     cid = str(item.get("Id", ""))
                     labels = item.get("Labels") or {}
+                    if not _MANAGED_SANDBOX_LABELS.items() <= labels.items():
+                        continue
                     created_ts = float(labels.get("foliarc.created_at", item.get("Created", 0)))
                     if force_all or (now - created_ts > self._max_age_seconds):
                         await client.delete(f"/containers/{cid}", params={"force": "true", "v": "true"})

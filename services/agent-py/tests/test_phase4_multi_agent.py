@@ -1,7 +1,9 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import pytest
 
 from foliarc_agent.agent.multi_agent import (
@@ -17,7 +19,11 @@ from foliarc_agent.config import Settings
 from foliarc_agent.streaming.llm_client import (
     LlmStreamChunk,
     LlmUpstreamError,
+    OpenAICompatibleStreamClient,
     effective_max_tokens,
+    is_gemini_thinking_model,
+    resolve_reasoning_effort,
+    resolve_slot_capabilities,
 )
 
 
@@ -495,3 +501,141 @@ async def test_critic_json_mode_robust_extraction_and_inconclusive_preserves_val
     assert fake.calls[3]["response_format"] == {"type": "json_object"}
     assert fake.calls[3]["max_tokens"] >= 2048
 
+
+@pytest.mark.asyncio
+async def test_gemini_4_neon_high_thinking_payload_and_fast_router_effort_cap() -> None:
+    settings = Settings(
+        llm_base_url="http://new-api:3000/v1",
+        llm_api_key="sk-foliarc-local-test",
+        llm_model_writer_main="gemini-4-neon",
+        llm_model_critic_reasoner="gemini-4-neon",
+        llm_model_fast_router="gemini-3.5-flash-lite",
+        llm_reasoning_effort="high",
+        embedding_api_key="",
+    )
+    assert is_gemini_thinking_model("gemini-4-neon") is True
+    assert effective_max_tokens(settings, "writer-main", 4096) >= 16384
+    assert resolve_reasoning_effort(settings, "gemini-4-neon", "writer-main") == "high"
+    assert resolve_reasoning_effort(settings, "gemini-3.5-flash-lite", "fast-router") == "low"
+
+    captured_payloads: list[dict[str, Any]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured_payloads.append(json.loads(request.content.decode("utf-8")))
+        sse = (
+            'data: {"choices":[{"delta":{"content":"{\\"passed\\":true,\\"score\\":95}"},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as http_client:
+        client = OpenAICompatibleStreamClient(settings, http_client=http_client)
+        chunks = [
+            c
+            async for c in client.stream_chat(
+                model_alias="critic-reasoner",
+                messages=[{"role": "user", "content": "audit chapter"}],
+                temperature=0.1,
+                max_tokens=2048,
+                response_format={"type": "json_object"},
+            )
+        ]
+
+    assert any('{"passed":true,"score":95}' in c.content_delta for c in chunks)
+    assert len(captured_payloads) == 1
+    payload = captured_payloads[0]
+    assert payload["model"] == "gemini-4-neon"
+    assert payload["reasoning_effort"] == "high"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "temperature" not in payload
+    assert payload["max_tokens"] >= 16384
+
+
+_JSON_OBJECT = {"type": "json_object"}
+
+
+@pytest.mark.parametrize(
+    ("alias", "model", "overrides", "requested", "budget", "options"),
+    [
+        (
+            "writer-main", "foliarc-writer",
+            {"llm_slot_writer_thinking": "on", "llm_slot_writer_effort": "medium"},
+            6000, 24000, {"reasoning_effort": "medium"},
+        ),
+        (
+            "critic-reasoner", "foliarc-critic",
+            {"llm_slot_critic_thinking": "on", "llm_slot_critic_json_mode": "true"},
+            9000, 32768, {"reasoning_effort": "high", "response_format": _JSON_OBJECT},
+        ),
+        (
+            "fast-router", "foliarc-fast", {"llm_slot_fast_thinking": "on"},
+            2048, 16384, {"reasoning_effort": "low"},
+        ),
+        (
+            "fast-router", "foliarc-fast", {"llm_slot_fast_effort": "xhigh"},
+            6000, 24000, {"reasoning_effort": "xhigh"},
+        ),
+        (
+            "fast-router", "foliarc-fast", {"llm_slot_fast_thinking": "off"},
+            10000, 10000, {"temperature": 0.3, "response_format": _JSON_OBJECT},
+        ),
+        (
+            "critic-reasoner", "foliarc-critic",
+            {"llm_slot_critic_thinking": "off", "llm_slot_critic_json_mode": "false",
+             "llm_reasoning_effort": ""},
+            2048, 2048, {"temperature": 0.3},
+        ),
+        (
+            "writer-main", "gemini-4-neon", {}, 9000, 32768,
+            {"reasoning_effort": "high", "response_format": _JSON_OBJECT},
+        ),
+        (
+            "fast-router", "deepseek-chat", {}, 2048, 2048,
+            {"temperature": 0.3, "response_format": _JSON_OBJECT},
+        ),
+        ("critic-reasoner", "deepseek-reasoner", {"llm_reasoning_effort": ""}, 6000, 16384, {}),
+        (
+            "critic-reasoner", "deepseek-reasoner", {"llm_slot_critic_json_mode": "true"},
+            6000, 16384, {"reasoning_effort": "high", "response_format": _JSON_OBJECT},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_slot_request_payload(
+    alias: str, model: str, overrides: dict[str, str], requested: int, budget: int,
+    options: dict[str, Any],
+) -> None:
+    config = {"llm_reasoning_effort": "high", f"llm_model_{alias.replace('-', '_')}": model}
+    settings = Settings(_env_file=None, llm_api_key="sk-slot-test", **(config | overrides))
+    messages = [{"role": "user", "content": "Review this chapter."}]
+    payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        stream = OpenAICompatibleStreamClient(settings, http_client).stream_chat(
+            model_alias=alias, messages=messages, temperature=0.3,
+            max_tokens=requested, response_format=_JSON_OBJECT,
+        )
+        assert [chunk async for chunk in stream] == []
+
+    assert payloads == [{
+        "model": model,
+        "messages": messages,
+        "max_tokens": budget,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        **options,
+    }]
+    assert effective_max_tokens(settings, alias, requested) == budget
+    assert resolve_reasoning_effort(settings, model, alias) == options.get("reasoning_effort")
+
+
+@pytest.mark.parametrize(("configured", "expected"), [(1000, 4096), (100000, 65536)])
+def test_explicit_thinking_budget_clamps_configured_ceiling(configured: int, expected: int) -> None:
+    settings = Settings(_env_file=None, llm_slot_writer_thinking="on", llm_slot_max_output_ceiling=configured)
+    capabilities = resolve_slot_capabilities(settings, "deepseek-reasoner", "writer-main")
+    assert capabilities.max_tokens_ceiling == expected
+    assert capabilities.effective_max_tokens(20000) == expected

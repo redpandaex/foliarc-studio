@@ -158,6 +158,37 @@ services:
       retries: 3
 
   # ============================================================================
+  # Profile: gateway / app (Self-Hosted AI Gateway: New API for Gemini/DeepSeek/OpenAI)
+  # ============================================================================
+  new-api:
+    image: ${NEW_API_IMAGE:-calciumion/new-api:latest}
+    container_name: foliarc-new-api
+    profiles: ["gateway", "app", "all"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    environment:
+      TZ: Asia/Shanghai
+      SESSION_SECRET: ${NEW_API_SESSION_SECRET:-foliarc-new-api-session-secret-change-me}
+      CRYPTO_SECRET: ${NEW_API_CRYPTO_SECRET:-foliarc-new-api-crypto-secret-change-me}
+      ERROR_LOG_ENABLED: "true"
+      HTTP_PROXY: ${NEW_API_HTTP_PROXY:-}
+      HTTPS_PROXY: ${NEW_API_HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,agent-py,biz-java,admin-java,redis,postgres
+    ports:
+      - "${NEW_API_BIND_HOST:-127.0.0.1}:${NEW_API_PORT:-3002}:3000"
+    volumes:
+      - new_api_data:/data
+      - new_api_logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/status >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ============================================================================
   # Profile: app (Containerized Application Stack: agent-py + biz-java + web)
   # ============================================================================
   agent-py:
@@ -349,3 +380,5 @@ volumes:
   minio_data:
   etcd_data:
   milvus_data:
+  new_api_data:
+  new_api_logs:

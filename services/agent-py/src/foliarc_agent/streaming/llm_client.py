@@ -51,6 +51,17 @@ def resolve_model_name(settings: Settings, model_alias: str) -> str:
     return mapping.get(model_alias, settings.llm_model_writer_main)
 
 
+_VALID_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
+
+
+def is_gemini_thinking_model(model_name: str) -> bool:
+    """Detects Gemini 2.5/3/4 thinking models whose thinking tokens share max_tokens."""
+    low = model_name.strip().lower()
+    if not low:
+        return False
+    return any(tok in low for tok in ("gemini-2.5", "gemini-3", "gemini-4"))
+
+
 def is_reasoning_model(model_name: str, model_alias: str = "") -> bool:
     """Detects reasoning/thinking models whose max_tokens covers both reasoning_content and content."""
     if model_alias == "critic-reasoner":
@@ -58,17 +69,74 @@ def is_reasoning_model(model_name: str, model_alias: str = "") -> bool:
     low = model_name.strip().lower()
     if not low:
         return False
-    if any(tok in low for tok in ("reasoner", "thinking", "qwq", "deepseek-r1", "glm-z1", "gemini-2.5")):
+    if is_gemini_thinking_model(low):
+        return True
+    if any(tok in low for tok in ("reasoner", "thinking", "qwq", "deepseek-r1", "glm-z1")):
         return True
     return low.startswith(("o1", "o3", "o4"))
+
+
+@dataclass(frozen=True, slots=True)
+class SlotCapabilities:
+    thinking: bool
+    reasoning_effort: str | None
+    allow_temperature: bool
+    allow_json_mode: bool
+    max_tokens_ceiling: int
+
+    def effective_max_tokens(self, requested: int) -> int:
+        if not self.thinking:
+            return requested
+        return min(self.max_tokens_ceiling, max(requested + 12288, requested * 4, 16384))
+
+
+def resolve_slot_capabilities(settings: Settings, model_name: str, model_alias: str) -> SlotCapabilities:
+    json_mode = "auto"
+    if model_alias == "critic-reasoner":
+        mode, slot_effort = settings.llm_slot_critic_thinking, settings.llm_slot_critic_effort
+        json_mode = settings.llm_slot_critic_json_mode.strip().lower()
+    elif model_alias == "fast-router":
+        mode, slot_effort = settings.llm_slot_fast_thinking, settings.llm_slot_fast_effort
+    else:
+        mode, slot_effort = settings.llm_slot_writer_thinking, settings.llm_slot_writer_effort
+
+    mode = mode.strip().lower()
+    slot_effort = slot_effort.strip().lower()
+    gemini = is_gemini_thinking_model(model_name)
+    detected = is_reasoning_model(model_name, model_alias)
+    thinking = mode == "on" or (mode != "off" and (detected or bool(slot_effort)))
+
+    effort = slot_effort or settings.llm_reasoning_effort.strip().lower()
+    if model_alias == "fast-router" and not slot_effort:
+        effort = "low" if effort in {"high", "xhigh"} and (thinking or gemini) else ""
+
+    allow_json_mode = not thinking or gemini
+    if json_mode in {"true", "false"}:
+        allow_json_mode = json_mode == "true"
+
+    ceiling = 8192
+    if thinking:
+        ceiling = max(4096, min(65536, settings.llm_slot_max_output_ceiling))
+        if detected and not gemini and mode != "on":
+            ceiling = min(16384, ceiling)
+
+    return SlotCapabilities(
+        thinking=thinking,
+        reasoning_effort=effort if effort in _VALID_REASONING_EFFORTS else None,
+        allow_temperature=not thinking,
+        allow_json_mode=allow_json_mode,
+        max_tokens_ceiling=ceiling,
+    )
+
+
+def resolve_reasoning_effort(settings: Settings, model_name: str, model_alias: str) -> str | None:
+    return resolve_slot_capabilities(settings, model_name, model_alias).reasoning_effort
 
 
 def effective_max_tokens(settings: Settings, model_alias: str, requested_max_tokens: int) -> int:
     """Expands output token cap for reasoning models so thinking chains do not starve final content."""
     model = resolve_model_name(settings, model_alias)
-    if not is_reasoning_model(model, model_alias):
-        return requested_max_tokens
-    return min(16384, max(requested_max_tokens + 6144, requested_max_tokens * 4, 10240))
+    return resolve_slot_capabilities(settings, model, model_alias).effective_max_tokens(requested_max_tokens)
 
 
 def build_novel_messages(
@@ -199,19 +267,21 @@ class OpenAICompatibleStreamClient:
         base_url = self._settings.llm_base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
         model = resolve_model_name(self._settings, model_alias)
-        resolved_max_tokens = effective_max_tokens(self._settings, model_alias, max_tokens)
+        capabilities = resolve_slot_capabilities(self._settings, model, model_alias)
 
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": resolved_max_tokens,
+            "max_tokens": capabilities.effective_max_tokens(max_tokens),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        if not is_reasoning_model(model, model_alias):
+        if capabilities.allow_temperature:
             payload["temperature"] = temperature
-            if response_format is not None:
-                payload["response_format"] = response_format
+        if response_format is not None and capabilities.allow_json_mode:
+            payload["response_format"] = response_format
+        if capabilities.reasoning_effort:
+            payload["reasoning_effort"] = capabilities.reasoning_effort
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -224,7 +294,7 @@ class OpenAICompatibleStreamClient:
 
         owns_client = self._external_client is None
         client = self._external_client or httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=15.0)
+            timeout=httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=15.0)
         )
         try:
             async with client.stream("POST", url, headers=headers, json=payload) as response:

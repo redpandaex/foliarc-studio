@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     llm_model_writer_main: str = "deepseek-chat"
     llm_model_critic_reasoner: str = "deepseek-reasoner"
     llm_model_fast_router: str = "deepseek-chat"
+    llm_reasoning_effort: str = ""
+    llm_slot_writer_thinking: str = "auto"
+    llm_slot_critic_thinking: str = "auto"
+    llm_slot_fast_thinking: str = "auto"
+    llm_slot_writer_effort: str = ""
+    llm_slot_critic_effort: str = ""
+    llm_slot_fast_effort: str = ""
+    llm_slot_critic_json_mode: str = "auto"
+    llm_slot_max_output_ceiling: int = 32768
     llm_model_embed: str = "BAAI/bge-m3"
     llm_model_rerank: str = "BAAI/bge-reranker-v2-m3"
 

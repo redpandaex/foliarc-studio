@@ -160,8 +160,9 @@ async def test_cooperative_pause_checkpoint_and_resume_continuation() -> None:
     await asyncio.wait_for(llm.first_chunk_emitted.wait(), timeout=2.0)
     await manager.send_control(run_id, "PAUSE")
 
-    # Wait for first segment task to finish cleanly
-    await asyncio.sleep(0.05)
+    paused_segment = manager._active[run_id].task
+    assert paused_segment is not None
+    await asyncio.wait_for(paused_segment, timeout=5)
 
     events_after_pause = fake_redis.streams[stream_key(run_id)]
     types_after_pause = [fields["type"] for _, fields in events_after_pause]
@@ -184,7 +185,9 @@ async def test_cooperative_pause_checkpoint_and_resume_continuation() -> None:
             last_seq=paused_state.last_seq,
         )
     )
-    await asyncio.sleep(0.05)
+    resumed_segment = manager._active[run_id].task
+    assert resumed_segment is not None
+    await asyncio.wait_for(resumed_segment, timeout=5)
 
     all_events = fake_redis.streams[stream_key(run_id)]
     all_types = [fields["type"] for _, fields in all_events]
@@ -240,7 +243,10 @@ async def test_reasoning_model_scales_max_tokens_and_omits_temperature() -> None
         )
         return httpx.Response(200, content=sse.encode("utf-8"))
 
-    settings = Settings(llm_api_key="sk-test-valid-key", llm_base_url="https://mock.llm/v1")
+    settings = Settings(
+        _env_file=None, llm_api_key="sk-test-valid-key", llm_base_url="https://mock.llm/v1",
+        llm_model_writer_main="deepseek-chat", llm_model_critic_reasoner="deepseek-reasoner",
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = OpenAICompatibleStreamClient(settings, http_client=http_client)
         _ = [
